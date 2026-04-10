@@ -1,210 +1,83 @@
-# decision-algorithm-skill
+# decision-algorithm
 
 > *"做重大人生决策不靠一时的热情，而靠可重复的决策算法。"*
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Python 3.9+](https://img.shields.io/badge/Python-3.9%2B-blue.svg)](https://python.org)
-[![Claude Code](https://img.shields.io/badge/Claude%20Code-Skill-blueviolet)](https://claude.ai/code)
-[![AgentSkills](https://img.shields.io/badge/AgentSkills-Standard-green)](https://agentskills.io)
+基于老喻20年决策研究成果，融合 **期望值 + 凯利公式 + 贝叶斯定理（EKB框架）**，帮助你建立可纠错的决策闭环。
 
 ---
 
-职业选择，投资决策、创业判断、感情纠结、财务规划面前彷徨？
-你是否经常感到纠结、犹豫、不知道如何抉择？
+## 🚀 安装
 
-**基于老喻20年决策研究成果，融合期望值 + 凯利公式 + 贝叶斯定理**
-帮助你建立可纠错的决策闭环，成为命运的主人
-
----
-
-[核心框架](#核心框架) · [安装](#安装) · [使用](#使用) · [算法库](#算法库) · [详细安装](INSTALL.md) · [**English**](README_EN.md)
-
----
-
-## 核心框架
-
-本 Skill 基于 **EKB 决策算法框架**：
-
-| 维度 | 工具 | 解决的问题 |
-|------|------|-----------|
-| 一维 | 胜率 + 赔率 | 赢的概率是多少？赢多少输多少？ |
-| 二维 | 期望值 | 这个决策值不值得做？ |
-| 三维 | 凯利公式 | 该投入多少资源？ |
-| 四维 | 贝叶斯更新 | 如何根据新信息调整判断？ |
-
-### 核心原则
-
-- **只做正期望值的事**
-- **永远不要投入你输不起的东西**
-- **先干为敬，持续更新**
-- **不考验人性，提前设置规则**
-- **能力圈比聪明更重要**
-- **留在牌桌上**
-
----
-
-## 安装
-
-### Claude Code
-
-> **重要**：Claude Code 在 git 仓库根目录的 `.claude/skills/` 下查找 skills。
+将整个目录复制/链接到你的 AI 平台的 skills 目录即可：
 
 ```bash
-# 安装到当前项目（在 git 仓库根目录运行）
-mkdir -p .claude/skills
-git clone https://github.com/titanwings/decision-algorithm-skill .claude/skills/decision-algorithm
+# Claude Code
+ln -s /path/to/decision-algorithm ~/.claude/skills/decision-algorithm
 
-# 或全局安装（所有项目可用）
-git clone https://github.com/titanwings/decision-algorithm-skill ~/.claude/skills/decision-algorithm
-```
+# OpenClaw
+ln -s /path/to/decision-algorithm ~/.openclaw/workspace/skills/decision-algorithm
 
-### OpenClaw
-
-```bash
-git clone https://github.com/titanwings/decision-algorithm-skill ~/.openclaw/workspace/skills/decision-algorithm
-```
-
-### 依赖（可选）
-
-```bash
-pip3 install -r requirements.txt
+# Codex
+ln -s /path/to/decision-algorithm ~/.codex/skills/decision-algorithm
 ```
 
 ---
 
-## 使用
-
-### 直接提问
-
-Skill 自动响应决策相关问题：
+## 📁 目录结构
 
 ```
-我该不该辞职创业？
-这笔投资该不该做？
-纠结要不要分手
-这个风险大不大？
-该怎么分配资金？
-```
-
-### 指定分析深度
-
-| 模式 | 示例 | 行为 |
-|------|------|------|
-| 快速 | "帮我快速评估一下这个决定" | 只判断期望值正负 |
-| 深度 | "帮我详细分析一下" | 完整七步流程 |
-| 特定 | "用凯利公式帮我算算该投多少" | 聚焦单一工具 |
-
-### 脚本工具
-
-```bash
-# 从课程材料提取算法卡片
-python scripts/extract_course_algorithms.py --input course_transcript.txt --output knowledge/course_rules.json
-
-# 生成完整 SKILL.md
-python scripts/generate_skill.py --action build --knowledge knowledge/course_rules.json
-
-# 验证 SKILL.md 质量
-python scripts/validate_skill.py --report
-
-# 版本管理
-python tools/version_manager.py --action list --skill-dir .
-python tools/version_manager.py --action backup --skill-dir .
-python tools/version_manager.py --action rollback --skill-dir . --version v2
-```
-
----
-
-## 算法库
-
-核心决策算法，按需调用：
-
-| 算法 | 核心思想 | 适用场景 |
-|------|---------|---------|
-| 先小人后君子 | 理性要先于道德。提前设置决策规则和防火墙 | 合作/合伙/利益分配 |
-| 二阶理性 | 决策的使命是面向未来，在此刻分配资源以最大化持续向好概率 | 所有重大决策 |
-| 复利再认识 | 复利的核心是重复的事情必须有正的期望值和可放大性 | 长期投资/持续成长 |
-| 处置效应 | 人们倾向于过早卖出盈利资产，却死守亏损资产 | 止损/割肉/放手 |
-| 损失厌恶 | 损失的痛苦感是同等收益快乐感的2倍 | 投资决策/止损心理 |
-| 屁股决定脑袋 | 行为受制于其在系统中的位置、利益和风险暴露程度 | 判断动机/合作选择 |
-| 满意主义 | 54%得分率也能成为世界第一 | 选择困难/完美主义 |
-| 思维格栅证伪 | 用多元思维证伪自己的观点，而不是证实 | 重大决策/自我检验 |
-| 反事实思维 | 思考"如果当初做了不同的选择，现在会怎样" | 复盘总结/决策改进 |
-| 幸福者退让原则 | 优势地位时退让一步往往是更好的策略 | 冲突化解 |
-| 价值投资三原则 | 买公司不是买股票 / 利用市场先生 / 安全边际 | 投资决策 |
-| 杠铃战略 | 极端两端同时下注，一端极度保守，一端极度冒险 | 资产配置/风险平衡 |
-| 遍历性原则 | 正期望值需要足够多重复才能实现 | 风险投资/All in |
-| 胶带纸思维 | 先用简单粗糙方案跑起来，然后逐步修补 | 创业/产品开发 |
-| 奥卡姆剃刀 | 如无必要，勿增实体 | 方案过多/过度复杂 |
-| 弃子争先 | 放弃局部利益换取全局主动 | 被动局面/资源有限 |
-| 冗余求生 | 好系统都有冗余，这是应对不确定性的保险 | 风险防范 |
-| 极大极小原理 | 在零和博弈中选择最差情况下的最好结果 | 零和博弈 |
-| 可证伪性 | 先想什么情况下我是错的 | 自我检验/重大决策 |
-| 黑天鹅应对 | 不要预测黑天鹅，要从意外事件中受益 | 风险防范 |
-| 机会成本 | 每个决策的真实成本是你放弃的那个最好选项 | 资源分配/优先级 |
-| 对冲思维 | 做错决策时如何还能赢 | 风险对冲/资产配置 |
-| 选择vs努力 | 选择决定方向，努力决定速度 | 职业规划/人生方向 |
-
----
-
-## 六大决策陷阱
-
-| 陷阱 | 核心表现 |
-|------|---------|
-| 内耗陷阱 | 反复横跳源于缺乏有效决策能力 |
-| 惯性陷阱 | 用过去的惯性做决策而不是理性分析 |
-| 委托陷阱 | 委托不等于放弃决策权 |
-| 确定性陷阱 | 追求确定性本身就是最大的不确定性 |
-| 成功陷阱 | 过去的成功成为未来选择的枷锁 |
-| AI陷阱 | 让AI或外部系统替代你的决策主导权 |
-
----
-
-## 项目结构
-
-遵循 [AgentSkills](https://agentskills.io) 开源标准：
-
-```
-decision-algorithm-skill/
-├── SKILL.md              # Skill 入口（官方 frontmatter）
-├── work.md               # Part A: 决策工作流
-├── persona.md            # Part B: 决策顾问人格
-├── meta.json             # 元数据
-├── prompts/              # Prompt 模板
-│   ├── extraction.md     #   课程知识提取
-│   └── analysis.md       #   决策分析模板
-├── tools/                # Python 工具
-│   ├── decision_calculator.py  # 期望值/凯利计算器
-│   ├── skill_writer.py         # Skill 文件管理
-│   └── version_manager.py       # 版本管理
-├── scripts/              # 脚本
-│   ├── extract_course_algorithms.py  # 从课程提取算法卡片
-│   ├── generate_skill.py             # 生成完整 SKILL.md
-│   └── validate_skill.py             # 验证 SKILL.md 质量
-├── knowledge/            # 知识库
-│   └── course_rules.json # 结构化课程知识
-├── docs/
-│   └── PRD.md            # 产品需求文档
-├── requirements.txt
-├── INSTALL.md            # 详细安装指南
+decision-algorithm/
+├── SKILL.md              # ⭐ 核心 Skill 入口（自包含 EKB 决策框架）
+├── scripts/              # 工具脚本
+│   ├── validate_skill.py       # 验证 SKILL.md 质量
+│   ├── extract_course_algorithms.py
+│   └── generate_skill.py
+├── tools/                # 计算工具
+│   └── decision_calculator.py  # 期望值/凯利公式计算器
+├── references/           # 调研素材（如有）
+├── books/                # 原书内容（开发参考）
+├── README.md
 └── LICENSE
 ```
 
 ---
 
-## 注意事项
+## 🎯 使用方式
 
-- **本 Skill 不提供确定性答案**，只提供分析框架和结构化建议
-- **最终选择永远是用户的**
-- 明确拒绝任何涉及违法犯罪的事
-- 告知纯赌博/彩票的负期望值
-- 告知超出合理分析范围的投机置信度不足
+安装完成后直接提问：
+
+```
+我该不该辞职创业？
+这笔投资该不该做？
+纠结要不要分手
+该怎么分配资金？
+人生方向很迷茫
+```
+
+### 计算器工具
+
+```bash
+# 期望值计算
+python3 tools/decision_calculator.py --ev -p 0.3 -g 100000 -l 20000
+
+# 凯利公式
+python3 tools/decision_calculator.py --kelly -p 0.4 -o 3
+
+# 完整分析
+python3 tools/decision_calculator.py --full -p 0.3 -g 100000 -l 20000 --capital 500000
+```
 
 ---
 
-## Star History
+## 📚 核心框架
 
-[![Star History Chart](https://api.star-history.com/svg?repos=titanwings/decision-algorithm-skill&type=date&theme=dark&legend=top-left)](https://star-history.com/#titanwings/decision-algorithm-skill&type=date)
+| 维度 | 工具 | 解决的问题 |
+|------|------|-----------| 
+| 一维 | 胜率 + 赔率 | 赢的概率和回报是多少？ |
+| 二维 | 期望值 | 这个决策值不值得做？ |
+| 三维 | 凯利公式 | 该投入多少资源？ |
+| 四维 | 贝叶斯更新 | 如何根据新信息调整判断？ |
 
 ---
 
-MIT License © [titanwings](https://github.com/titanwings)
+MIT License
