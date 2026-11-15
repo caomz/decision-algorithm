@@ -1,0 +1,1 @@
+{"date": "2026-11-15", "commit": "5a6848f", "full_commit": "5a6848ffd3c2b4f6705aa18547117ed1b1bf05cb", "applied": ["claude-cleanup"], "skipped": ["break-ai-slop", "get-biji", "whatis"], "note": "首次收录：break-ai-slop / whatis / get-biji 保留本机版，claude-cleanup 更新到上游 HEAD"}

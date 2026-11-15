@@ -1,0 +1,15 @@
+# 上游缓存（同步脚本用，可随时重建）
+.cache/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Node
+node_modules/
+
+# 同步前的本地备份
+*.backup-*/
+
+.DS_Store

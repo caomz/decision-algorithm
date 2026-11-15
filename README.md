@@ -17,6 +17,28 @@
 
 ---
 
+## 🌐 外部开源 skills
+
+[`skills/github_open_skills/`](skills/github_open_skills/) 是本仓库的**外部开源 skill 记录仓**：收录从 GitHub 开源项目同步来的 skill，逐个标清来源、作者、许可、上游提交与本地差异。它**只做记录，不接管安装**——本机生效的安装位仍是 `/Volumes/WorkSSD/.agents/skills/`。
+
+| Skill | 来源 | 本目录采用 |
+|---|---|---|
+| [`break-ai-slop`](skills/github_open_skills/skills/break-ai-slop/) | [suyuan2022/suyuan-skill](https://github.com/suyuan2022/suyuan-skill)（MIT） | 本机定制版（克制版，不强制每次输出推理） |
+| [`claude-cleanup`](skills/github_open_skills/skills/claude-cleanup/) | 同上 | 上游 HEAD 版（新增 context-slim 上下文瘦身分支） |
+| [`whatis`](skills/github_open_skills/skills/whatis/) | 同上 | 本机适配版（宿主工具无关，不写死 `/tmp`） |
+| [`get-biji`](skills/github_open_skills/skills/get-biji/) | 同上（本体基于 [skychentian/GET-biji](https://github.com/skychentian/GET-biji)） | 本机领先版（跨平台锁 + cron 接入 + 只读去重） |
+
+```bash
+# 拉上游并报告差异（不改任何文件）
+python3 skills/github_open_skills/scripts/sync_from_github.py
+# 只更新「上游为准」的 skill（覆盖前自动备份）
+python3 skills/github_open_skills/scripts/sync_from_github.py --apply
+```
+
+版本口径统一为**本机/仓库定制版优先，上游只补新增**——定制版是为适配本机宿主与实际工作流做的，用原始版覆盖等于回退。
+
+---
+
 ## 🚀 安装
 
 一条命令，不用手写 `ln -s`：
@@ -112,7 +134,11 @@ decision-algorithm/
 │   ├── decision-algorithm/     #   决策算法（SKILL.md + 计算器 + Hermes 集成）
 │   ├── modern-thinking-tools/  #   现代思维工具（检索证据 + 训练账本 + pytest）
 │   ├── dedao-life-algorithms/  #   人生算法课（课程证据制 skill）
-│   └── get-biji/               #   Get 笔记同步与转写（Node + Playwright，跨平台）
+│   ├── get-biji/               #   Get 笔记同步与转写（Node + Playwright，跨平台）
+│   └── github_open_skills/     #   ⭐ 外部开源 skill 记录仓（来源/许可/版本可溯源）
+│       ├── skills/             #     收录的 skill 快照（每个自带溯源 README）
+│       ├── sources/            #     上游来源留档（LICENSE + 同步历史）
+│       └── scripts/            #     安全同步脚本（默认只报告）
 ├── scripts/
 │   └── install_skills.py       # ⭐ 一键安装器（多平台自动识别 + 依赖体检 + 失败即停）
 ├── tests/                      # 安装器回归测试（pytest）
