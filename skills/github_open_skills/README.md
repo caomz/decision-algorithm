@@ -111,8 +111,8 @@ ln -sfn /Volumes/WorkSSD/Dev/decision-algorithm/skills/github_open_skills/skills
 | Skill | 安装状态 |
 |---|---|
 | [`whatis`](skills/whatis/) | ✅ **已指向本目录**：共享仓 / Claude Code / ZCode / Codex / OpenClaw / MiniMax Code 六处均链到本目录快照（原实体副本内容与本快照相同，已清理）。`~/.agents/.skill-lock.json` 已改为本地源且不记 hash，`npx skills update` 会跳过它，不会覆盖软链 |
-| [`break-ai-slop`](skills/break-ai-slop/) | 未改动，仍是 `~/.agents/skills/break-ai-slop` 实体目录 |
-| [`claude-cleanup`](skills/claude-cleanup/) | `~/.agents/skills/claude-cleanup` 实体目录。2026-11-15 执行 `npx skills update -g` 后已被上游版本覆盖，**内容与本目录快照一致**（含 context-slim 分支），但仍是实体目录，不是指向本目录的软链 |
+| [`break-ai-slop`](skills/break-ai-slop/) | 未改动，仍是 `~/.agents/skills/break-ai-slop` 实体目录。lock 里仍记上游 GitHub 源，`npx skills update` 会用上游激进版覆盖它——如需保护，用同样办法改成本地源 |
+| [`claude-cleanup`](skills/claude-cleanup/) | ✅ **已指向本目录**：共享仓 / Claude Code / ZCode / Codex / OpenClaw / MiniMax Code 六处均链到本目录快照。lock 已改为本地源且不记 hash，`npx skills update` 会跳过它，不会覆盖软链 |
 | [`get-biji`](skills/get-biji/) | 未改动，正本在 `~/.agents/skills/get-biji`（与本目录内容一致） |
 
 其余 3 个 skill 想换成仓库版本时，按上面的 `ln -sfn` 逐个重链即可；重链前先把实体目录移走备份。

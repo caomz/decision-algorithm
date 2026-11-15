@@ -32,11 +32,34 @@
 
 ## 安装
 
+**本目录就是本机生效版本**（2026-11-15 起），六平台均指向这里：
+
+| 平台 | 路径 | 指向 |
+|---|---|---|
+| 共享 skills 仓 | `~/.agents/skills/claude-cleanup` | → 本目录 |
+| Claude Code | `~/.claude/skills/claude-cleanup` | → `~/.agents/skills/claude-cleanup`（链到本目录） |
+| ZCode | `~/.zcode/skills/claude-cleanup` | → `~/.claude/skills/claude-cleanup`（链到本目录） |
+| Codex | `~/.codex/skills/claude-cleanup` | → 本目录 |
+| OpenClaw | `~/.openclaw/workspace/skills/claude-cleanup` | → 本目录 |
+| MiniMax Code | `~/.minimax/skills/claude-cleanup` | → `~/.agents/skills/claude-cleanup`（链到本目录） |
+
+改动前 `~/.agents/skills/claude-cleanup` 是实体目录（skill 管理器装的上游副本）。替换前逐文件比对确认与本快照完全一致，替换后已清理该实体目录，不留备份。
+
+手动重链任一平台：
+
 ```bash
-ln -s /Volumes/WorkSSD/Dev/decision-algorithm/skills/github_open_skills/skills/claude-cleanup ~/.claude/skills/claude-cleanup
+ln -sfn /Volumes/WorkSSD/Dev/decision-algorithm/skills/github_open_skills/skills/claude-cleanup ~/.codex/skills/claude-cleanup
 ```
 
-本目录**只做记录**，不负责安装。正本安装位是 `/Volumes/WorkSSD/.agents/skills/claude-cleanup`，本机仍是旧快照——想换到新版，走上面的链接或用同步脚本的 `--apply`。
+> `~/.agents/.skill-lock.json` 里 claude-cleanup 已改为**本地源**（`sourceType: "local"`，指向本目录），并**故意不记 `skillFolderHash`**——skills CLI 的 update 判定是「缺 hash 或缺 skillPath → 列为 *Local path* 跳过」，所以 `npx skills update` 会跳过它，不会用上游副本覆盖这个软链。
+>
+> 手动刷新用 CLI 给出的那条命令（只影响本 skill）：
+>
+> ```bash
+> npx skills add /Volumes/WorkSSD/Dev/decision-algorithm/skills/github_open_skills/skills/claude-cleanup -g -y
+> ```
+>
+> 要取上游（`suyuan2022/suyuan-skill`）的新版本，走本记录仓的 `scripts/sync_from_github.py` 报告差异后人工合并。
 
 ## 验证
 
