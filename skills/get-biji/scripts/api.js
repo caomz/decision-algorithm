@@ -7,7 +7,7 @@
  */
 
 const fs = require('fs');
-const { STATE_FILES, readState, writeState, acquireSyncLock, lockProtocolVersion } = require('./paths');
+const { STATE_FILES, readState, writeState, acquireSyncLock, lockProtocolVersion, lockBackend } = require('./paths');
 
 const OFFICIAL_BASE = 'https://openapi.biji.com/open/api/v1';
 
@@ -437,7 +437,14 @@ function saveSyncState(state) {
 }
 
 module.exports = {
-    capabilities: { cronSafeAuth: true, cronProtocolVersion: 3, writerOwnedLock: lockProtocolVersion === 3 && process.platform === 'darwin' },
+    capabilities: {
+        cronSafeAuth: true,
+        cronProtocolVersion: 3,
+        // 写者持锁：macOS 走内核 O_EXLOCK，Windows / Linux 走可移植独占锁，
+        // 两种后端都由实际写入的进程持有到临界区结束或进程退出。
+        writerOwnedLock: lockProtocolVersion === 3 && lockBackend !== null,
+        lockBackend,
+    },
     CONFIG,
     getToken,
     fetchAllNotes,

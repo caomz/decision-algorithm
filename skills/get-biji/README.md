@@ -48,6 +48,30 @@ ln -s /path/to/decision-algorithm/skills/get-biji ~/.claude/skills/get-biji
 
 首次登录：任意脚本在缺登录态时会开一个 Chrome 窗口等你登录 biji.com（最多 10 分钟），登录成功后窗口自动关闭。登录态存在 `GET_BIJI_HOME`（默认 `~/.config/get-biji/`），重装 skill 不受影响。
 
+## 平台支持
+
+macOS / Windows / Linux 全部可用。
+
+| 平台 | 锁后端 | 说明 |
+|------|--------|------|
+| macOS | `posix-exlock` | 内核 `O_EXLOCK`，进程退出自动释放 |
+| Windows / Linux | `portable-exclusive` | 原子独占创建 holder 文件互斥 + 持有者 PID 存活检测，崩溃残留可被接管 |
+
+两套后端对外语义一致：互斥、忙时抛 `SYNC_LOCK_BUSY`（定时任务依赖这个错误码）、canonical 锁文件保留且运行中不删除不替换。
+
+Windows 上默认状态目录 `~/.config/get-biji/` 会解析成 `C:\Users\<你>\.config\get-biji`，能用但不常规；想放到常规位置就设 `GET_BIJI_HOME`：
+
+```powershell
+$env:GET_BIJI_HOME = "$env:APPDATA\get-biji"
+```
+
+其他 Windows 注意点：
+
+- `ffprobe` / `ffmpeg` 需在 `PATH` 上（`choco install ffmpeg` 或 `winget install Gyan.FFmpeg`）
+- Playwright 的 Chromium 正常安装：`npx playwright install chromium`
+- 一次性同步建议放后台跑：`Start-Process node -ArgumentList "scripts/sync.js" -NoNewWindow`
+- 同步/转写路径一律用绝对路径，Windows 下别用 `/` 混写
+
 ## 使用
 
 ```bash
@@ -96,8 +120,11 @@ get-biji/
 │   ├── format.js             # 笔记 → Markdown（总结 / 章节概要 / 待办 / 逐字稿）
 │   ├── dedupe.js             # 只读去重盘点
 │   ├── rebuild-state.js      # 按磁盘文件重建同步记录
-│   └── paths.js              # 状态目录、笔记目录、跨进程锁
-├── tests/dedupe.test.cjs     # node:test 回归测试（不触网）
+│   ├── paths.js              # 状态目录、笔记目录
+│   └── lock.js               # ⭐ 跨平台锁（macOS O_EXLOCK / win32+linux 独占 holder）
+├── tests/
+│   ├── dedupe.test.cjs       # node:test 回归测试（不触网）
+│   └── lock.test.cjs         # 锁的互斥 / 释放 / 崩溃接管回归（不触网）
 ├── package.json              # 依赖 playwright；scripts.sync / scripts.dedupe
 └── package-lock.json
 ```

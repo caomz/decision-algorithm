@@ -14,6 +14,8 @@ description: |-
 
 下文 `<skill-dir>` 是本文件所在的目录；`<状态目录>` 是环境变量 `GET_BIJI_HOME` 的值，没设就是 `~/.config/get-biji/`。登录态、同步记录和 `<笔记目录>` 的位置都记在 `<状态目录>`，重装 skill 不受影响。
 
+Windows 上 `~/.config/get-biji/` 会解析成 `C:\Users\<你>\.config\get-biji`，能用但不常规；想放到别处就设 `GET_BIJI_HOME`（例如 `%APPDATA%\get-biji`）。脚本全部跨平台（macOS / Windows / Linux）。
+
 ## 首次准备
 
 需要 Node.js 18 及以上。
@@ -68,7 +70,12 @@ cd <skill-dir> && OUTPUT_DIR="<笔记目录>" node scripts/sync.js
 
 Cron 设置 `GET_BIJI_NON_INTERACTIVE=1`：允许静默刷新，需重新登录时失败并交给用户手动登录，不弹出浏览器。原手动 `scripts/sync.js` 登录流程保留，手动与定时同步共享操作系统锁。账号凭证和同步进度仍在 `GET_BIJI_HOME`，不得自动清除或重建。
 
-本地接入要求 `api.capabilities.cronSafeAuth=true`、`cronProtocolVersion=3` 且 `writerOwnedLock=true`；版本不匹配时停止，避免混用旧锁与认证协议。当前 macOS 使用 `O_EXLOCK | O_NONBLOCK`，由实际写入的 Node 进程持有锁文件描述符，直至同步/认证临界区结束或进程退出；不再启动持锁 helper。其他平台明确返回 `SYNC_LOCK_UNSUPPORTED_PLATFORM`，不回退到旧 helper。锁文件保留，不能在运行中删除或替换；不支持同一用户恶意替换锁路径的情形。
+本地接入要求 `api.capabilities.cronSafeAuth=true`、`cronProtocolVersion=3` 且 `writerOwnedLock=true`；版本不匹配时停止，避免混用旧锁与认证协议。锁后端按平台自动选择，`api.capabilities.lockBackend` 给出当前用的哪一个：
+
+- `posix-exlock`（macOS）：`O_EXLOCK | O_NONBLOCK`，由实际写入的 Node 进程持有锁文件描述符，直至同步/认证临界区结束或进程退出；不再启动持锁 helper。
+- `portable-exclusive`（Windows、Linux）：Node 没有暴露 flock / O_EXLOCK，改用「原子独占创建 holder 文件」互斥——holder（`<锁文件>.holder`）用 `wx` 独占创建，写入持有者 PID；持有者进程崩溃后残留的 holder 由 PID 存活检测判定为陈旧并接管；释放时删除 holder。
+
+两种后端都保证：互斥、忙时抛 `SYNC_LOCK_BUSY`（定时任务依赖这个错误码）、canonical 锁文件保留且运行中不删除不替换、不防御「同一用户恶意替换锁路径」。`SYNC_LOCK_UNSUPPORTED_PLATFORM` 只在 darwin / win32 / linux 之外的平台返回。
 
 认证请求拒绝所有 HTTP 重定向；收到的新凭证先写可恢复日志，再替换缓存并同步父目录。刷新响应丢失时停止自动刷新，须人工重新登录；不得为恢复擅自清除凭证文件。
 

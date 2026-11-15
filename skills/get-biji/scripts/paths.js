@@ -6,6 +6,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { acquireLock, selectBackend } = require('./lock');
 
 const STATE_DIR = process.env.GET_BIJI_HOME || path.join(os.homedir(), '.config', 'get-biji');
 const CONFIG_FILE = path.join(STATE_DIR, 'config.json');
@@ -59,29 +60,22 @@ function resolveOutputDir() {
     return dir;
 }
 
-/** The writer itself owns the locked descriptor until release or process exit. */
+/**
+ * 拿一把命名锁。后端由平台决定：macOS 用内核 O_EXLOCK，
+ * Windows / Linux 用可移植独占锁。返回 release 函数。
+ */
 async function acquireSyncLock(lockName = 'sync.lock') {
-    if (!['sync.lock', 'auth.lock'].includes(lockName)) throw new Error('INVALID_LOCK_NAME');
-    // Darwin open(2): O_EXLOCK=0x20, O_CLOEXEC=0x01000000 (xnu/bsd/sys/fcntl.h).
-    // Node does not expose these constants. Never apply their numbers on another OS.
-    if (process.platform !== 'darwin') throw new Error('SYNC_LOCK_UNSUPPORTED_PLATFORM');
-    fs.mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 });
-    const flags = fs.constants.O_RDWR | fs.constants.O_CREAT | fs.constants.O_NONBLOCK | fs.constants.O_NOFOLLOW | 0x20 | 0x01000000;
-    let fd;
-    try {
-        fd = fs.openSync(path.join(STATE_DIR, lockName), flags, 0o600);
-        if (!fs.fstatSync(fd).isFile()) throw new Error('SYNC_LOCK_FILE_INVALID');
-    } catch (cause) {
-        if (fd !== undefined) fs.closeSync(fd);
-        if (['EAGAIN', 'EWOULDBLOCK'].includes(cause.code)) throw new Error('SYNC_LOCK_BUSY');
-        throw cause;
-    }
-    let released = false;
-    return () => {
-        if (released) return;
-        released = true;
-        fs.closeSync(fd);
-    };
+    return acquireLock({ stateDir: STATE_DIR, lockName });
 }
 
-module.exports = { STATE_DIR, CONFIG_FILE, STATE_FILES, readState, writeState, resolveOutputDir, acquireSyncLock, lockProtocolVersion: 3 };
+module.exports = {
+    STATE_DIR,
+    CONFIG_FILE,
+    STATE_FILES,
+    readState,
+    writeState,
+    resolveOutputDir,
+    acquireSyncLock,
+    lockProtocolVersion: 3,
+    lockBackend: selectBackend(),
+};
