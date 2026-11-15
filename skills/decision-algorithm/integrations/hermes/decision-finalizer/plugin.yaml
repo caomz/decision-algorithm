@@ -1,0 +1,4 @@
+name: decision-finalizer
+version: 0.1.0
+description: Ask MiniMax for a text answer after the decision Skill calculator completes.
+kind: standalone

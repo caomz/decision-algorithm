@@ -11,6 +11,7 @@ build/
 
 # Virtual environments
 .venv/
+.venv-harness/
 venv/
 env/
 
@@ -25,13 +26,11 @@ env/
 .DS_Store
 Thumbs.db
 
-# Knowledge data (user-specific, should not be committed)
-knowledge/
-!knowledge/.gitkeep
+# 课程原文等大体积私有素材一律不入库（skill 运行时依赖通过路径引用）
+/knowledge/
 
-# Generated skill files
-colleagues/
-skills/
+# Harness session artifacts
+.zcode/
 
 # Logs
 *.log
