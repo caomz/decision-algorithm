@@ -29,17 +29,24 @@ Get 笔记（biji.com）skill：把账号里的录音、链接、文字笔记同
 
 ## 安装
 
+用仓库根目录的一键安装器（自动识别平台、装前体检依赖、只补缺失链接）：
+
+```bash
+# 从仓库根目录执行
+python3 scripts/install_skills.py --apply --skill get-biji --with-deps
+```
+
+`--with-deps` 会顺带跑 `npm install` 和 `npx playwright install chromium`（Chromium 约 250MB，**仅用于登录**）。
+
+手动装（不想用脚本时）：
+
 ```bash
 cd skills/get-biji && npm install && npx playwright install chromium
-```
-
-安装到各平台 skills 目录（symlink，指向本仓库）：
-
-```bash
-# Claude Code
 ln -s /path/to/decision-algorithm/skills/get-biji ~/.claude/skills/get-biji
-# Codex / OpenClaw 同理
+# Codex / OpenClaw / ZCode / MiniMax Code 同理
 ```
+
+首次登录：任意脚本在缺登录态时会开一个 Chrome 窗口等你登录 biji.com（最多 10 分钟），登录成功后窗口自动关闭。登录态存在 `GET_BIJI_HOME`（默认 `~/.config/get-biji/`），重装 skill 不受影响。
 
 ## 使用
 

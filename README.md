@@ -19,7 +19,55 @@
 
 ## 🚀 安装
 
-每个 skill 独立安装（按需选择，symlink 到对应平台的 skills 目录）：
+一条命令，不用手写 `ln -s`：
+
+```bash
+# 先看状态，不动任何文件
+python3 scripts/install_skills.py
+
+# 一键装到本机所有已装平台
+python3 scripts/install_skills.py --apply
+```
+
+安装器会：
+
+- **自动识别平台**——Claude Code / Codex / OpenClaw / ZCode / 共享 skills 仓 / MiniMax Code，只处理本机确实存在的
+- **装前体检**——先查 Node、playwright、ffmpeg、GetNote 凭证等运行时依赖，缺什么直接给出修复命令，不做装完才发现跑不了的假安装
+- **只补缺失的**——绝不覆盖已有的文件、目录或指向别处的链接
+- **如实报告冲突**——发现某处指向上游正本（`~/.agents/skills`、另一份 checkout）时标出来，要改指向得显式加 `--relink`
+- **实体目录先备份**——`--relink` 遇到手工拷贝的目录会先移走备份再链接，绝不删数据
+
+```
+安装状态检查 · /path/to/decision-algorithm
+
+平台         scope     skill                   状态                     操作
+----------------------------------------------------------------------------
+claude       personal  decision-algorithm      缺失                     would-create
+             personal  get-biji                指向别处（上游正本）     needs-relink
+             personal  modern-thinking-tools   指向别处（上游正本）     needs-relink
+...
+
+运行时依赖
+  · Node.js ≥ 18: v24.15.0
+  ! playwright: 未安装（仅登录时需要）  → python3 scripts/install_skills.py --apply --with-deps
+```
+
+### 常用参数
+
+| 命令 | 作用 |
+|------|------|
+| `python3 scripts/install_skills.py` | 只看状态，不动任何文件 |
+| `python3 scripts/install_skills.py --apply` | 补上所有缺失链接 |
+| `python3 scripts/install_skills.py --apply --skill get-biji --target claude` | 只装某几个 skill 到某个平台（可重复） |
+| `python3 scripts/install_skills.py --apply --relink` | 连指向别处的也改指向本仓库（实体目录先备份） |
+| `python3 scripts/install_skills.py --apply --with-deps` | 顺带 `npm install` + 装 Chromium |
+| `python3 scripts/install_skills.py --apply --all-scopes` | 额外装到项目内 `.claude/` `.codex/` |
+| `python3 scripts/install_skills.py --uninstall` | 移除指向本仓库的链接 |
+| `python3 scripts/install_skills.py --json` | 机器可读输出（CI / 脚本用） |
+| `python3 scripts/install_skills.py --list` | 列出可装的 skill 与平台 |
+| `python3 scripts/install_skills.py --apply --dry-run` | 只演示不落盘 |
+
+手动装（不想用脚本时）：
 
 ```bash
 # Claude Code
@@ -37,10 +85,12 @@ ln -s /path/to/decision-algorithm/skills/decision-algorithm ~/.openclaw/workspac
 # ... 同理
 ```
 
-`get-biji` 还需要装运行时依赖（Playwright + Chromium 仅用于登录，ffmpeg 用于读本地音视频时长）：
+`get-biji` 还需要装运行时依赖（Playwright + Chromium 仅用于登录，ffmpeg 用于读本地音视频时长），用 `--with-deps` 可一并装上：
 
 ```bash
-cd /path/to/decision-algorithm/skills/get-biji && npm install && npx playwright install chromium
+python3 scripts/install_skills.py --apply --with-deps
+# 等价于：
+#   cd skills/get-biji && npm install && npx playwright install chromium
 ```
 
 ### 依赖矩阵
@@ -63,6 +113,9 @@ decision-algorithm/
 │   ├── modern-thinking-tools/  #   现代思维工具（检索证据 + 训练账本 + pytest）
 │   ├── dedao-life-algorithms/  #   人生算法课（课程证据制 skill）
 │   └── get-biji/               #   Get 笔记同步与转写（Node + Playwright）
+├── scripts/
+│   └── install_skills.py       # ⭐ 一键安装器（多平台自动识别 + 依赖体检 + 失败即停）
+├── tests/                      # 安装器回归测试（pytest）
 ├── docs/                       # 开发文档与历史评审（PRD、设计评审、4 份 REVIEW）
 ├── requirements.txt            # 开发依赖（运行时零依赖）
 └── README.md
@@ -79,8 +132,18 @@ python3 skills/decision-algorithm/tools/decision_calculator.py --ev -p 0.3 -g 10
 # 现代思维工具：单元测试（不触网）
 python3 -m pytest skills/modern-thinking-tools/tests -q
 
+# 安装器：回归测试（不触网）
+python3 -m pytest tests -q
+
 # Get 笔记：去重回归测试（不触网）
 node --test "skills/get-biji/tests/**/*.test.cjs"
+```
+
+需要 pytest 时用仓库内 venv，避免污染系统 Python：
+
+```bash
+python3.11 -m venv .venv && .venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m pytest tests skills/modern-thinking-tools/tests -q
 ```
 
 ---
