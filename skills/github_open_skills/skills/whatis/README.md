@@ -31,11 +31,26 @@
 
 ## 安装
 
+**本目录就是本机生效版本**（2026-11-15 起），各平台都已指向这里：
+
+| 平台 | 路径 | 指向 |
+|---|---|---|
+| 共享 skills 仓 | `~/.agents/skills/whatis` | → 本目录 |
+| Claude Code | `~/.claude/skills/whatis` | → `~/.agents/skills/whatis`（链到本目录） |
+| ZCode | `~/.zcode/skills/whatis` | → `~/.claude/skills/whatis`（链到本目录） |
+| Codex | `~/.codex/skills/whatis` | → 本目录 |
+| OpenClaw | `~/.openclaw/workspace/skills/whatis` | → 本目录 |
+| MiniMax Code | `~/.minimax/skills/whatis` | → 本目录 |
+
+改动前 `~/.agents/skills/whatis` 是实体目录（原 skill 管理器 `suyuan2022/suyuan-skill` 装的副本），已按仓库安装器惯例移开备份到 `~/.agents/skills-backup/whatis-20261115-200909`，未删除。
+
+手动重链任一平台：
+
 ```bash
-ln -s /Volumes/WorkSSD/Dev/decision-algorithm/skills/github_open_skills/skills/whatis ~/.claude/skills/whatis
+ln -sfn /Volumes/WorkSSD/Dev/decision-algorithm/skills/github_open_skills/skills/whatis ~/.codex/skills/whatis
 ```
 
-本目录**只做记录**，不负责安装。正本安装位是 `/Volumes/WorkSSD/.agents/skills/whatis`，本机已装且可用。
+> 注意：`~/.agents/.skill-lock.json` 里仍记着 whatis 来自 `suyuan2022/suyuan-skill`。若之后跑 `npx skills update` 之类命令，管理器可能用上游副本覆盖这个软链——那会退回上游原版，需要按上面的命令重新指向本目录。
 
 ## 使用
 

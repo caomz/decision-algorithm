@@ -19,7 +19,7 @@
 | [`break-ai-slop`](skills/break-ai-slop/) | 专家预检：动手前挖出隐性经验与决定成败的约束 | **本机定制版**（克制：不强制、不外露推理） | `6da5289` → `f40ca58` | `~/.agents/skills/break-ai-slop` |
 | [`claude-cleanup`](skills/claude-cleanup/) | Claude 本机清理 + 开局上下文瘦身（macOS / Windows） | **上游 HEAD 版**（本机旧快照缺 context-slim 分支，本次更新） | `e61cc66` → `fb4782e` → `ed8c1b8` | `~/.agents/skills/claude-cleanup`（仍是旧快照） |
 | [`get-biji`](skills/get-biji/) | Get 笔记同步、检索与音视频转写 | **本机领先版**（含跨平台锁、cron 接入、只读去重） | `d932bb7` → `915276a` → `24a3cfd` → `d943cb1` | `~/.agents/skills/get-biji` |
-| [`whatis`](skills/whatis/) | 看不懂的东西，画成大图 HTML 给你看 | **本机适配版**（宿主工具无关，不写死 `/tmp`） | `423473d` | `~/.agents/skills/whatis` |
+| [`whatis`](skills/whatis/) | 看不懂的东西，画成大图 HTML 给你看 | **本机适配版**（宿主工具无关，不写死 `/tmp`） | `423473d` | **本目录快照**（六平台均链到此处） |
 
 上游原文许可：[`sources/suyuan-skill/LICENSE`](sources/suyuan-skill/LICENSE)。
 
@@ -103,10 +103,19 @@ python3 scripts/sync_from_github.py --list     # 列出收录来源与版本策�
 
 ```bash
 # Claude Code / Codex / OpenClaw / ZCode / 共享 skills 仓 同理
-ln -s /Volumes/WorkSSD/Dev/decision-algorithm/skills/github_open_skills/skills/whatis ~/.claude/skills/whatis
+ln -sfn /Volumes/WorkSSD/Dev/decision-algorithm/skills/github_open_skills/skills/whatis ~/.codex/skills/whatis
 ```
 
-已安装的 skill 想改指向别处时，先删旧链接再链新的；本机已有 4 个 skill 的正本在 `/Volumes/WorkSSD/.agents/skills/`，`~/.claude/skills/` 与 `~/.zcode/skills/` 下是指向它的软链。
+### 当前本机安装状态
+
+| Skill | 安装状态 |
+|---|---|
+| [`whatis`](skills/whatis/) | ✅ **已指向本目录**：共享仓 / Claude Code / ZCode / Codex / OpenClaw / MiniMax Code 六处均链到本目录快照（原实体副本备份在 `~/.agents/skills-backup/whatis-20261115-200909`） |
+| [`break-ai-slop`](skills/break-ai-slop/) | 未改动，仍是 `~/.agents/skills/break-ai-slop` 实体目录 |
+| [`claude-cleanup`](skills/claude-cleanup/) | 未改动，仍是 `~/.agents/skills/claude-cleanup` 实体目录（**旧快照**，缺 context-slim 分支） |
+| [`get-biji`](skills/get-biji/) | 未改动，正本在 `~/.agents/skills/get-biji`（与本目录内容一致） |
+
+其余 3 个 skill 想换成仓库版本时，按上面的 `ln -sfn` 逐个重链即可；重链前先把实体目录移走备份。
 
 ---
 
