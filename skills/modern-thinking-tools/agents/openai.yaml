@@ -1,0 +1,7 @@
+interface:
+  display_name: "现代思维工具"
+  short_description: "检索课程依据，提供人生建议或训练思维工具的独立运用"
+  default_prompt: "Use $modern-thinking-tools to help me practice one familiar thinking tool with a new scenario and feedback."
+
+policy:
+  allow_implicit_invocation: true

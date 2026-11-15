@@ -1,0 +1,1547 @@
+{
+  "schema": "modern-thinking-tools.catalog.v1",
+  "catalog_version": 1,
+  "source_file": "/Volumes/WorkSSD/Dev/openclaw_mz/knowledge/raw/05-素材库/万维钢·现代思维工具100讲.md",
+  "source_rule": "T001 是发刊词元工具；T002-T100 依课程 99 个实质章节顺序生成；问答和特别放送仅作辅助证据。",
+  "tool_count": 100,
+  "tools": [
+    {
+      "id": "T001",
+      "title": "智能生活系统",
+      "short_name": "智能生活系统",
+      "category": "元工具与总纲",
+      "source": {
+        "kind": "course_preface",
+        "heading": "发刊词：现代精英的思维武器库",
+        "line": 4
+      },
+      "aliases": [
+        "目标函数",
+        "世界模型",
+        "反馈回路",
+        "预算带宽"
+      ],
+      "role": "先把生活当作可校正的系统：目标、模型、行动和反馈要形成闭环。"
+    },
+    {
+      "id": "T002",
+      "title": "叙事：这个宇宙的第一性原理",
+      "short_name": "叙事",
+      "category": "基本世界观",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "叙事：这个宇宙的第一性原理",
+        "line": 252
+      },
+      "aliases": [
+        "叙事"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T003",
+      "title": "重尾：世界服从极端值",
+      "short_name": "重尾",
+      "category": "基本世界观",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "重尾：世界服从极端值",
+        "line": 450
+      },
+      "aliases": [
+        "重尾"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T004",
+      "title": "能动：稳态生存的观念陷阱",
+      "short_name": "能动",
+      "category": "基本世界观",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "能动：稳态生存的观念陷阱",
+        "line": 686
+      },
+      "aliases": [
+        "能动"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T005",
+      "title": "约束：先尊重，再行动",
+      "short_name": "约束",
+      "category": "基本世界观",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "约束：先尊重，再行动",
+        "line": 900
+      },
+      "aliases": [
+        "约束",
+        "硬约束",
+        "软约束",
+        "先尊重，再行动"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T006",
+      "title": "能耐寻求定理：君子不器",
+      "short_name": "能耐寻求定理",
+      "category": "基本世界观",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "能耐寻求定理：君子不器",
+        "line": 1262
+      },
+      "aliases": [
+        "能耐寻求定理"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T007",
+      "title": "可能：不确定性是意义的燃料",
+      "short_name": "可能",
+      "category": "基本世界观",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "可能：不确定性是意义的燃料",
+        "line": 1476
+      },
+      "aliases": [
+        "可能"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T008",
+      "title": "内核：你的三个「自我」",
+      "short_name": "内核",
+      "category": "基本世界观",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "内核：你的三个「自我」",
+        "line": 1690
+      },
+      "aliases": [
+        "内核"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T009",
+      "title": "供给侧心态：怎样在正和的世界合作（以及竞争）",
+      "short_name": "供给侧心态",
+      "category": "基本世界观",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "供给侧心态：怎样在正和的世界合作（以及竞争）",
+        "line": 1910
+      },
+      "aliases": [
+        "供给侧心态"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T010",
+      "title": "复利：可积累的优势",
+      "short_name": "复利",
+      "category": "基本世界观",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "复利：可积累的优势",
+        "line": 2360
+      },
+      "aliases": [
+        "复利",
+        "可积累优势"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T011",
+      "title": "自我决定理论：一流人物不可能是痛苦的卷王",
+      "short_name": "自我决定理论",
+      "category": "自我、情绪与个人成长",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "自我决定理论：一流人物不可能是痛苦的卷王",
+        "line": 3042
+      },
+      "aliases": [
+        "自我决定理论"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T012",
+      "title": "自由能原理：活着就是对齐",
+      "short_name": "自由能原理",
+      "category": "自我、情绪与个人成长",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "自由能原理：活着就是对齐",
+        "line": 3262
+      },
+      "aliases": [
+        "自由能原理"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T013",
+      "title": "主动高认知负荷：注意力的 Pro 模式",
+      "short_name": "主动高认知负荷",
+      "category": "自我、情绪与个人成长",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "主动高认知负荷：注意力的 Pro 模式",
+        "line": 3474
+      },
+      "aliases": [
+        "主动高认知负荷"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T014",
+      "title": "WOOP：从生活的默认设置中觉醒",
+      "short_name": "WOOP",
+      "category": "自我、情绪与个人成长",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "WOOP：从生活的默认设置中觉醒",
+        "line": 3688
+      },
+      "aliases": [
+        "WOOP",
+        "Wish",
+        "Outcome",
+        "Obstacle",
+        "Plan"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T015",
+      "title": "社交资本、结构洞和搬家：容易向上流动的位置",
+      "short_name": "社交资本、结构洞和搬家",
+      "category": "自我、情绪与个人成长",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "社交资本、结构洞和搬家：容易向上流动的位置",
+        "line": 3972
+      },
+      "aliases": [
+        "社交资本、结构洞和搬家"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T016",
+      "title": "认知解耦：三步调节负面情绪",
+      "short_name": "认知解耦",
+      "category": "自我、情绪与个人成长",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "认知解耦：三步调节负面情绪",
+        "line": 4314
+      },
+      "aliases": [
+        "认知解耦"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T017",
+      "title": "身份认同：元认知黑魔法",
+      "short_name": "身份认同",
+      "category": "自我、情绪与个人成长",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "身份认同：元认知黑魔法",
+        "line": 4538
+      },
+      "aliases": [
+        "身份认同"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T018",
+      "title": "安全感：人需要有所依靠",
+      "short_name": "安全感",
+      "category": "自我、情绪与个人成长",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "安全感：人需要有所依靠",
+        "line": 4784
+      },
+      "aliases": [
+        "安全感"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T019",
+      "title": "赛道选择：做天兵天将，还是做孙悟空？",
+      "short_name": "赛道选择",
+      "category": "自我、情绪与个人成长",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "赛道选择：做天兵天将，还是做孙悟空？",
+        "line": 4998
+      },
+      "aliases": [
+        "赛道选择"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T020",
+      "title": "场域：识时务者为俊杰",
+      "short_name": "场域",
+      "category": "自我、情绪与个人成长",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "场域：识时务者为俊杰",
+        "line": 5212
+      },
+      "aliases": [
+        "场域"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T021",
+      "title": "探索与利用：怎样继续做个年轻人",
+      "short_name": "探索与利用",
+      "category": "自我、情绪与个人成长",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "探索与利用：怎样继续做个年轻人",
+        "line": 5562
+      },
+      "aliases": [
+        "探索与利用",
+        "exploration",
+        "exploitation"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T022",
+      "title": "共鸣：高级生活的秘密",
+      "short_name": "共鸣",
+      "category": "不确定性与决策",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "共鸣：高级生活的秘密",
+        "line": 5768
+      },
+      "aliases": [
+        "共鸣"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T023",
+      "title": "无免费午餐定理：诸行无常，有偏置才有决策",
+      "short_name": "无免费午餐定理",
+      "category": "不确定性与决策",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "无免费午餐定理：诸行无常，有偏置才有决策",
+        "line": 5986
+      },
+      "aliases": [
+        "无免费午餐定理"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T024",
+      "title": "概率分布：到底什么是决策？",
+      "short_name": "概率分布",
+      "category": "不确定性与决策",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "概率分布：到底什么是决策？",
+        "line": 6206
+      },
+      "aliases": [
+        "概率分布"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T025",
+      "title": "颗粒度和因果中介：用模型思考",
+      "short_name": "颗粒度和因果中介",
+      "category": "不确定性与决策",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "颗粒度和因果中介：用模型思考",
+        "line": 6436
+      },
+      "aliases": [
+        "颗粒度和因果中介"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T026",
+      "title": "贝叶斯先验：判断是主观的，但可以更科学一点",
+      "short_name": "贝叶斯先验",
+      "category": "不确定性与决策",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "贝叶斯先验：判断是主观的，但可以更科学一点",
+        "line": 6838
+      },
+      "aliases": [
+        "贝叶斯先验"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T027",
+      "title": "信息价值：怎样区分沙子和金子",
+      "short_name": "信息价值",
+      "category": "不确定性与决策",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "信息价值：怎样区分沙子和金子",
+        "line": 7062
+      },
+      "aliases": [
+        "信息价值"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T028",
+      "title": "凯利公式：乘法世界里的认知变现",
+      "short_name": "凯利公式",
+      "category": "不确定性与决策",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "凯利公式：乘法世界里的认知变现",
+        "line": 7248
+      },
+      "aliases": [
+        "凯利公式",
+        "Kelly",
+        "凯利仓位"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T029",
+      "title": "非遍历性：玩家怕方差，庄家爱方差",
+      "short_name": "非遍历性",
+      "category": "不确定性与决策",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "非遍历性：玩家怕方差，庄家爱方差",
+        "line": 7506
+      },
+      "aliases": [
+        "非遍历性",
+        "避免出局",
+        "生存优先"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T030",
+      "title": "脆弱和反脆弱：怎样利用非对称风险",
+      "short_name": "脆弱和反脆弱",
+      "category": "不确定性与决策",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "脆弱和反脆弱：怎样利用非对称风险",
+        "line": 7732
+      },
+      "aliases": [
+        "脆弱和反脆弱"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T031",
+      "title": "期权：保留可选项的特权",
+      "short_name": "期权",
+      "category": "不确定性与决策",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "期权：保留可选项的特权",
+        "line": 8150
+      },
+      "aliases": [
+        "期权",
+        "可选项",
+        "可逆试验"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T032",
+      "title": "状态杠杆：你不是不努力，你是没做在点子上",
+      "short_name": "状态杠杆",
+      "category": "不确定性与决策",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "状态杠杆：你不是不努力，你是没做在点子上",
+        "line": 8386
+      },
+      "aliases": [
+        "状态杠杆"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T033",
+      "title": "选择偏差：就算无人说谎，你看到的也不是真实世界",
+      "short_name": "选择偏差",
+      "category": "不确定性与决策",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "选择偏差：就算无人说谎，你看到的也不是真实世界",
+        "line": 8624
+      },
+      "aliases": [
+        "选择偏差"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T034",
+      "title": "回归均值：不要大惊小怪，要有点定力",
+      "short_name": "回归均值",
+      "category": "不确定性与决策",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "回归均值：不要大惊小怪，要有点定力",
+        "line": 8852
+      },
+      "aliases": [
+        "回归均值"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T035",
+      "title": "前景理论：让人铤而走险的不是贪婪，而是不甘",
+      "short_name": "前景理论",
+      "category": "不确定性与决策",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "前景理论：让人铤而走险的不是贪婪，而是不甘",
+        "line": 9124
+      },
+      "aliases": [
+        "前景理论"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T036",
+      "title": "参考类：当局者迷，旁观者清，你不特殊",
+      "short_name": "参考类",
+      "category": "不确定性与决策",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "参考类：当局者迷，旁观者清，你不特殊",
+        "line": 9528
+      },
+      "aliases": [
+        "参考类"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T037",
+      "title": "超级预测：给不确定性命名，给自己打分",
+      "short_name": "超级预测",
+      "category": "不确定性与决策",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "超级预测：给不确定性命名，给自己打分",
+        "line": 9742
+      },
+      "aliases": [
+        "超级预测"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T038",
+      "title": "OODA 环：不是反应快，而是换脑快",
+      "short_name": "OODA 环",
+      "category": "不确定性与决策",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "OODA 环：不是反应快，而是换脑快",
+        "line": 10014
+      },
+      "aliases": [
+        "OODA 环",
+        "Observe",
+        "Orient",
+        "Decide",
+        "Act"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T039",
+      "title": "认知负荷理论：因为文具多，所以是差生",
+      "short_name": "认知负荷理论",
+      "category": "学习与能力",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "认知负荷理论：因为文具多，所以是差生",
+        "line": 10292
+      },
+      "aliases": [
+        "认知负荷理论"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T040",
+      "title": "ICAP 框架：最高效的学习方法",
+      "short_name": "ICAP 框架",
+      "category": "学习与能力",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "ICAP 框架：最高效的学习方法",
+        "line": 10538
+      },
+      "aliases": [
+        "ICAP 框架",
+        "主动学习",
+        "交互学习"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T041",
+      "title": "刻意练习：天赋的作用究竟是什么？",
+      "short_name": "刻意练习",
+      "category": "学习与能力",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "刻意练习：天赋的作用究竟是什么？",
+        "line": 10924
+      },
+      "aliases": [
+        "刻意练习"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T042",
+      "title": "表征、图式、心智模型和解释框架：学习学的是什么",
+      "short_name": "表征、图式、心智模型和解释框架",
+      "category": "学习与能力",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "表征、图式、心智模型和解释框架：学习学的是什么",
+        "line": 11208
+      },
+      "aliases": [
+        "表征、图式、心智模型和解释框架"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T043",
+      "title": "综合调研：在没有教科书的地方挖掘真知",
+      "short_name": "综合调研",
+      "category": "学习与能力",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "综合调研：在没有教科书的地方挖掘真知",
+        "line": 11426
+      },
+      "aliases": [
+        "综合调研"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T044",
+      "title": "默会知识：（但愿）AI 永远都不可能替代的技能",
+      "short_name": "默会知识",
+      "category": "学习与能力",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "默会知识：（但愿）AI 永远都不可能替代的技能",
+        "line": 11628
+      },
+      "aliases": [
+        "默会知识"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T045",
+      "title": "可取（以及不可取）的困难：把身心调到最适合学习的状态",
+      "short_name": "可取（以及不可取）的困难",
+      "category": "学习与能力",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "可取（以及不可取）的困难：把身心调到最适合学习的状态",
+        "line": 11874
+      },
+      "aliases": [
+        "可取（以及不可取）的困难"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T046",
+      "title": "人力资本、信号筛选和社交资本：学校教育到底是干啥的？",
+      "short_name": "人力资本、信号筛选和社交资本",
+      "category": "学习与能力",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "人力资本、信号筛选和社交资本：学校教育到底是干啥的？",
+        "line": 12272
+      },
+      "aliases": [
+        "人力资本、信号筛选和社交资本"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T047",
+      "title": "自主支持：「献祭式养育」终结者",
+      "short_name": "自主支持",
+      "category": "学习与能力",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "自主支持：「献祭式养育」终结者",
+        "line": 12498
+      },
+      "aliases": [
+        "自主支持"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T048",
+      "title": "拥抱和桥接：知识迁移，学以致用",
+      "short_name": "拥抱和桥接",
+      "category": "学习与能力",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "拥抱和桥接：知识迁移，学以致用",
+        "line": 12730
+      },
+      "aliases": [
+        "拥抱和桥接"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T049",
+      "title": "经济租：赚钱的秘密",
+      "short_name": "经济租",
+      "category": "职业、商业与战略",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "经济租：赚钱的秘密",
+        "line": 12964
+      },
+      "aliases": [
+        "经济租"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T050",
+      "title": "阿尔法：优势战略意识",
+      "short_name": "阿尔法",
+      "category": "职业、商业与战略",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "阿尔法：优势战略意识",
+        "line": 13170
+      },
+      "aliases": [
+        "阿尔法"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T051",
+      "title": "商业杠杆：把一个创造卖一百万次",
+      "short_name": "商业杠杆",
+      "category": "职业、商业与战略",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "商业杠杆：把一个创造卖一百万次",
+        "line": 13522
+      },
+      "aliases": [
+        "商业杠杆"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T052",
+      "title": "机会窗口：是盲目跟风，还是顺应大势？",
+      "short_name": "机会窗口",
+      "category": "职业、商业与战略",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "机会窗口：是盲目跟风，还是顺应大势？",
+        "line": 13736
+      },
+      "aliases": [
+        "机会窗口"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T053",
+      "title": "效果推理：不知道该干什么的时候该干什么",
+      "short_name": "效果推理",
+      "category": "职业、商业与战略",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "效果推理：不知道该干什么的时候该干什么",
+        "line": 14006
+      },
+      "aliases": [
+        "效果推理",
+        "effectuation",
+        "可承受损失"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T054",
+      "title": "沃德利地图：独一无二的自己做，能外包的尽量外包",
+      "short_name": "沃德利地图",
+      "category": "职业、商业与战略",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "沃德利地图：独一无二的自己做，能外包的尽量外包",
+        "line": 14248
+      },
+      "aliases": [
+        "沃德利地图"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T055",
+      "title": "鲍莫尔成本病：物便宜则人贵",
+      "short_name": "鲍莫尔成本病",
+      "category": "职业、商业与战略",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "鲍莫尔成本病：物便宜则人贵",
+        "line": 14522
+      },
+      "aliases": [
+        "鲍莫尔成本病"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T056",
+      "title": "杰文斯悖论：AI 会增加人的工作岗位",
+      "short_name": "杰文斯悖论",
+      "category": "职业、商业与战略",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "杰文斯悖论：AI 会增加人的工作岗位",
+        "line": 14920
+      },
+      "aliases": [
+        "杰文斯悖论"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T057",
+      "title": "平台：现代世界最厉害的商业模式",
+      "short_name": "平台",
+      "category": "职业、商业与战略",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "平台：现代世界最厉害的商业模式",
+        "line": 15164
+      },
+      "aliases": [
+        "平台"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T058",
+      "title": "托付：世界奖励把不确定性变成确定性的人",
+      "short_name": "托付",
+      "category": "职业、商业与战略",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "托付：世界奖励把不确定性变成确定性的人",
+        "line": 15380
+      },
+      "aliases": [
+        "托付"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T059",
+      "title": "地位：社会参与的第一性原理",
+      "short_name": "地位",
+      "category": "职业、商业与战略",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "地位：社会参与的第一性原理",
+        "line": 15642
+      },
+      "aliases": [
+        "地位"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T060",
+      "title": "礼：社会互动协议",
+      "short_name": "礼",
+      "category": "社会、制度与协作",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "礼：社会互动协议",
+        "line": 15880
+      },
+      "aliases": [
+        "礼"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T061",
+      "title": "激励相容：好的制度不应该指望人“畏威怀德”",
+      "short_name": "激励相容",
+      "category": "社会、制度与协作",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "激励相容：好的制度不应该指望人“畏威怀德”",
+        "line": 16258
+      },
+      "aliases": [
+        "激励相容",
+        "机制设计"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T062",
+      "title": "柠檬市场：不要直接扬善惩恶，要让好坏可验证",
+      "short_name": "柠檬市场",
+      "category": "社会、制度与协作",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "柠檬市场：不要直接扬善惩恶，要让好坏可验证",
+        "line": 16550
+      },
+      "aliases": [
+        "柠檬市场"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T063",
+      "title": "外部性：为什么自由社会也需要强制",
+      "short_name": "外部性",
+      "category": "社会、制度与协作",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "外部性：为什么自由社会也需要强制",
+        "line": 16804
+      },
+      "aliases": [
+        "外部性"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T064",
+      "title": "保护费和公共契约：政府的演化",
+      "short_name": "保护费和公共契约",
+      "category": "社会、制度与协作",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "保护费和公共契约：政府的演化",
+        "line": 17094
+      },
+      "aliases": [
+        "保护费和公共契约"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T065",
+      "title": "软预算约束：有人兜底，责任就会变形",
+      "short_name": "软预算约束",
+      "category": "社会、制度与协作",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "软预算约束：有人兜底，责任就会变形",
+        "line": 17396
+      },
+      "aliases": [
+        "软预算约束",
+        "兜底",
+        "责任变形"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T066",
+      "title": "可读性：编户齐民中的米提斯",
+      "short_name": "可读性",
+      "category": "社会、制度与协作",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "可读性：编户齐民中的米提斯",
+        "line": 17638
+      },
+      "aliases": [
+        "可读性"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T067",
+      "title": "共同知识：让众人服从的神器",
+      "short_name": "共同知识",
+      "category": "社会、制度与协作",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "共同知识：让众人服从的神器",
+        "line": 17918
+      },
+      "aliases": [
+        "共同知识"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T068",
+      "title": "替罪羊：从“找坏人”到“看系统”",
+      "short_name": "替罪羊",
+      "category": "社会、制度与协作",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "替罪羊：从“找坏人”到“看系统”",
+        "line": 18218
+      },
+      "aliases": [
+        "替罪羊"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T069",
+      "title": "非预期后果：好意图怎么会带来坏结果？",
+      "short_name": "非预期后果",
+      "category": "社会、制度与协作",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "非预期后果：好意图怎么会带来坏结果？",
+        "line": 18468
+      },
+      "aliases": [
+        "非预期后果"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T070",
+      "title": "慢变量：政府的使命是建立稳定预期",
+      "short_name": "慢变量",
+      "category": "社会、制度与协作",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "慢变量：政府的使命是建立稳定预期",
+        "line": 18724
+      },
+      "aliases": [
+        "慢变量"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T071",
+      "title": "第三物：合作不必先有共识",
+      "short_name": "第三物",
+      "category": "组织与领导",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "第三物：合作不必先有共识",
+        "line": 19066
+      },
+      "aliases": [
+        "第三物"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T072",
+      "title": "摩洛克：东亚为什么这么卷？",
+      "short_name": "摩洛克",
+      "category": "组织与领导",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "摩洛克：东亚为什么这么卷？",
+        "line": 19360
+      },
+      "aliases": [
+        "摩洛克"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T073",
+      "title": "组织资本：怎样让 1 \\+ 1 \\> 2",
+      "short_name": "组织资本",
+      "category": "组织与领导",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "组织资本：怎样让 1 \\+ 1 \\> 2",
+        "line": 19630
+      },
+      "aliases": [
+        "组织资本"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T074",
+      "title": "叙事权：怎样对众人施法",
+      "short_name": "叙事权",
+      "category": "组织与领导",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "叙事权：怎样对众人施法",
+        "line": 19898
+      },
+      "aliases": [
+        "叙事权"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T075",
+      "title": "人身依附和角色责任：从前现代到现代管理",
+      "short_name": "人身依附和角色责任",
+      "category": "组织与领导",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "人身依附和角色责任：从前现代到现代管理",
+        "line": 20324
+      },
+      "aliases": [
+        "人身依附和角色责任"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T076",
+      "title": "古德哈特定律：指标的暴政",
+      "short_name": "古德哈特定律",
+      "category": "组织与领导",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "古德哈特定律：指标的暴政",
+        "line": 20592
+      },
+      "aliases": [
+        "古德哈特定律",
+        "指标失真",
+        "KPI"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T077",
+      "title": "指挥官意图：把控制从“动作细节”挪到“目的、任务、边界”上",
+      "short_name": "指挥官意图",
+      "category": "组织与领导",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "指挥官意图：把控制从“动作细节”挪到“目的、任务、边界”上",
+        "line": 20874
+      },
+      "aliases": [
+        "指挥官意图"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T078",
+      "title": "委托—代理问题：不懂这一条，看组织永远像看宫斗剧",
+      "short_name": "委托—代理问题",
+      "category": "组织与领导",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "委托—代理问题：不懂这一条，看组织永远像看宫斗剧",
+        "line": 21148
+      },
+      "aliases": [
+        "委托—代理问题",
+        "principal-agent"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T079",
+      "title": "流程、清单和经验库：把聪明外置成系统",
+      "short_name": "流程、清单和经验库",
+      "category": "组织与领导",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "流程、清单和经验库：把聪明外置成系统",
+        "line": 21402
+      },
+      "aliases": [
+        "流程、清单和经验库"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T080",
+      "title": "基线漂移：不正常会慢慢变得正常",
+      "short_name": "基线漂移",
+      "category": "组织与领导",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "基线漂移：不正常会慢慢变得正常",
+        "line": 21834
+      },
+      "aliases": [
+        "基线漂移"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T081",
+      "title": "认领、授予和授权：怎样从“能领导”变成“是领导”",
+      "short_name": "认领、授予和授权",
+      "category": "组织与领导",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "认领、授予和授权：怎样从“能领导”变成“是领导”",
+        "line": 22136
+      },
+      "aliases": [
+        "认领、授予和授权"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T082",
+      "title": "生成：最高级的创造",
+      "short_name": "生成",
+      "category": "复杂系统与变化",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "生成：最高级的创造",
+        "line": 22380
+      },
+      "aliases": [
+        "生成"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T083",
+      "title": "对称性破缺：命运不过是冷却了的偶然",
+      "short_name": "对称性破缺",
+      "category": "复杂系统与变化",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "对称性破缺：命运不过是冷却了的偶然",
+        "line": 22714
+      },
+      "aliases": [
+        "对称性破缺"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T084",
+      "title": "临近可能：如何实现无法事先想象的事情？",
+      "short_name": "临近可能",
+      "category": "复杂系统与变化",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "临近可能：如何实现无法事先想象的事情？",
+        "line": 22988
+      },
+      "aliases": [
+        "临近可能"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T085",
+      "title": "反馈回路：怎样操控复杂系统",
+      "short_name": "反馈回路",
+      "category": "复杂系统与变化",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "反馈回路：怎样操控复杂系统",
+        "line": 23448
+      },
+      "aliases": [
+        "反馈回路",
+        "正反馈",
+        "负反馈"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T086",
+      "title": "自组织临界：恰到好处的活泼",
+      "short_name": "自组织临界",
+      "category": "复杂系统与变化",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "自组织临界：恰到好处的活泼",
+        "line": 23704
+      },
+      "aliases": [
+        "自组织临界"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T087",
+      "title": "边际分析：怎样判断值不值得继续投入？",
+      "short_name": "边际分析",
+      "category": "复杂系统与变化",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "边际分析：怎样判断值不值得继续投入？",
+        "line": 23986
+      },
+      "aliases": [
+        "边际分析"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T088",
+      "title": "路径创造：破解路径依赖的唯一可行方法",
+      "short_name": "路径创造",
+      "category": "复杂系统与变化",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "路径创造：破解路径依赖的唯一可行方法",
+        "line": 24300
+      },
+      "aliases": [
+        "路径创造"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T089",
+      "title": "适应性循环：稳定蕴藏着不稳定，败坏蕴藏着生机",
+      "short_name": "适应性循环",
+      "category": "复杂系统与变化",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "适应性循环：稳定蕴藏着不稳定，败坏蕴藏着生机",
+        "line": 24588
+      },
+      "aliases": [
+        "适应性循环"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T090",
+      "title": "零阶道理：大局观就是给真理分配表决权",
+      "short_name": "零阶道理",
+      "category": "复杂系统与变化",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "零阶道理：大局观就是给真理分配表决权",
+        "line": 25026
+      },
+      "aliases": [
+        "零阶道理"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T091",
+      "title": "目标函数：这个宇宙奖励什么？",
+      "short_name": "目标函数",
+      "category": "意义、元认知与人生方向",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "目标函数：这个宇宙奖励什么？",
+        "line": 25324
+      },
+      "aliases": [
+        "目标函数",
+        "优化目标"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T092",
+      "title": "二阶意愿和元表征：应无所住，而生其心",
+      "short_name": "二阶意愿和元表征",
+      "category": "意义、元认知与人生方向",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "二阶意愿和元表征：应无所住，而生其心",
+        "line": 25650
+      },
+      "aliases": [
+        "二阶意愿和元表征"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T093",
+      "title": "副产品：最珍贵的东西大多不能被直接追求",
+      "short_name": "副产品",
+      "category": "意义、元认知与人生方向",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "副产品：最珍贵的东西大多不能被直接追求",
+        "line": 25992
+      },
+      "aliases": [
+        "副产品",
+        "不能直接追求"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T094",
+      "title": "自我约束：有限制才有力量",
+      "short_name": "自我约束",
+      "category": "意义、元认知与人生方向",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "自我约束：有限制才有力量",
+        "line": 26344
+      },
+      "aliases": [
+        "自我约束"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T095",
+      "title": "道德的可扩展性：修身齐家为什么不等于治国平天下？",
+      "short_name": "道德的可扩展性",
+      "category": "意义、元认知与人生方向",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "道德的可扩展性：修身齐家为什么不等于治国平天下？",
+        "line": 26784
+      },
+      "aliases": [
+        "道德的可扩展性"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T096",
+      "title": "立题：怎样给事情做主",
+      "short_name": "立题",
+      "category": "意义、元认知与人生方向",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "立题：怎样给事情做主",
+        "line": 27120
+      },
+      "aliases": [
+        "立题",
+        "问题定义"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T097",
+      "title": "内部优化器：养器成妖",
+      "short_name": "内部优化器",
+      "category": "意义、元认知与人生方向",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "内部优化器：养器成妖",
+        "line": 27472
+      },
+      "aliases": [
+        "内部优化器"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T098",
+      "title": "稀缺：奇点前后的变与不变",
+      "short_name": "稀缺",
+      "category": "意义、元认知与人生方向",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "稀缺：奇点前后的变与不变",
+        "line": 27782
+      },
+      "aliases": [
+        "稀缺"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T099",
+      "title": "预训练和后训练：你能力的上限和下限",
+      "short_name": "预训练和后训练",
+      "category": "意义、元认知与人生方向",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "预训练和后训练：你能力的上限和下限",
+        "line": 28054
+      },
+      "aliases": [
+        "预训练和后训练"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    },
+    {
+      "id": "T100",
+      "title": "探索和生发：一种人生意义（完）",
+      "short_name": "探索和生发",
+      "category": "意义、元认知与人生方向",
+      "source": {
+        "kind": "course_chapter",
+        "heading": "探索和生发：一种人生意义（完）",
+        "line": 28480
+      },
+      "aliases": [
+        "探索和生发"
+      ],
+      "role": "用该工具重述当前处境；具体解释、案例和边界必须再由 GetNote 召回核验。"
+    }
+  ]
+}

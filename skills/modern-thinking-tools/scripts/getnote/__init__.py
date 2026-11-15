@@ -1,0 +1,1 @@
+"""GetNote helper package."""

@@ -1,0 +1,7 @@
+interface:
+  display_name: "老喻的人生算法课"
+  short_description: "把成长卡点拆成行动、反馈和概率范围，保留人生算法原模型并说明本地缺章。"
+  default_prompt: "使用 $dedao-life-algorithms 帮我处理：我反复研究一个副业却迟迟不开始，想在两周内做一次成本可控的验证。"
+
+policy:
+  allow_implicit_invocation: true
