@@ -50,7 +50,15 @@
 ln -sfn /Volumes/WorkSSD/Dev/decision-algorithm/skills/github_open_skills/skills/whatis ~/.codex/skills/whatis
 ```
 
-> 注意：`~/.agents/.skill-lock.json` 里仍记着 whatis 来自 `suyuan2022/suyuan-skill`。若之后跑 `npx skills update` 之类命令，管理器可能用上游副本覆盖这个软链——那会退回上游原版，需要按上面的命令重新指向本目录。
+> `~/.agents/.skill-lock.json` 里 whatis 已改为**本地源**（`sourceType: "local"`，指向本目录），并**故意不记 `skillFolderHash`**——skills CLI 的 update 判定是「缺 hash 或缺 skillPath → 列为 *Local path* 跳过」，所以 `npx skills update` 会显示 `whatis (Local path)` 并跳过，不会用上游副本覆盖这个软链。
+>
+> 想手动刷新时用 CLI 给出的那条命令即可（只影响 whatis 一个）：
+>
+> ```bash
+> npx skills add /Volumes/WorkSSD/Dev/decision-algorithm/skills/github_open_skills/skills/whatis -g -y
+> ```
+>
+> 要取上游（`suyuan2022/suyuan-skill`）的新版本，走本记录仓的 `scripts/sync_from_github.py` 报告差异后人工合并，不要让 skill 管理器直接覆盖。
 
 ## 使用
 
