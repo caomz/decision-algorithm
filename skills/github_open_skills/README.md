@@ -110,7 +110,7 @@ ln -sfn /Volumes/WorkSSD/Dev/decision-algorithm/skills/github_open_skills/skills
 
 | Skill | 安装状态 |
 |---|---|
-| [`whatis`](skills/whatis/) | ✅ **已指向本目录**：共享仓 / Claude Code / ZCode / Codex / OpenClaw / MiniMax Code 六处均链到本目录快照（原实体副本备份在 `~/.agents/skills-backup/whatis-20261115-200909`） |
+| [`whatis`](skills/whatis/) | ✅ **已指向本目录**：共享仓 / Claude Code / ZCode / Codex / OpenClaw / MiniMax Code 六处均链到本目录快照（原实体副本内容与本快照相同，已清理） |
 | [`break-ai-slop`](skills/break-ai-slop/) | 未改动，仍是 `~/.agents/skills/break-ai-slop` 实体目录 |
 | [`claude-cleanup`](skills/claude-cleanup/) | 未改动，仍是 `~/.agents/skills/claude-cleanup` 实体目录（**旧快照**，缺 context-slim 分支） |
 | [`get-biji`](skills/get-biji/) | 未改动，正本在 `~/.agents/skills/get-biji`（与本目录内容一致） |

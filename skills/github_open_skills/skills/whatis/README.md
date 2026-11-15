@@ -42,7 +42,7 @@
 | OpenClaw | `~/.openclaw/workspace/skills/whatis` | → 本目录 |
 | MiniMax Code | `~/.minimax/skills/whatis` | → 本目录 |
 
-改动前 `~/.agents/skills/whatis` 是实体目录（原 skill 管理器 `suyuan2022/suyuan-skill` 装的副本），已按仓库安装器惯例移开备份到 `~/.agents/skills-backup/whatis-20261115-200909`，未删除。
+改动前 `~/.agents/skills/whatis` 是实体目录（原 skill 管理器 `suyuan2022/suyuan-skill` 装的副本）。该副本只有一个 `SKILL.md`，与本目录快照逐字节相同，确认无独有内容后已清理，不再留备份。
 
 手动重链任一平台：
 
