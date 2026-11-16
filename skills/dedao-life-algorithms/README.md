@@ -12,6 +12,10 @@
 /Volumes/HDD/kuake/得到课程md文件/老喻的人生算法课（公众号懒人找资源）
 ```
 
+换机器时用环境变量 `DEDAO_COURSE_PATH` 覆盖上面的默认路径（Windows 示例：
+`D:\...\老喻的人生算法课（公众号懒人找资源）`），目录下的 `chapters/`、`images/`、
+`README.md` 结构需保持一致。
+
 `SKILL.md` 与 `references/course-profile.md`、`references/course-index.md` 中的 `chapters/...` 证据路径均相对该目录；磁盘未挂载时无法提供章节级证据，skill 会如实声明缺章。
 
 ## 目录结构

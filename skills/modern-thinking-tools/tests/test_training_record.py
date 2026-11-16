@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import multiprocessing
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -37,7 +38,8 @@ def test_private_record_retry_pause_resume_and_markdown(tmp_path: Path) -> None:
     db = tmp_path / "private" / "training.sqlite3"
     started = run(db, "start", "--session-id", "s1", "--tool-id", "T025")
     assert started["saved"] is True
-    assert db.stat().st_mode & 0o077 == 0
+    if os.name != "nt":
+        assert db.stat().st_mode & 0o077 == 0
     run(db, "record", "--session-id", "s1", "--event-id", "answer1", "--tool-id", "T025",
         "--kind", "answer", "--question-ref", "case_01", "--summary-code", "attempt_pending_review")
     args = ("record", "--session-id", "s1", "--event-id", "evt1", "--tool-id", "T025",

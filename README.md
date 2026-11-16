@@ -114,6 +114,33 @@ ln -s /path/to/decision-algorithm/skills/decision-algorithm ~/.openclaw/workspac
 # ... 同理
 ```
 
+### Windows
+
+Windows 默认不开符号链接权限（需要开发者模式 + 重新登录），所以安装器会**自动改用 NTFS 目录联接（junction）**：免特权、可跨盘符，仓库仍是唯一正本。已开开发者模式的机器照常用符号链接。
+
+```powershell
+python scripts\install_skills.py --apply
+```
+
+查看链接类型：
+
+```powershell
+Get-ChildItem "$env:USERPROFILE\.minimax\skills" -Force | Select-Object Name, LinkType, Target
+```
+
+卸载（只移除指向本仓库的链接）：
+
+```powershell
+python scripts\install_skills.py --uninstall
+```
+
+课程语料在 Windows 上用环境变量指过去：
+
+| 环境变量 | 指向 | 覆盖的默认路径 |
+|---|---|---|
+| `MODERN_THINKING_COURSE_PATH` | 万维钢《现代思维工具100讲》课程原文 md | `/Volumes/WorkSSD/.../万维钢·现代思维工具100讲.md` |
+| `DEDAO_COURSE_PATH` | 老喻《人生算法课》课程根目录（含 `chapters/`、`images/`） | `/Volumes/HDD/kuake/得到课程md文件/老喻的人生算法课（公众号懒人找资源）` |
+
 `get-biji` 还需要装运行时依赖（Playwright + Chromium 仅用于登录，ffmpeg 用于读本地音视频时长），用 `--with-deps` 可一并装上：
 
 ```bash

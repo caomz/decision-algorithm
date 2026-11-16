@@ -8,6 +8,7 @@ explicit opt-in flag.
 from __future__ import annotations
 
 import importlib.util
+import shutil
 import sys
 from pathlib import Path
 
@@ -22,14 +23,20 @@ sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
 
+def is_link(path: Path) -> bool:
+    """True for any directory link — POSIX symlink or Windows junction."""
+    return MODULE.link_target(path) is not None
+
+
 def make_row(path: Path, repo_skill: Path, state: str) -> MODULE.Row:
+    target = MODULE.link_target(path)
     return MODULE.Row(
         skill=repo_skill.name,
         platform="claude",
         scope="personal",
         path=path,
         state=state,
-        resolved=str(path.resolve(strict=False)) if path.is_symlink() else "",
+        resolved=str(target) if target else "",
     )
 
 
@@ -40,21 +47,25 @@ def test_classify_recognises_every_state(tmp_path) -> None:
     assert MODULE.classify(tmp_path / "nothing", repo) == MODULE.MISSING
 
     linked = tmp_path / "linked"
-    linked.symlink_to(repo, target_is_directory=True)
+    MODULE.create_link(linked, repo)
     assert MODULE.classify(linked, repo) == MODULE.LINKED
 
     other = tmp_path / "other"
     other.mkdir()
     upstream = tmp_path / "upstream"
-    upstream.symlink_to(other, target_is_directory=True)
+    MODULE.create_link(upstream, other)
     assert MODULE.classify(upstream, repo) == MODULE.UPSTREAM
 
     copy = tmp_path / "copy"
     copy.mkdir()
     assert MODULE.classify(copy, repo) == MODULE.COPY
 
+    # A link whose target has since been removed is broken, not merely absent.
+    gone = tmp_path / "gone"
+    gone.mkdir()
     dangling = tmp_path / "dangling"
-    dangling.symlink_to(tmp_path / "gone", target_is_directory=True)
+    MODULE.create_link(dangling, gone)
+    shutil.rmtree(gone)
     assert MODULE.classify(dangling, repo) == MODULE.BROKEN
 
     plain = tmp_path / "plain.txt"
@@ -71,7 +82,7 @@ def test_apply_creates_link_for_missing_and_is_idempotent(tmp_path) -> None:
     row = make_row(link, repo, MODULE.MISSING)
     MODULE.apply_row(row, repo, relink=False, dry_run=False)
 
-    assert link.is_symlink()
+    assert is_link(link)
     assert link.resolve() == repo.resolve()
     assert row.action == "create"
     assert MODULE.classify(link, repo) == MODULE.LINKED
@@ -90,7 +101,7 @@ def test_apply_refuses_to_touch_upstream_without_relink(tmp_path) -> None:
     (other / "keep.txt").write_text("keep", encoding="utf-8")
     link = tmp_path / "skills" / "repo-skill"
     link.parent.mkdir(parents=True)
-    link.symlink_to(other, target_is_directory=True)
+    MODULE.create_link(link, other)
 
     row = make_row(link, repo, MODULE.UPSTREAM)
     MODULE.apply_row(row, repo, relink=False, dry_run=False)
@@ -107,7 +118,7 @@ def test_apply_relink_repoints_upstream_at_repository(tmp_path) -> None:
     other.mkdir()
     link = tmp_path / "skills" / "repo-skill"
     link.parent.mkdir(parents=True)
-    link.symlink_to(other, target_is_directory=True)
+    MODULE.create_link(link, other)
 
     row = make_row(link, repo, MODULE.UPSTREAM)
     MODULE.apply_row(row, repo, relink=True, dry_run=False)
@@ -129,7 +140,7 @@ def test_apply_relink_backs_up_real_directory_before_linking(tmp_path) -> None:
     MODULE.apply_row(row, repo, relink=True, dry_run=False)
 
     assert row.action == "adopt"
-    assert copy.is_symlink()
+    assert is_link(copy)
     assert copy.resolve() == repo.resolve()
 
     backups = list(copy.parent.glob("repo-skill.backup-*"))
@@ -147,7 +158,7 @@ def test_dry_run_changes_nothing(tmp_path) -> None:
 
     assert row.action == "create"
     assert not link.exists()
-    assert not link.is_symlink()
+    assert not is_link(link)
 
 
 def test_uninstall_only_removes_links_into_this_repository(tmp_path) -> None:
@@ -157,19 +168,19 @@ def test_uninstall_only_removes_links_into_this_repository(tmp_path) -> None:
     other.mkdir()
 
     ours = tmp_path / "ours"
-    ours.symlink_to(repo, target_is_directory=True)
+    MODULE.create_link(ours, repo)
     theirs = tmp_path / "theirs"
-    theirs.symlink_to(other, target_is_directory=True)
+    MODULE.create_link(theirs, other)
 
     our_row = make_row(ours, repo, MODULE.LINKED)
     MODULE.uninstall_row(our_row, repo, dry_run=False)
     assert our_row.action == "unlink"
-    assert not ours.is_symlink()
+    assert not is_link(ours)
 
     their_row = make_row(theirs, repo, MODULE.UPSTREAM)
     MODULE.uninstall_row(their_row, repo, dry_run=False)
     assert their_row.action == "skip"
-    assert theirs.is_symlink()
+    assert is_link(theirs)
     assert other.is_dir()
 
 
@@ -213,6 +224,8 @@ def test_fresh_machine_platform_is_only_touched_when_explicit(tmp_path, monkeypa
     home = tmp_path / "home"
     (home / ".claude" / "skills").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
+    # Windows resolves "~" through USERPROFILE first, POSIX through HOME.
+    monkeypatch.setenv("USERPROFILE", str(home))
 
     claude = MODULE.Platform("claude", "Claude Code", "~/.claude/skills")
     codex = MODULE.Platform("codex", "Codex", "~/.codex/skills")
@@ -229,5 +242,5 @@ def test_fresh_machine_platform_is_only_touched_when_explicit(tmp_path, monkeypa
     link = home / ".codex" / "skills" / "repo-skill"
     row = make_row(link, repo, MODULE.MISSING)
     MODULE.apply_row(row, repo, relink=False, dry_run=False)
-    assert link.is_symlink()
+    assert is_link(link)
     assert link.resolve() == repo.resolve()
