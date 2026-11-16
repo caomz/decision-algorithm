@@ -2,15 +2,15 @@
   "format": 1,
   "version": "1.1.1",
   "files": {
-    "SKILL.md": "e7c2062c817f633758b40bf4fc345fb992c46eb550fe95fa226ee521e23ae627",
-    "agents/openai.yaml": "e9b77f7b33258700dfae902efc91a4058f7fc76f6d5f675641eb201fb9fd2052",
-    "references/review-v1.schema.json": "f269a080098ecb4ab34ed8fd5aa4e76206ba662a6358be7fbd5451e9392bc546",
-    "references/verification.md": "f400e969497b0a0b2ba70d9eccf12e349e8210b3a72be82ee6d72b3ba0db749a",
-    "scripts/review.js": "0ea0bc9f01b8969876a159d9d419719b333ba2b6f28e865b2b2919e60ecaa1ff",
-    "scripts/zcode-chat.js": "db4df125354546b4d0dd949cbd901d07aba502073c518b8d67c67a49395fcf7c",
-    "scripts/zcode-run.js": "23bdc345377e31ccec85a50469edf86c02a4ceced79f01e24edea9d1f94980fe",
-    "tests/fixtures/fake-zcode.cjs": "94dfc287c2383f17650592c23075c3b89954ccfe17831169767afcee9d460150",
-    "tests/zcode-chat.test.js": "6a4f97312aa52e5bda73e3626dc55504ee3cefe949a1bf5162fb241e61ab96a7"
+    "SKILL.md": "498b3c13b178e199d5479549f9aaed27f732c25a51099f9b9ba710061a643505",
+    "agents/openai.yaml": "829e3209f38fce42ab2a80a938a1bad4f63cf02ffbc262ed131d368bab698e3e",
+    "references/review-v1.schema.json": "872e56f3dd911cfc27d23e96fc271b07200d92726003b61f3eee7f1769921779",
+    "references/verification.md": "36a3764923f61da283d67a21f8dfd2d9e9058480e25a72e4f74e4c272a1f62f9",
+    "scripts/review.js": "bfd23d9cbd182667eb9fbd8ba42037a1856f263f5d2df55d4adbea3763216a66",
+    "scripts/zcode-chat.js": "b62201e02a8956a8bda00a96fc19d2445e10ae8dc6d213c56b48faf2dee9aba3",
+    "scripts/zcode-run.js": "bbd8d3e63300e90b5bd7a8af6b03b1c4640ae3c949045961e479338644f5e403",
+    "tests/fixtures/fake-zcode.cjs": "c8fa7de60ab7c8207ead69faf1f2471877d702a0c7e633daf6ea32d8a919a7c4",
+    "tests/zcode-chat.test.js": "30a23f9d2c91a5bf4e3f7c397adf6395a90e6730b94e8271d794832c9ad1d169"
   },
-  "review_sha256": "60aaaf769b57f917e41f1beced5f94f7cde1fcd41668d791004181a69ab2248b"
+  "review_sha256": "bfd23d9cbd182667eb9fbd8ba42037a1856f263f5d2df55d4adbea3763216a66"
 }

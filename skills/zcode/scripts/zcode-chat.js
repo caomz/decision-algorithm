@@ -224,6 +224,10 @@ async function main(argv, deps = {}) {
     const launch = resolveLaunch(cli);
     const version = spawnSync(launch.command, [...launch.prefix, "--version"], { encoding: "utf8", timeout: 10000, maxBuffer: 4096, shell: false });
     receipt.cli_version = version.stdout?.trim().replace(/^zcode\s+/, "") || null;
+    // zcode-app-cli 3.x prints two lines ("zcode-app-cli <n>\nzcode-runtime <n>");
+    // the supported contract is the runtime version, which may be on the second line.
+    const runtimeVersion = typeof receipt.cli_version === "string" ? receipt.cli_version.match(/(?:^|\n)zcode-runtime\s+(\S+)/)?.[1] : null;
+    if (runtimeVersion) receipt.cli_version = runtimeVersion;
     if (version.status !== 0 || receipt.cli_version !== SUPPORTED_CLI) fail("unsupported_cli");
     if (args.output) {
       const candidate = path.resolve(args.output);
@@ -245,13 +249,13 @@ async function main(argv, deps = {}) {
     privateWrite(path.join(home, ".zcode/cli/config.json"), JSON.stringify(RUNTIME_CONFIG));
     receipt.auth_environment = (deps.setupMacKeychain || setupMacKeychain)(home);
     privateWrite(path.join(directory, "prompt.txt"), prompt);
-    privateWrite(path.join(directory, "launch.json"), JSON.stringify({ wrapper_version: VERSION, cli_version: receipt.cli_version, launcher: cli, entry: launch.entry, entry_sha256: hashFile(launch.entry), runtime: launch.command, mode: "plan", denied_tools: DENIED_TOOLS, timeout_seconds: args.timeout, shared_auth_data: true }, null, 2));
+    privateWrite(path.join(directory, "launch.json"), JSON.stringify({ wrapper_version: VERSION, cli_version: receipt.cli_version, launcher: cli, entry: launch.entry, entry_sha256: hashFile(launch.entry), runtime: launch.command, mode: "guarded", denied_tools: DENIED_TOOLS, timeout_seconds: args.timeout, shared_auth_data: true }, null, 2));
     const stdoutFd = fs.openSync(path.join(directory, "stdout.ndjson"), "wx", 0o600);
     const stderrFd = fs.openSync(path.join(directory, "stderr.log"), "wx", 0o600);
     const parser = new EventParser();
     const decoder = new TextDecoder("utf-8", { fatal: true });
     let pending = "", bytes = 0, problem = null, termination;
-    const cliArgs = [...launch.prefix, "--prompt", prompt, "--cwd", work, "--mode", "plan", "--output-format", "stream-json", "--workflow-mode", "disabled", "--toolsearch-mode", "off", "--disallowed-tools", DENIED_TOOLS.join(","), "--no-color"];
+    const cliArgs = [...launch.prefix, "--prompt", prompt, "--cwd", work, "--mode", "guarded", "--output-format", "stream-json", "--workflow-mode", "disabled", "--toolsearch-mode", "off", "--disallowed-tools", DENIED_TOOLS.join(","), "--no-color"];
     child = spawn(launch.command, cliArgs, { cwd: work, env: isolatedEnv(home), shell: false, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
     receipt.cli_invoked = Boolean(child.pid);
     progress("running");
