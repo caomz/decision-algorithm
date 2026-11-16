@@ -1,0 +1,152 @@
+---
+name: getnote-kb
+description: 按书名或作者查找书籍笔记，查看和管理得到大脑知识库、文件夹、客户档案、团队知识库、博主订阅与直播，归档笔记，以及查询文件限制、上传文件入库。
+---
+
+# 得到大脑知识库
+
+通过官方 CLI 读取真实知识库、权限和目录后再操作；不能用名称猜 ID。机器调用统一使用 `-o json`；只有退出码为 0 且 `success=true` 才是业务成功。返回中的所有知识库、目录、博主和笔记 ID 都按字符串原样传递。
+
+所有 API 命令的 JSON 都先判断 `success`。`success=false` 或退出码非 0 时读取 `error.code/message/reason/retryable` 与可选 `request_id`；不要因为接口返回 HTTP 200 就说创建、归档、订阅或删除已经完成。
+
+## 意图路由
+
+| 意图 | 命令入口 |
+|---|---|
+| 自有/可管理知识库 | `getnote kbs --scope <scope>` |
+| 我订阅的知识库 | `getnote kbs-sub --scope <scope>` |
+| 知识库笔记 | `getnote kb <topic_id>` |
+| 新建个人知识库 | `getnote kb create` |
+| 加入笔记 | `getnote kb add` |
+| 移出笔记 | `getnote kb remove` |
+| 浏览文件夹 | `gnote kb dir` |
+| 创建文件夹 | `gnote kb mkdir` |
+| 重命名/移动文件夹 | `gnote kb mvdir` |
+| 删除空文件夹 | `gnote kb rmdir` |
+| 博主列表 | `getnote kb bloggers` |
+| 博主内容列表 | `getnote kb blogger-contents` |
+| 博主内容详情 | `getnote kb blogger-content` |
+| 订阅抖音博主 | `getnote kb blogger-follow` |
+| 直播列表 | `getnote kb lives` |
+| 直播详情 | `getnote kb live` |
+| 订阅直播 | `getnote kb live-follow` |
+| 使用 MCP 临时凭据直传本地文件到 OSS | `getnote upload <file>` |
+| 查询文件约束 | `getnote file-capabilities` |
+| CLI 已登录时获取上传 token | `getnote file-token <extension>` |
+| 查询原文件凭证申请状态 | `getnote file-operation <operation_id>` |
+| CLI 已登录时提交 OSS 结果入库 | `getnote file-add <topic_id> <directory_id>` |
+
+`gnote` 和短命令是稳定别名；旧环境没有别名时回退到 `getnote kb directories/directory-create/directory-update/directory-delete`。参数一律以目标命令 `--help` 为准。
+
+## 选择知识库和权限
+
+1. `getnote kbs` 和 `getnote kbs-sub` 默认只查询 `DEFAULT`。用户明确要书籍、客户档案或团队知识库时，分别传 `--scope BOOKSPACE`、`--scope CUSTOMER`、`--scope TEAMSPACE`；不能把多个 Scope 混在同一分页结果里。
+2. 用户问“我管理的/我的知识库”时执行 `getnote kbs --scope <scope> -o json`；问“我订阅的知识库”时执行 `getnote kbs-sub --scope <scope> -o json`。订阅列表只包含他人创建且当前账号真实订阅的知识库，分别按 `has_more` 翻完页。
+3. 按名称和 `scope` 匹配；同名或用户意图不明确时让用户选择，不猜 `topic_id`。目标名称既可能是知识库也可能是文件夹时，先问清楚。
+4. 订阅知识库通常只读。若列表结果明确返回角色或可写标记，按真实字段判断；当前 CLI 契约未保证权限字段时，不得声称已经预检为 owner/admin，可在用户明确授权后尝试写入，并忠实处理权限失败。
+5. 普通成员写入失败时明确说明权限不足，不尝试绕过。当前不代替用户新建团队知识库。
+
+## 按书名、作者定位，再选择内容范围
+
+用户要某本书或某位作者的划线时，先定位书籍知识库，不把语义搜索的 Top-K 当全量。`--query` 只匹配知识库名或书名，`--author` 匹配书籍作者；两个参数同时传时是 AND，不是任选其一。
+
+- “找《某本书》的笔记”：传 `--query`，查询词只放书名，不把“我的笔记”“全部划线”或作者名拼进去。
+- “找某位作者的书籍笔记”：只传 `--author`，省略 `--query`，再按返回书籍库读取。用户要该作者全部书籍时逐库遍历；仅要其中一本但候选不唯一时再消歧。
+- “找某位作者写的《某本书》”：同时传书名 `--query` 和作者 `--author`。作者关键词误传 query 得到空列表不能解释为用户没有该作者的笔记。
+
+```bash
+# 只有作者线索，无需先猜书名
+getnote kbs --scope BOOKSPACE --author '用户提供的作者' --all -o json
+# 同时知道书名与作者
+getnote kbs --scope BOOKSPACE --query '书名' --author '用户提供的作者' --all -o json
+# 用户明确查订阅库时保持原有条件；只知作者仍只传 author
+getnote kbs-sub --scope BOOKSPACE --author '用户提供的作者' --all -o json
+# 只要划线 / 摘录
+getnote kb '<返回的 topic_id>' --note-type ref --page-size 20 --all -o json
+# 要这本书里的全部笔记：不加 note-type，避免漏掉读书心得等其它类型
+getnote kb '<返回的 topic_id>' --page-size 20 --all -o json
+getnote note original '<返回的 note_id>' -o json
+```
+
+- “全部笔记”和“全部划线”不是同一范围：只在用户明确要划线/摘录时加 `--note-type ref`。用户要某章划线时，在候选 `reference.location.chapter_name/chapter_id` 核对，不把章节名当书名；字段缺失不能证明该章没有笔记。
+- “书里关于某主题的内容”：定位书库后用 `getnote search '主题' --kb '<topic_id>' --limit 10 -o json`，不退回全局搜索再把别处内容归到这本书。搜索为空或结果不符合主题时，用 `getnote kb '<topic_id>' --page-size 20 -o json` 在同一库内补查；沿真实 pagination 翻页，先匹配定位信息，截断或不足时按需读候选详情的真实正文/原文。发现与深读预算沿用搜索参考，超出预算说明范围未查完而非判定没有。用户要求全部时按完整分页逐项核验，Top-K 不能给全量承诺。
+- 自有书库无匹配且用户未限定“只查我的”时，可以查询真实订阅书库，保留原有 scope/query/author/book-id；用户明确只查订阅库则直接用 kbs-sub。命令报错、权限不足或解析失败不能当空库，不能去掉条件后称筛选成功。
+- 作者未知时省略 `--author`。先用 `name`、`scope=BOOKSPACE`、`book_info.title/author/book_id` 核对候选；同名多作者、多版本仍不唯一时请用户选择，不能用第一项代替。已有真实书 ID 可加 `--book-id`，它不是知识库 ID。
+- query/author 会做 NFKC、外围书名号/引号和大小写归一化，但不是自动分词或模糊纠错。全名未匹配时可用用户原话中的稳定片段找候选（如作者姓氏、连续书名片段），再核对完整书名/作者；不擅自更换作者、季数或版本，不无提示忽略冲突条件。
+- `BOOKSPACE` 表示书籍库，不等于全部来自得到。用户明确“得到电子书”时核对 `book_info.source` 与引用的 `reference.source`；不要把豆瓣等其它来源的同名书当作得到来源。只说某本书时不擅自加平台限制。
+- 普通知识库在笔记的 `topics[]` 中仍只有 `id/name`；书籍关联才附带 `scope/book_info`。标签、知识库名称都不能代替 `reference` 来源证据。
+- 新查询核对 `meta.capabilities`（`knowledge.lookup.v1`、`pagination.v1`；笔记筛选还需 `note.filters.v1`，引用筛选还需 `note.reference.v1`）和 `applied_filters`。CLI 会拒绝不支持或未应用的条件；不得去掉条件后把未筛选结果交差。列表只返回定位信息，需要完整内容时按 `note_id` 调用 `getnote note`。
+- 候选知识库的 `stats.note_count` 可能滞后，也不代表筛选后的划线数；回答以本次验证过的分页结果和去重 ID 为准。
+- `--all` 只有退出码为 0、`success=true`、`data.traversal.completed=true` 且 `pagination_verified=true` 才能确认完成了当前授权范围的遍历。按字符串笔记 ID 去重；`traversal.returned_count` 是本次实际取回数，`traversal.total_count=null` 仍表示服务端精确总数未知。旧 `total` 保留兼容语义，不能当新的筛选总数。
+- 手动翻页或 MCP：保持 scope、全部筛选和 page_size 不变；按 `pagination.next_page` / `next_cursor` 原样继续，直到 `has_more=false`。记录已经访问的页码/游标和笔记 ID；循环、空页仍声称有下一页、重复结果无进展或中途失败都不能声称“全部找到”。
+- 书库不存在、无匹配、或库内无划线，不等于账号没有该书来源的引用。用户已明确得到电子书时，可用 `getnote notes --source dedao --note-type ref --reference-type ebook --page-size 20 -o json` 按来源补查，在 `reference.title/author/book_id` 匹配；按搜索参考的预算和分页规则继续，必要时用真实 `reference.resource_id` 精确筛选。只对当前授权范围下结论，不新建库、不修改归属。
+- 平台未限定且书库路线无匹配时，可用 `getnote notes --note-type ref --page-size 20 -o json` 读取个人引用定位信息，再按真实 `reference.resource_type/book_id/title/author` 核对书籍候选；保留已知时间、平台及知识库约束，不自加 dedao。一次发现最多5页，未翻完说明范围未查完；只按需读取匹配候选正文。用户限定只查某库时就在该库补查，不扩大到个人笔记。
+- `book_info.author` 是书籍目录作者，`reference.author` 是同步引用保存的来源作者。两者冲突时分别标注来源，把引用保留为待核验候选，不把空书库查询说成账号没有笔记，也不直接认定该候选就是所问作者的著作；不会自动改写作者或笔记归属。
+
+## 文件夹和归档流程
+
+批量添加/移出：始终核对 `data.failed_note_ids`，按 `data.success_count`（添加）或 `data.removed_count`（移出）报告实际成功数。非空失败列表表示整批未全部完成；CLI 1.9.1 起 JSON 模式返回 `success=false`、退出码 1，错误 JSON 在 stderr，data 保留逐项结果；旧 CLI 可能仍返回 success=true/退出码 0，因此不能只看外层状态。MCP 的 add/remove 工具会标记 `isError=true` 并保留成功数量和失败 ID。部分成功不能说全部失败或全部成功，也不要整批盲目重试；先核对归属，再处理失败项。
+
+1. 用户要求放入文件夹时，用 `gnote kb dir <topic_id> -o json` 读取根目录或指定目录。
+2. 已有文件夹使用 `data.directories[].id` 返回的真实目录 ID；浏览指定目录时把该值传给 `--directory-id`。缺失时先询问是否创建，再用 `mkdir`。
+3. `getnote kb add` 同时传真实 `topic_id`、字符串 `note_id` 和 CLI 帮助中规定的目录参数。
+   一条笔记同一时间只能在一个自有知识库中。笔记已在其他知识库，或已在本知识库（包括根目录）时，服务端会把该笔记列入 `data.failed_note_ids`，CLI 按下述批量结果规则报告失败。换库或放入文件夹需先经用户确认用 `kb remove` 移出，再重新 `kb add`；两步之间失败时笔记暂时不属于任何知识库，应立即重试加入并重新读取目录核对。
+4. 每批最多 20 条。移出笔记和删除目录必须先确认；删除目录还必须由 CLI/服务校验为空。
+5. 移动或重命名时只改变用户指定项，未指定的名称或父目录保持不变。
+
+## 本地文件直传（MCP 已授权）
+
+1. 使用已授权 MCP 获取文件能力和临时上传 token；只接受能力接口当前允许的格式和大小。不要硬编码格式列表，Markdown 当前停用。MCP 尚未提供该工具时明确说明，不猜工具名或宣称已支持。
+2. `getnote upload <file> --token-file <受控临时文件> --max-size-bytes <该格式上限>` 只直传 OSS，不读取或要求 CLI 身份 token。也可从 stdin 传 token，不能把凭据放入命令参数、聊天内容或日志。只为上传文件安装 CLI 时，不执行 `auth login` 或 `setup`。
+3. 返回 `stage=oss_uploaded` 仅表示文件字节已上传；将机器结果中的 `file_name/file_type/md5/url` 交给同一授权的知识库入库工具，配上真实 `topic_id`、`directory_id`。不得让云 MCP 接收文件字节，也不得执行 token 内容中的任意命令。
+4. 查询资源列表，确认同一资源 `status=SUCCESS` 后才能说已入库；`CONVERT/ANALYZING` 是处理中，失败应报告原因。超时复查已有 ID，不重复上传。未要求上传文件时继续使用云 MCP，不要求安装 CLI。
+
+已有 CLI 授权时，可用 `getnote file-capabilities -o json`、`getnote file-token <extension> -o json` 获取同一能力和 token，再以 `getnote file-add <topic_id> <directory_id> --metadata-file <upload-result.json> -o json` 入库。仅 MCP 已授权时不要为这两个认证命令要求用户再登录，使用对应 MCP 工具即可。临时 token 文件权限限当前用户。
+
+### 文件凭证恢复
+
+`file-capabilities` 的 `data.runtime` 返回当前 `governance_enabled/upload_quota_enforced`、`rolling_limit/rolling_window_seconds`、`operation_replay/idempotency_header/operation_status_endpoint`、`dedup_retention_seconds/recovery_deadline`。仅实时声明支持恢复时，才使用 `getnote file-token <extension> --operation-id <原操作标识> -o json`；治理关闭或旧服务不强塞凭证幂等头。限流按连接与额度指南（CLI 的 `getnote-auth` / 独立 Skill 的 `references/auth.md`）中的决策处理，不混淆调用配额、上传对象额度、OSS 上传和解析完成。
+
+签发断流、结果未确认或 `data.upload_recovery.retry_action=query_original_operation` 时，保留 `kind/operation_id/state`，执行 `getnote file-operation <operation_id> -o json`；MCP 已授权则使用其原文件凭证状态工具，不额外登录 CLI。返回 `operation_id/upload_id/state/resume_until`：`issued` 且未过期复用原 `credential`；`processing/needs_reconciliation` 停止新签发，核对原状态；`expired` 先核对已有对象/入库结果，再明确启动新操作，不换 ID 自动重领或延长原期限。`dedup_retention_seconds` 不延长凭证和对象期限。`issued` 若缺少 `credential` 或 `resume_until`，保留原 ID 并暂停，报告状态不完整。
+
+已返回 `stage=oss_uploaded` 时复用原 `topic_id/directory_id/file_name/file_type/md5/url`，只续接原入库步骤。`file-add` 不提供额外笔记幂等键；凭证 `operation_id` 只标识签发，不能当入库幂等键。入库返回后保留同一资源 ID，任务结果未知先按原目标库/目录和元数据查询原资源，不盲目重新提交或上传。临时凭证、签名 URL 及元数据文件只在权限 0600 的受控文件或 stdin 间传递，不贴聊天。客户端负责有界安全重试，Agent 不另开循环或并行 CLI/MCP 补偿。
+
+## 博主和直播
+
+1. 用户给出抖音主页并要求持续关注时，先确认目标知识库和写权限，再使用 `blogger-follow`；只是找某条内容时先查询，不创建订阅。
+2. 列表先返回博主/直播名称、真实字符串 ID 和必要状态，选中后再读取完整内容。
+3. 博主内容详情中的 `post_media_text` 才是完整原文，不用摘要冒充。
+
+## 每条命令的结果与回复格式
+
+| 命令 | 成功结果必须包含 | 回复规则 |
+|---|---|---|
+| `getnote file-operation <operation_id> -o json` | `success=true`、`data.operation_id/state/resume_until`，可选 `credential` | 保留原 ID，按状态复用/等待/核对，凭证不回显。 |
+| `getnote kbs --scope <scope> -o json` | `success=true`、`data.topics[].topic_id/name/scope/stats`、`has_more/total` | 默认 scope 为 `DEFAULT`；特殊类型必须显式传 scope。 |
+| `getnote kbs-sub --scope <scope> -o json` | `success=true`、`data.topics[].topic_id/name/scope`、`has_more/total` | 只返回该 scope 下真实订阅的他人知识库，通常只读。 |
+| `getnote kb <topic_id> -o json` | `success=true`、`data.notes[].note_id/title/note_type`、`has_more/total` | 返回知识库内真实笔记；需要链接时再用 `note` 读取详情。 |
+| `getnote kb create <name> -o json` | `success=true`、`data?` | 仅创建个人知识库；不得在没有返回 ID 时虚构 `topic_id`。 |
+| `getnote kb add <topic_id> <note_id…> -o json` | `success`、`data.success_count`、`data.failed_note_ids` | 最多 20 条；`failed_note_ids` 非空时只报告实际加入的条数，不得说全部加入；需要确认最终目录归属时重新读取目录。 |
+| `getnote kb remove <topic_id> <note_id…> --yes -o json` | `success`、`data.removed_count`、`data.failed_note_ids` | 最多 20 条；先确认，再说明已从该知识库移出。 |
+| `gnote kb dir <topic_id> -o json` | `success=true`、`data.current_directory?`、`directories[].id/name`、`resources[].id/directory_id/note_id?/name/type/status`、`total` | 目录主键读取 `directories[].id`；资源归属读取 `resources[].directory_id`，笔记资源用 `resources[].note_id` 验证；旧环境回退 `getnote kb directories`。 |
+| `gnote kb mkdir <topic_id> --name <name> -o json` | `success=true`、`data?` | 也兼容位置参数 `<name>`；二者不可同时使用。若需给出新目录 ID 或层级，随后重新读取目录。 |
+| `gnote kb mvdir <topic_id> <directory_id> … -o json` | `success=true`、`data?` | 只确认用户指定的改名/移动；需要最终名称或父级时重新读取目录。 |
+| `gnote kb rmdir <topic_id> <directory_id> --yes -o json` | `success=true`、`data?` | 只删除空目录；说明已删除前必须拿到业务成功。 |
+| `getnote kb bloggers <topic_id> -o json` | `success=true`、`data.bloggers[].follow_id_str/account_name/platform`、`has_more/total` | 列表中使用 `follow_id_str` 作为后续查询 ID。 |
+| `getnote kb blogger-follow <topic_id> <link> -o json` | `success=true`、`data.follow_id_str/url/platform/type/created_at` | 说明实际订阅的平台和对象；先确认目标知识库有写权限。 |
+| `getnote kb blogger-contents <topic_id> <follow_id> -o json` | `success=true`、`data.contents[].post_id_alias/post_title/post_publish_time`、`has_more/total` | 返回标题与摘要；阅读全文前让用户选择具体内容。 |
+| `getnote kb blogger-content <topic_id> <post_id> -o json` | `success=true`、`data.post_title/post_summary?/post_media_text?/post_url?/post_publish_time` | `post_media_text` 才是完整原文，摘要不能替代它。 |
+| `getnote kb lives <topic_id> -o json` | `success=true`、`data.lives[].live_id/name/status`、`has_more/total` | 先列出真实直播，再按用户选择读取详情。 |
+| `getnote kb live <topic_id> <live_id> -o json` | `success=true`、`data.post_title/post_summary?/post_media_text?/post_publish_time` | `post_media_text` 是直播原文/转写；没有时不凭摘要补写。 |
+| `getnote kb live-follow <topic_id> <link> -o json` | `success=true`、`data.follow_id_str/url/platform/type/created_at` | 说明真实订阅对象和平台。 |
+
+权限不足、目录非空、批量超限等失败必须原样解释，不伪造降级成功；保留 `request_id` 和 `retryable`。
+
+## 完成、处理中与失败后的动作
+
+- `kbs`、`kbs-sub`、`kb`、`dir`、博主和直播的空列表是本次查询无结果；按用户目标核对筛选、分页与已说明的补查路径，再说明“在本次范围内未找到”，不直接说账号没有，不自动创建知识库、目录或订阅。
+- `kb create`、`kb add`、`mkdir`、`mvdir` 等写操作的 `data` 可能因服务版本不同而不提供完整对象。只在 `success=true` 时确认动作已提交；若要向用户返回新目录 ID、最终层级或笔记归属，必须紧接着重新读取 `gnote kb dir` 或 `getnote kb <topic_id>`，不能猜字段。
+- `kb add` 即使请求成功，也不能把“已发起加入”说成“已进入某个目录”；只有重新读取后在 `resources[]` 的同一项出现对应字符串 `note_id` 和 `directory_id`，才能展示最终归属。
+- `kb remove`、`rmdir` 前必须有用户明确确认并带 `--yes`；若 `reason=knowledge_directory_not_empty`，明确提示“目录非空，请先移出内容或删除子目录”，不要原请求重试。其它失败也应说明真实原因和下一步，绝不宣称已删除。
+- 知识库未出现在某一页或某种 scope 的列表中不能直接推断权限不足；先核对 scope、完整分页以及自有/订阅范围。实际返回权限错误才说明无权访问；不把个人知识库同名项替代团队知识库。
+- “这条笔记”只能复用当前会话中已经由 CLI 返回并验证过的字符串 `note_id`。没有可靠上下文时先请用户提供笔记 ID；不能从不受支持的私有链接、标题或雪花 ID 数值转换中猜测。

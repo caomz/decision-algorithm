@@ -19,16 +19,21 @@
 
 ## 🌐 外部开源 skills
 
-[`skills/github_open_skills/`](skills/github_open_skills/) 是本仓库的**外部开源 skill 记录仓**：收录从 GitHub 开源项目同步来的 skill，逐个标清来源、作者、许可、上游提交与本地差异。它**只做记录，不接管安装**——本机生效的安装位仍是 `/Volumes/WorkSSD/.agents/skills/`。
+[`skills/github_open_skills/`](skills/github_open_skills/) 是本仓库的**外部开源 skill 记录仓**：收录从开源项目同步来的 skill，逐个标清来源、作者、许可、上游提交与本地差异。它**只做记录，不接管安装**——本机生效的安装位仍是 `/Volumes/WorkSSD/.agents/skills/`。
 
-| Skill | 来源 | 本目录采用 |
+**收录范围来自交叉验证**：对 `~/.minimax/skills`（49 项）与 `~/.zcode/skills`（287 项）两个宿主全局仓逐文件比对，取内容完全一致的交集——49 个 skill 全部入库，来自 20 个 GitHub 仓库 + 飞书开放平台，加 4 个本仓自管的，合计 **51 个**。
+
+| 来源 | 数量 | 备注 |
 |---|---|---|
-| [`break-ai-slop`](skills/github_open_skills/skills/break-ai-slop/) | [suyuan2022/suyuan-skill](https://github.com/suyuan2022/suyuan-skill)（MIT） | 本机定制版（克制版，不强制每次输出推理） |
-| [`claude-cleanup`](skills/github_open_skills/skills/claude-cleanup/) | 同上 | 上游 HEAD 版（新增 context-slim 上下文瘦身分支） |
-| [`whatis`](skills/github_open_skills/skills/whatis/) | 同上 | 本机适配版（宿主工具无关，不写死 `/tmp`） |
-| [`get-biji`](skills/github_open_skills/skills/get-biji/) | 同上（本体基于 [skychentian/GET-biji](https://github.com/skychentian/GET-biji)） | 本机领先版（跨平台锁 + cron 接入 + 只读去重） |
+| GitHub 仓库 | 35 | 20 个仓库，含 [anthropics/skills](https://github.com/anthropics/skills)、[shadcn/ui](https://github.com/shadcn/ui)、[microsoft/azure-skills](https://github.com/microsoft/azure-skills) 等 |
+| [open.feishu.cn](https://open.feishu.cn/.well-known/skills/) | 11 | 飞书开放平台，非 GitHub |
+| 本机自装 / 本仓自管 | 5 | `hallmark` + `whatis`/`claude-cleanup`/`break-ai-slop`/`get-biji` |
+
+只入库逻辑文件（`SKILL.md` / `references/` / `scripts/` / `agents/`），`assets/`、`demos/`、音视频图片不入库——完整快照 107.5 MB → 入库 **19 MB**。
 
 ```bash
+# 重建清单（读 skill lock + 重新做交叉验证）
+python3 skills/github_open_skills/scripts/build_manifest.py --write
 # 拉上游并报告差异（不改任何文件）
 python3 skills/github_open_skills/scripts/sync_from_github.py
 # 只更新「上游为准」的 skill（覆盖前自动备份）
@@ -36,6 +41,8 @@ python3 skills/github_open_skills/scripts/sync_from_github.py --apply
 ```
 
 版本口径统一为**本机/仓库定制版优先，上游只补新增**——定制版是为适配本机宿主与实际工作流做的，用原始版覆盖等于回退。
+
+> ⚠️ 收录的 skill 中有一处 **AGPL-3.0**（`guizang-ppt-skill`）、一处**未找到许可**（`remotion-dev/skills`）、一处**修改版 Apache-2.0 禁商业再分发**（`hypit`）。详见 [`skills/github_open_skills/NOTICE.md`](skills/github_open_skills/NOTICE.md)。
 
 ---
 

@@ -1,0 +1,404 @@
+{
+  "version": 1,
+  "generatedFrom": "/Users/mingtian/.agents/.skill-lock.json",
+  "crossValidatedAgainst": [
+    "/Users/mingtian/.minimax/skills",
+    "/Users/mingtian/.zcode/skills"
+  ],
+  "crossValidatedCount": 49,
+  "repoRoot": "/Volumes/WorkSSD/Dev/decision-algorithm",
+  "sources": [
+    {
+      "name": "Leonxlnx__taste-skill",
+      "kind": "git",
+      "repo": "https://github.com/Leonxlnx/taste-skill.git",
+      "display": "Leonxlnx/taste-skill",
+      "skills": {
+        "design-taste-frontend": {
+          "path": "skills/taste-skill/SKILL.md",
+          "policy": "upstream"
+        }
+      }
+    },
+    {
+      "name": "alchaincyf__huashu-design",
+      "kind": "git",
+      "repo": "https://github.com/alchaincyf/huashu-design.git",
+      "display": "alchaincyf/huashu-design",
+      "skills": {
+        "huashu-design": {
+          "path": "SKILL.md",
+          "policy": "upstream"
+        }
+      }
+    },
+    {
+      "name": "anthropics__skills",
+      "kind": "git",
+      "repo": "https://github.com/anthropics/skills.git",
+      "display": "anthropics/skills",
+      "skills": {
+        "frontend-design": {
+          "path": "skills/frontend-design/SKILL.md",
+          "policy": "upstream"
+        }
+      }
+    },
+    {
+      "name": "hypit-ai__hypit",
+      "kind": "git",
+      "repo": "https://github.com/hypit-ai/hypit.git",
+      "display": "hypit-ai/hypit",
+      "skills": {
+        "hypit": {
+          "path": "skills/hypit/SKILL.md",
+          "policy": "upstream"
+        }
+      }
+    },
+    {
+      "name": "iswalle__getnote-cli",
+      "kind": "git",
+      "repo": "https://github.com/iswalle/getnote-cli.git",
+      "display": "iswalle/getnote-cli",
+      "skills": {
+        "getnote-auth": {
+          "path": "skills/getnote-auth/SKILL.md",
+          "policy": "upstream"
+        },
+        "getnote-kb": {
+          "path": "skills/getnote-kb/SKILL.md",
+          "policy": "upstream"
+        },
+        "getnote-note": {
+          "path": "skills/getnote-note/SKILL.md",
+          "policy": "upstream"
+        },
+        "getnote-search": {
+          "path": "skills/getnote-search/SKILL.md",
+          "policy": "upstream"
+        },
+        "getnote-tag": {
+          "path": "skills/getnote-tag/SKILL.md",
+          "policy": "upstream"
+        }
+      }
+    },
+    {
+      "name": "jackwener__opencli",
+      "kind": "git",
+      "repo": "https://github.com/jackwener/opencli.git",
+      "display": "jackwener/opencli",
+      "skills": {
+        "opencli-adapter-author": {
+          "path": "skills/opencli-adapter-author/SKILL.md",
+          "policy": "upstream"
+        },
+        "opencli-autofix": {
+          "path": "skills/opencli-autofix/SKILL.md",
+          "policy": "upstream"
+        },
+        "opencli-browser": {
+          "path": "skills/opencli-browser/SKILL.md",
+          "policy": "upstream"
+        },
+        "opencli-usage": {
+          "path": "skills/opencli-usage/SKILL.md",
+          "policy": "upstream"
+        }
+      }
+    },
+    {
+      "name": "juliusbrussee__caveman",
+      "kind": "git",
+      "repo": "https://github.com/juliusbrussee/caveman.git",
+      "display": "juliusbrussee/caveman",
+      "skills": {
+        "caveman": {
+          "path": "skills/caveman/SKILL.md",
+          "policy": "upstream"
+        }
+      }
+    },
+    {
+      "name": "microsoft__azure-skills",
+      "kind": "git",
+      "repo": "https://github.com/microsoft/azure-skills.git",
+      "display": "microsoft/azure-skills",
+      "skills": {
+        "azure-cloud-migrate": {
+          "path": "skills/azure-cloud-migrate/SKILL.md",
+          "policy": "upstream"
+        },
+        "azure-compute": {
+          "path": "skills/azure-compute/SKILL.md",
+          "policy": "upstream"
+        },
+        "azure-messaging": {
+          "path": "skills/azure-messaging/SKILL.md",
+          "policy": "upstream"
+        },
+        "azure-quotas": {
+          "path": "skills/azure-quotas/SKILL.md",
+          "policy": "upstream"
+        },
+        "azure-upgrade": {
+          "path": "skills/azure-upgrade/SKILL.md",
+          "policy": "upstream"
+        },
+        "microsoft-foundry": {
+          "path": "skills/microsoft-foundry/SKILL.md",
+          "policy": "upstream"
+        }
+      }
+    },
+    {
+      "name": "mvanhorn__last30days-skill",
+      "kind": "git",
+      "repo": "https://github.com/mvanhorn/last30days-skill.git",
+      "display": "mvanhorn/last30days-skill",
+      "skills": {
+        "last30days": {
+          "path": "skills/last30days/SKILL.md",
+          "policy": "upstream"
+        }
+      }
+    },
+    {
+      "name": "nextlevelbuilder__ui-ux-pro-max-skill",
+      "kind": "git",
+      "repo": "https://github.com/nextlevelbuilder/ui-ux-pro-max-skill.git",
+      "display": "nextlevelbuilder/ui-ux-pro-max-skill",
+      "skills": {
+        "ui-ux-pro-max": {
+          "path": ".claude/skills/ui-ux-pro-max/SKILL.md",
+          "policy": "upstream"
+        }
+      }
+    },
+    {
+      "name": "obra__superpowers",
+      "kind": "git",
+      "repo": "https://github.com/obra/superpowers.git",
+      "display": "obra/superpowers",
+      "skills": {
+        "brainstorming": {
+          "path": "skills/brainstorming/SKILL.md",
+          "policy": "upstream"
+        }
+      }
+    },
+    {
+      "name": "op7418__Humanizer-zh",
+      "kind": "git",
+      "repo": "https://github.com/op7418/Humanizer-zh.git",
+      "display": "op7418/Humanizer-zh",
+      "skills": {
+        "humanizer-zh": {
+          "path": "SKILL.md",
+          "policy": "upstream"
+        }
+      }
+    },
+    {
+      "name": "op7418__guizang-ppt-skill",
+      "kind": "git",
+      "repo": "https://github.com/op7418/guizang-ppt-skill.git",
+      "display": "op7418/guizang-ppt-skill",
+      "skills": {
+        "guizang-ppt-skill": {
+          "path": "SKILL.md",
+          "policy": "upstream"
+        }
+      }
+    },
+    {
+      "name": "remotion-dev__skills",
+      "kind": "git",
+      "repo": "https://github.com/remotion-dev/skills.git",
+      "display": "remotion-dev/skills",
+      "skills": {
+        "remotion-best-practices": {
+          "path": "skills/remotion-best-practices/SKILL.md",
+          "policy": "upstream"
+        },
+        "remotion-captions": {
+          "path": "skills/remotion-captions/SKILL.md",
+          "policy": "upstream"
+        },
+        "remotion-create": {
+          "path": "skills/remotion-create/SKILL.md",
+          "policy": "upstream"
+        },
+        "remotion-render": {
+          "path": "skills/remotion-render/SKILL.md",
+          "policy": "upstream"
+        }
+      }
+    },
+    {
+      "name": "shadcn__ui",
+      "kind": "git",
+      "repo": "https://github.com/shadcn/ui.git",
+      "display": "shadcn/ui",
+      "skills": {
+        "shadcn": {
+          "path": "skills/shadcn/SKILL.md",
+          "policy": "upstream"
+        }
+      }
+    },
+    {
+      "name": "supabase__agent-skills",
+      "kind": "git",
+      "repo": "https://github.com/supabase/agent-skills.git",
+      "display": "supabase/agent-skills",
+      "skills": {
+        "supabase-postgres-best-practices": {
+          "path": "skills/supabase-postgres-best-practices/SKILL.md",
+          "policy": "upstream"
+        }
+      }
+    },
+    {
+      "name": "typesafe-ai__skills",
+      "kind": "git",
+      "repo": "https://github.com/typesafe-ai/skills.git",
+      "display": "typesafe-ai/skills",
+      "skills": {
+        "typesafe-ai": {
+          "path": "skills/typesafe-ai/SKILL.md",
+          "policy": "upstream"
+        }
+      }
+    },
+    {
+      "name": "vercel-labs__agent-browser",
+      "kind": "git",
+      "repo": "https://github.com/vercel-labs/agent-browser.git",
+      "display": "vercel-labs/agent-browser",
+      "skills": {
+        "agent-browser": {
+          "path": "skills/agent-browser/SKILL.md",
+          "policy": "upstream"
+        }
+      }
+    },
+    {
+      "name": "vercel-labs__skills",
+      "kind": "git",
+      "repo": "https://github.com/vercel-labs/skills.git",
+      "display": "vercel-labs/skills",
+      "skills": {
+        "find-skills": {
+          "path": "skills/find-skills/SKILL.md",
+          "policy": "upstream"
+        }
+      }
+    },
+    {
+      "name": "walkinglabs__learn-harness-engineering",
+      "kind": "git",
+      "repo": "https://github.com/walkinglabs/learn-harness-engineering.git",
+      "display": "walkinglabs/learn-harness-engineering",
+      "skills": {
+        "harness-creator": {
+          "path": "skills/harness-creator/SKILL.md",
+          "policy": "upstream"
+        }
+      }
+    },
+    {
+      "name": "open-feishu",
+      "kind": "wellknown",
+      "display": "open.feishu.cn（飞书开放平台，非 GitHub）",
+      "baseUrl": "https://open.feishu.cn/.well-known/skills",
+      "skills": {
+        "lark-apps": {
+          "path": "lark-apps/SKILL.md",
+          "url": "https://open.feishu.cn/.well-known/skills/lark-apps/SKILL.md",
+          "policy": "upstream"
+        },
+        "lark-base": {
+          "path": "lark-base/SKILL.md",
+          "url": "https://open.feishu.cn/.well-known/skills/lark-base/SKILL.md",
+          "policy": "upstream"
+        },
+        "lark-calendar": {
+          "path": "lark-calendar/SKILL.md",
+          "url": "https://open.feishu.cn/.well-known/skills/lark-calendar/SKILL.md",
+          "policy": "upstream"
+        },
+        "lark-doc": {
+          "path": "lark-doc/SKILL.md",
+          "url": "https://open.feishu.cn/.well-known/skills/lark-doc/SKILL.md",
+          "policy": "upstream"
+        },
+        "lark-drive": {
+          "path": "lark-drive/SKILL.md",
+          "url": "https://open.feishu.cn/.well-known/skills/lark-drive/SKILL.md",
+          "policy": "upstream"
+        },
+        "lark-event": {
+          "path": "lark-event/SKILL.md",
+          "url": "https://open.feishu.cn/.well-known/skills/lark-event/SKILL.md",
+          "policy": "upstream"
+        },
+        "lark-im": {
+          "path": "lark-im/SKILL.md",
+          "url": "https://open.feishu.cn/.well-known/skills/lark-im/SKILL.md",
+          "policy": "upstream"
+        },
+        "lark-meeting": {
+          "path": "lark-meeting/SKILL.md",
+          "url": "https://open.feishu.cn/.well-known/skills/lark-meeting/SKILL.md",
+          "policy": "upstream"
+        },
+        "lark-shared": {
+          "path": "lark-shared/SKILL.md",
+          "url": "https://open.feishu.cn/.well-known/skills/lark-shared/SKILL.md",
+          "policy": "upstream"
+        },
+        "lark-slides": {
+          "path": "lark-slides/SKILL.md",
+          "url": "https://open.feishu.cn/.well-known/skills/lark-slides/SKILL.md",
+          "policy": "upstream"
+        },
+        "lark-task": {
+          "path": "lark-task/SKILL.md",
+          "url": "https://open.feishu.cn/.well-known/skills/lark-task/SKILL.md",
+          "policy": "upstream"
+        }
+      }
+    },
+    {
+      "name": "local-untracked",
+      "kind": "local",
+      "display": "本机自装（不在 skills CLI lock 中）",
+      "skills": {
+        "hallmark": {
+          "policy": "local"
+        }
+      }
+    },
+    {
+      "name": "owned-by-this-repo",
+      "kind": "local",
+      "display": "本仓自管（decision-algorithm 自有 skill 与已定制快照）",
+      "skills": {
+        "break-ai-slop": {
+          "policy": "local"
+        },
+        "claude-cleanup": {
+          "policy": "local"
+        },
+        "get-biji": {
+          "policy": "local"
+        },
+        "whatis": {
+          "policy": "local"
+        }
+      }
+    }
+  ]
+}

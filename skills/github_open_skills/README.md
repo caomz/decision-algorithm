@@ -8,6 +8,31 @@
 
 ---
 
+## 收录范围：mx × zcode 交叉验证
+
+本仓收录的 skill 不是拍脑袋挑的，而是对两个宿主全局 skill 仓做**交叉验证**后取的交集：
+
+| 全局仓 | 路径 | 条目 |
+|---|---|---|
+| MiniMax Code | `~/.minimax/skills` | 49 |
+| ZCode | `~/.zcode/skills` | 287 |
+
+- mx 是 zcode 的**严格子集**（mx 独有 0 个）
+- 交集内 **49 个 skill 内容逐字节一致**，无分歧
+
+这 49 个全部收录，另加 4 个本仓自管的，合计 **51 个**。完整方法与逐项来源见 [`sources/CROSS_VALIDATION.md`](sources/CROSS_VALIDATION.md)。
+
+| 来源类型 | 数量 | 仓库数 |
+|---|---|---|
+| GitHub 仓库 | 35 | 20 |
+| open.feishu.cn（飞书开放平台，非 GitHub） | 11 | — |
+| 本机自装，无公开上游 | 1（`hallmark`） | — |
+| 本仓自管 | 4（`whatis` / `claude-cleanup` / `break-ai-slop` / `get-biji`） | — |
+
+**收录范围仅逻辑**：`SKILL.md`、`references/`、`scripts/`、`agents/` 入库；`assets/`、`demos/`、音视频图片不入库。完整快照 107.5 MB → 入库 **19 MB**（1270 个文件）。
+
+---
+
 ## 收录清单
 
 ### 来自 [suyuan2022/suyuan-skill](https://github.com/suyuan2022/suyuan-skill)
@@ -17,11 +42,44 @@
 | Skill | 定位 | 本目录采用 | 上游提交 | 本机安装位 |
 |---|---|---|---|---|
 | [`break-ai-slop`](skills/break-ai-slop/) | 专家预检：动手前挖出隐性经验与决定成败的约束 | **本机定制版**（克制：不强制、不外露推理） | `6da5289` → `f40ca58` | `~/.agents/skills/break-ai-slop` |
-| [`claude-cleanup`](skills/claude-cleanup/) | Claude 本机清理 + 开局上下文瘦身（macOS / Windows） | **上游 HEAD 版**（本机旧快照缺 context-slim 分支，本次更新） | `e61cc66` → `fb4782e` → `ed8c1b8` | `~/.agents/skills/claude-cleanup`（仍是旧快照） |
+| [`claude-cleanup`](skills/claude-cleanup/) | Claude 本机清理 + 开局上下文瘦身（macOS / Windows） | **上游 HEAD 版**（含 context-slim 分支） | `e61cc66` → `fb4782e` → `ed8c1b8` | **本目录快照**（六平台均链到此处） |
 | [`get-biji`](skills/get-biji/) | Get 笔记同步、检索与音视频转写 | **本机领先版**（含跨平台锁、cron 接入、只读去重） | `d932bb7` → `915276a` → `24a3cfd` → `d943cb1` | `~/.agents/skills/get-biji` |
 | [`whatis`](skills/whatis/) | 看不懂的东西，画成大图 HTML 给你看 | **本机适配版**（宿主工具无关，不写死 `/tmp`） | `423473d` | **本目录快照**（六平台均链到此处） |
 
 上游原文许可：[`sources/suyuan-skill/LICENSE`](sources/suyuan-skill/LICENSE)。
+
+### 来自其余 19 个 GitHub 仓库（31 个 skill）
+
+| 仓库 | skill |
+|---|---|
+| [microsoft/azure-skills](https://github.com/microsoft/azure-skills) | azure-cloud-migrate、azure-compute、azure-messaging、azure-quotas、azure-upgrade、microsoft-foundry |
+| [iswalle/getnote-cli](https://github.com/iswalle/getnote-cli) | getnote-auth、getnote-kb、getnote-note、getnote-search、getnote-tag |
+| [jackwener/opencli](https://github.com/jackwener/opencli) | opencli-adapter-author、opencli-autofix、opencli-browser、opencli-usage |
+| [remotion-dev/skills](https://github.com/remotion-dev/skills) | remotion-best-practices、remotion-captions、remotion-create、remotion-render |
+| [anthropics/skills](https://github.com/anthropics/skills) | frontend-design |
+| [shadcn/ui](https://github.com/shadcn/ui) | shadcn |
+| [alchaincyf/huashu-design](https://github.com/alchaincyf/huashu-design) | huashu-design |
+| [Leonxlnx/taste-skill](https://github.com/Leonxlnx/taste-skill) | design-taste-frontend |
+| [nextlevelbuilder/ui-ux-pro-max-skill](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill) | ui-ux-pro-max |
+| [mvanhorn/last30days-skill](https://github.com/mvanhorn/last30days-skill) | last30days |
+| [op7418/guizang-ppt-skill](https://github.com/op7418/guizang-ppt-skill) | guizang-ppt-skill |
+| [op7418/Humanizer-zh](https://github.com/op7418/Humanizer-zh) | humanizer-zh |
+| [hypit-ai/hypit](https://github.com/hypit-ai/hypit) | hypit |
+| [juliusbrussee/caveman](https://github.com/juliusbrussee/caveman) | caveman |
+| [obra/superpowers](https://github.com/obra/superpowers) | brainstorming |
+| [supabase/agent-skills](https://github.com/supabase/agent-skills) | supabase-postgres-best-practices |
+| [typesafe-ai/skills](https://github.com/typesafe-ai/skills) | typesafe-ai |
+| [vercel-labs/agent-browser](https://github.com/vercel-labs/agent-browser) | agent-browser |
+| [vercel-labs/skills](https://github.com/vercel-labs/skills) | find-skills |
+| [walkinglabs/learn-harness-engineering](https://github.com/walkinglabs/learn-harness-engineering) | harness-creator |
+
+### 来自 open.feishu.cn（11 个，非 GitHub）
+
+`lark-apps`、`lark-base`、`lark-calendar`、`lark-doc`、`lark-drive`、`lark-event`、`lark-im`、`lark-meeting`、`lark-shared`、`lark-slides`、`lark-task`
+
+### 无公开上游
+
+`hallmark` —— 本机自装，不在 skills CLI lock 中。
 
 ### 自有 skill（不在本仓复制，只做索引）
 
@@ -63,37 +121,50 @@ decision-algorithm/
     └── github_open_skills/          # ⭐ 外部开源 skill 记录仓（本目录）
         ├── README.md                #   收录清单与版本策略
         ├── NOTICE.md                #   第三方来源与许可声明
-        ├── skills/                  #   收录的 skill 快照（每个目录自带溯源 README）
-        │   ├── break-ai-slop/
-        │   ├── claude-cleanup/
-        │   ├── get-biji/
-        │   └── whatis/
+        ├── skills/                  #   51 个收录快照
+        │   ├── <skill名>/
+        │   │   ├── SKILL.md         #     skill 入口
+        │   │   └── PROVENANCE.md    #     溯源：来源、commit、收录方式
+        │   └── ...
         ├── sources/                 #   上游来源留档
-        │   └── suyuan-skill/
-        │       ├── LICENSE          #     上游 MIT 原文
-        │       ├── UPSTREAM_COMMIT  #     上游同步到的 commit
-        │       └── SYNC.md          #     同步历史与差异说明
+        │   ├── manifest.json        #     ⭐ 多源清单（同步脚本的唯一真相）
+        │   ├── CROSS_VALIDATION.md  #     ⭐ mx × zcode 交叉验证记录
+        │   ├── sync-history.jsonl   #     同步流水
+        │   └── suyuan-skill/        #     上游 LICENSE 与提交留档
         └── scripts/
-            └── sync_from_github.py  #   安全同步脚本（默认只报告，不落盘）
+            ├── sync_from_github.py  #   多源安全同步（默认只报告）
+            └── build_manifest.py    #   从 skill lock 重建清单
 ```
 
 ---
 
 ## 同步
 
+清单 `sources/manifest.json` 是唯一真相：每个 skill 从哪个上游来、在上游哪里、能不能被 `--apply` 覆盖，都记在里面。
+
 ```bash
 cd /Volumes/WorkSSD/Dev/decision-algorithm/skills/github_open_skills
 
-python3 scripts/sync_from_github.py            # 拉取上游并报告差异，不改任何文件
-python3 scripts/sync_from_github.py --apply    # 只对「上游为准」的 skill 执行更新
-python3 scripts/sync_from_github.py --list     # 列出收录来源与版本策略
+# 重建清单（读 ~/.agents/.skill-lock.json，重新做 mx × zcode 交叉验证）
+python3 scripts/build_manifest.py --write
+
+# 拉取上游并报告差异，不改任何文件
+python3 scripts/sync_from_github.py
+
+# 只对「上游为准」的 skill 执行更新
+python3 scripts/sync_from_github.py --apply
+
+# 只看某个来源
+python3 scripts/sync_from_github.py --source microsoft__azure-skills
 ```
 
 脚本行为：
 
-- 上游缓存在 `.cache/`，`--apply` 前会把要覆盖的本地目录整体备份为 `<name>.backup-<时间戳>`，不删数据。
-- 标记为「本机版优先」的 skill **永远不会被 `--apply` 覆盖**，只输出差异清单，需要时人工合并。
-- 每次同步会更新 `sources/<仓库>/UPSTREAM_COMMIT` 与 `SYNC.md` 的同步记录。
+- 支持三类来源：**git**（GitHub 仓库）、**wellknown**（飞书开放平台 `/.well-known/skills/`）、**local**（本仓自管，无上游）
+- 上游缓存在 `.cache/`，`--apply` 前会把要覆盖的本地目录整体备份为 `<name>.backup-<时间戳>`，不删数据
+- 标记为「本机版优先」的 skill **永远不会被 `--apply` 覆盖**，只输出差异清单，需要时人工合并
+- **只同步逻辑文件**：`SKILL.md` / `references/` / `scripts/` / `agents/` 入库，`assets/`、`demos/`、音视频图片跳过
+- 每次 `--apply` 往 `sources/sync-history.jsonl` 追加一条流水
 
 ---
 
