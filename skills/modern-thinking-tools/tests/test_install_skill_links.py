@@ -17,7 +17,7 @@ def test_inspect_link_distinguishes_current_missing_and_conflict(tmp_path, monke
     monkeypatch.setattr(MODULE, "CANONICAL", canonical.resolve())
 
     current = tmp_path / "current"
-    current.symlink_to(canonical, target_is_directory=True)
+    MODULE.create_link(current, canonical)
     assert MODULE.inspect_link("current", current)["status"] == "current"
 
     assert MODULE.inspect_link("missing", tmp_path / "missing")["status"] == "missing"

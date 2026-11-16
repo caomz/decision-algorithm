@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import stat
 from pathlib import Path
 
@@ -305,6 +306,9 @@ def test_private_writer_repairs_existing_directory_permissions(tmp_path, monkeyp
     json_path = output_root / "evidence.json"
     markdown_path = output_root / "evidence.md"
     MODULE.write_private_evidence(json_path, markdown_path, pack)
+    if os.name == "nt":
+        # Windows has no POSIX mode bits — privacy is enforced through ACLs.
+        pytest.skip("POSIX mode bits are not enforced on Windows")
     assert stat.S_IMODE(output_root.stat().st_mode) == 0o700
     assert stat.S_IMODE(json_path.stat().st_mode) == 0o600
     assert stat.S_IMODE(markdown_path.stat().st_mode) == 0o600

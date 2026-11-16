@@ -9,11 +9,56 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import subprocess
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[3]
 CANONICAL = (ROOT / "skills" / "modern-thinking-tools").resolve()
+
+IS_WINDOWS = os.name == "nt"
+
+
+def link_target(path: Path) -> Path | None:
+    """Resolve a directory link (POSIX symlink or Windows junction)."""
+    if path.is_symlink():
+        return path.resolve(strict=False)
+    if IS_WINDOWS:
+        try:
+            raw = os.readlink(str(path))
+        except (OSError, ValueError):
+            return None
+        if raw.startswith("\\\\?\\"):
+            raw = raw[4:]
+        return Path(raw)
+    return None
+
+
+def create_link(link: Path, target: Path) -> None:
+    """Create a directory link, falling back to a junction when needed.
+
+    A junction needs no ``SeCreateSymbolicLinkPrivilege``, so the skill links
+    still work on a stock Windows install.
+    """
+    link.parent.mkdir(parents=True, exist_ok=True)
+    absolute = target if target.is_absolute() else (link.parent / target).resolve()
+    try:
+        link.symlink_to(target, target_is_directory=True)
+        return
+    except OSError:
+        if not IS_WINDOWS:
+            raise
+    proc = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(link), str(absolute)],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        raise OSError(
+            "创建目录链接失败："
+            f"mklink /J → {proc.stderr.strip() or proc.stdout.strip()}"
+        )
 
 
 def link_targets() -> list[tuple[str, Path, str]]:
@@ -38,13 +83,13 @@ def link_targets() -> list[tuple[str, Path, str]]:
 
 
 def inspect_link(name: str, path: Path) -> dict[str, str | bool]:
-    is_link = path.is_symlink()
+    target = link_target(path)
     exists = path.exists()
-    resolved = str(path.resolve(strict=False)) if is_link else ""
-    if is_link and Path(resolved) == CANONICAL:
-        status = "current"
-    elif is_link:
-        status = "conflict"
+    resolved = str(target) if target else ""
+    if target is not None and target.exists():
+        status = "current" if Path(resolved) == CANONICAL else "conflict"
+    elif target is not None:
+        status = "conflict"  # a link whose target is gone
     elif exists:
         status = "conflict"
     else:
@@ -53,7 +98,7 @@ def inspect_link(name: str, path: Path) -> dict[str, str | bool]:
         "name": name,
         "path": str(path),
         "status": status,
-        "is_symlink": is_link,
+        "is_symlink": target is not None,
         "resolved": resolved,
     }
 
@@ -78,8 +123,7 @@ def main() -> int:
         elif result["status"] == "missing":
             missing = True
             if args.apply:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.symlink_to(target, target_is_directory=True)
+                create_link(path, Path(target))
                 result = inspect_link(name, path)
         results.append(result)
 

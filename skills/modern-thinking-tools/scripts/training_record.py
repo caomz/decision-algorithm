@@ -43,7 +43,10 @@ def connect(path: Path, *, create: bool) -> sqlite3.Connection | None:
         if path.exists() and path.is_symlink():
             raise ValueError("database must not be a symlink")
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        if path.parent.stat().st_mode & 0o077:
+        # POSIX mode bits are meaningless on Windows (st_mode is always 0o777);
+        # privacy there is governed by the directory ACL, so only enforce the
+        # 0700 check where the bits actually carry meaning.
+        if os.name != "nt" and path.parent.stat().st_mode & 0o077:
             raise ValueError("database parent must be private (0700)")
     connection = sqlite3.connect(path, timeout=20)
     if create:

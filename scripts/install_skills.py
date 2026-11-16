@@ -108,6 +108,76 @@ def discover_skills() -> List[Skill]:
     return found
 
 
+# ------------------------------------------------------------- link layer ----
+
+IS_WINDOWS = os.name == "nt"
+
+
+def _strip_extended_prefix(raw: str) -> str:
+    """Windows reports junctions as ``\\\\?\\C:\\...`` — drop that prefix."""
+    if raw.startswith("\\\\?\\"):
+        return raw[4:]
+    return raw
+
+
+def link_target(path: Path) -> Optional[Path]:
+    """Resolve a directory link (POSIX symlink or Windows junction).
+
+    Returns ``None`` when *path* is not a link at all.
+    """
+    if path.is_symlink():
+        return Path(os.path.realpath(path))
+    if IS_WINDOWS:
+        try:
+            raw = os.readlink(str(path))
+        except (OSError, ValueError):
+            return None
+        return Path(os.path.realpath(_strip_extended_prefix(raw)))
+    return None
+
+
+def _same_path(a: Path, b: Path) -> bool:
+    return os.path.normcase(os.path.abspath(str(a))) == os.path.normcase(os.path.abspath(str(b)))
+
+
+def create_link(link: Path, target: Path) -> str:
+    """Create a directory link at *link* pointing at *target*.
+
+    Returns ``"symlink"`` or ``"junction"``. On Windows a junction is used when
+    the process lacks ``SeCreateSymbolicLinkPrivilege`` (developer mode off),
+    because junctions need no privilege and may cross volumes — so the
+    repository stays the single source of truth without a re-login.
+    """
+    link.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        link.symlink_to(target, target_is_directory=True)
+        return "symlink"
+    except OSError as exc:
+        if not IS_WINDOWS:
+            raise
+        symlink_error = exc
+
+    proc = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+        capture_output=True, text=True,
+    )
+    if proc.returncode != 0:
+        raise OSError(
+            "创建目录链接失败："
+            f"symlink → {symlink_error}；"
+            f"mklink /J → {proc.stderr.strip() or proc.stdout.strip()}"
+        )
+    return "junction"
+
+
+def remove_link(link: Path) -> None:
+    """Remove a link (POSIX symlink or Windows junction) without touching its target."""
+    if IS_WINDOWS and not link.is_symlink():
+        os.rmdir(str(link))
+    else:
+        link.unlink()
+
+
 # ------------------------------------------------------------ inspection ----
 
 
@@ -136,11 +206,11 @@ def targets_for(platform: Platform, include_project: bool, explicit: bool) -> Li
 
 def classify(path: Path, repo_skill: Path) -> str:
     """Decide what a path currently is, relative to this repository."""
-    if path.is_symlink():
-        resolved = Path(os.path.realpath(path))
-        if not resolved.exists():
+    target = link_target(path)
+    if target is not None:
+        if not target.exists():
             return BROKEN
-        if resolved == repo_skill:
+        if _same_path(target, repo_skill):
             return LINKED
         return UPSTREAM
     if path.exists():
@@ -186,13 +256,14 @@ def plan(skills: Sequence[Skill], platform_keys: Sequence[str], include_project:
             for skill in skills:
                 link = target.path / skill.name
                 state = classify(link, skill.path)
+                resolved = link_target(link)
                 row = Row(
                     skill=skill.name,
                     platform=platform.key,
                     scope=target.scope,
                     path=link,
                     state=state,
-                    resolved=str(os.path.realpath(link)) if link.is_symlink() else "",
+                    resolved=str(resolved) if resolved else "",
                 )
                 rows.append(row)
     return rows
@@ -217,8 +288,8 @@ def apply_row(row: Row, repo_skill: Path, relink: bool, dry_run: bool) -> Row:
         row.action = "create"
         row.detail = f"创建链接 → {repo_skill}"
         if not dry_run:
-            row.path.parent.mkdir(parents=True, exist_ok=True)
-            row.path.symlink_to(repo_skill, target_is_directory=True)
+            kind = create_link(row.path, repo_skill)
+            row.detail = f"创建{kind} → {repo_skill}"
             new_state = classify(row.path, repo_skill)
             row.state = new_state
             if new_state != LINKED:
@@ -234,8 +305,8 @@ def apply_row(row: Row, repo_skill: Path, relink: bool, dry_run: bool) -> Row:
         row.action = "relink"
         row.detail = f"改指向本仓库（原：{old}）"
         if not dry_run:
-            row.path.unlink()
-            row.path.symlink_to(repo_skill, target_is_directory=True)
+            remove_link(row.path)
+            create_link(row.path, repo_skill)
             row.state = classify(row.path, repo_skill)
         return row
 
@@ -249,7 +320,7 @@ def apply_row(row: Row, repo_skill: Path, relink: bool, dry_run: bool) -> Row:
     row.detail = f"备份为 {backup.name} 后改链接"
     if not dry_run:
         shutil.move(str(row.path), str(backup))
-        row.path.symlink_to(repo_skill, target_is_directory=True)
+        create_link(row.path, repo_skill)
         row.state = classify(row.path, repo_skill)
         row.detail += f"；备份在 {backup}"
     return row
@@ -264,7 +335,7 @@ def uninstall_row(row: Row, repo_skill: Path, dry_run: bool) -> Row:
     row.action = "unlink"
     row.detail = f"移除链接 {row.path}"
     if not dry_run:
-        row.path.unlink()
+        remove_link(row.path)
         row.state = MISSING
     return row
 
