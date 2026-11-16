@@ -7,6 +7,8 @@
 - Chapters: `/Volumes/HDD/kuake/得到课程md文件/老喻的人生算法课（公众号懒人找资源）/chapters`
 - Images: `/Volumes/HDD/kuake/得到课程md文件/老喻的人生算法课（公众号懒人找资源）/images`
 
+以上是默认路径；换机器时用环境变量 `DEDAO_COURSE_PATH` 覆盖，其余路径按同一课程根目录推导。
+
 ## Stats
 
 - Chapter count: 36
