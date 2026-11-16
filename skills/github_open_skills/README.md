@@ -182,6 +182,7 @@ ln -sfn /Volumes/WorkSSD/Dev/decision-algorithm/skills/github_open_skills/skills
 | Skill | 安装状态 |
 |---|---|
 | [`whatis`](skills/whatis/) | ✅ **已指向本目录**：共享仓 / Claude Code / ZCode / Codex / OpenClaw / MiniMax Code 六处均链到本目录快照（原实体副本内容与本快照相同，已清理）。`~/.agents/.skill-lock.json` 已改为本地源且不记 hash，`npx skills update` 会跳过它，不会覆盖软链 |
+| 其余 49 个交叉验证 skill | ✅ **Codex 已补齐**：2026-11-16 把 49 个交叉验证 skill 全部装进 `~/.codex/skills/`（原仅 9 个）。统一软链到 `../../.agents/skills/<name>` 完整安装位——本目录快照是「仅逻辑」版，`guizang-ppt-skill` / `last30days` / `shadcn` 依赖 assets，指向快照会装坏 |
 | [`break-ai-slop`](skills/break-ai-slop/) | 未改动，仍是 `~/.agents/skills/break-ai-slop` 实体目录。lock 里仍记上游 GitHub 源，`npx skills update` 会用上游激进版覆盖它——如需保护，用同样办法改成本地源 |
 | [`claude-cleanup`](skills/claude-cleanup/) | ✅ **已指向本目录**：共享仓 / Claude Code / ZCode / Codex / OpenClaw / MiniMax Code 六处均链到本目录快照。lock 已改为本地源且不记 hash，`npx skills update` 会跳过它，不会覆盖软链 |
 | [`get-biji`](skills/get-biji/) | 未改动，正本在 `~/.agents/skills/get-biji`（与本目录内容一致） |

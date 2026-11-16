@@ -101,3 +101,21 @@ python3 scripts/sync_from_github.py
 # 真正同步（只更新「上游为准」的 skill，覆盖前自动备份）
 python3 scripts/sync_from_github.py --apply
 ```
+
+---
+
+## Codex 补装记录（2026-11-16）
+
+交叉验证通过的 49 个 skill 原先在 `~/.codex/skills/` 里**只有 9 个**（claude-cleanup、whatis 指向仓库快照；design-taste-frontend、hallmark、huashu-design、remotion-* 指向 `.agents`），其余 **40 个缺失**。
+
+已补齐全部 40 个，**统一软链到 `../../.agents/skills/<name>`**：
+
+| 指向 | 数量 | 理由 |
+|---|---|---|
+| `../../.agents/skills/<name>` | 40（新装） | 完整安装位，素材齐全，且随 `npx skills update` 自动保持最新 |
+| 本目录快照 | 2（原有） | `whatis`、`claude-cleanup`——本仓定制版，需锁定不被 update 覆盖 |
+| `~/.agents/skills/<name>`（绝对路径） | 7（原有） | design-taste-frontend、hallmark、huashu-design、remotion-* |
+
+**为什么不统一指向本目录快照**：快照只收逻辑文件，`guizang-ppt-skill`、`last30days`、`shadcn` 依赖 `assets/`（demo 素材），指向快照会得到残缺版本。这 3 个的差异经 `SKILL.md` 引用扫描确认。
+
+校验结果：49 个链接全部可解析、`SKILL.md` 内容与 `.agents` 完整版一致、素材无缺失、codex 目录 0 断链（软链 94 → 134）。
