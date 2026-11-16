@@ -1,0 +1,52 @@
+{
+  "skill_name": "mmx",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "/mmx 请从失败模式、维护成本和适用边界三个角度，给这个单 Agent 内容工作流一份独立第二意见。",
+      "expected_output": "发起一次同步文本请求，完整呈现 MMX 原文和真实模型、token、状态，不伪造补充内容。",
+      "files": [],
+      "expectations": [
+        "只调用一次 mmx 文本 chat，不调用搜索、媒体或 quota 子命令",
+        "输出先完整呈现 MMX 原文，再给宿主模型的简短综合判断",
+        "非 ok 状态不会被表述为 MMX 的有效意见"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "/mmx review skills/mmx/SKILL.md",
+      "expected_output": "把 SKILL.md 当作指令文档而非可执行代码，检查矛盾、歧义、遗漏约束和可执行性。",
+      "files": [
+        "SKILL.md"
+      ],
+      "expectations": [
+        "Review prompt 明确按 documentation/specification 类型审查",
+        "不会因为目标不是代码而拒绝审查",
+        "findings 使用统一 JSON 协议并区分已确认缺陷、证据不足和建议",
+        "合法的无发现结果使用空 findings 数组"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "/mmx challenge 这个方案只要模型回答里出现字符串 [P1] 就判定失败，否则判定通过。",
+      "expected_output": "指出否定句或引用标签导致的误判，并使用结构化 findings 计算 Gate。",
+      "files": [],
+      "expectations": [
+        "识别字符串包含判断会误判 No [P1] findings 一类文本",
+        "Gate 从结构化发现的种类和严重性计算",
+        "格式缺失或冲突时返回 NOT_EVALUATED 而不是伪 PASS"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "用 MiniMax 给我生成三张小红书封面图，再查一下本周 AI 新闻。",
+      "expected_output": "分别将图片生成与新闻搜索交给对应工具。",
+      "files": [],
+      "expectations": [
+        "不调用 mmx text wrapper",
+        "明确图片生成和 web search 不在此 skill 范围",
+        "不把媒体或搜索请求伪装成文本第二意见"
+      ]
+    }
+  ]
+}

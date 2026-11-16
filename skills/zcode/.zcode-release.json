@@ -1,0 +1,16 @@
+{
+  "format": 1,
+  "version": "1.1.1",
+  "files": {
+    "SKILL.md": "e7c2062c817f633758b40bf4fc345fb992c46eb550fe95fa226ee521e23ae627",
+    "agents/openai.yaml": "e9b77f7b33258700dfae902efc91a4058f7fc76f6d5f675641eb201fb9fd2052",
+    "references/review-v1.schema.json": "f269a080098ecb4ab34ed8fd5aa4e76206ba662a6358be7fbd5451e9392bc546",
+    "references/verification.md": "f400e969497b0a0b2ba70d9eccf12e349e8210b3a72be82ee6d72b3ba0db749a",
+    "scripts/review.js": "0ea0bc9f01b8969876a159d9d419719b333ba2b6f28e865b2b2919e60ecaa1ff",
+    "scripts/zcode-chat.js": "db4df125354546b4d0dd949cbd901d07aba502073c518b8d67c67a49395fcf7c",
+    "scripts/zcode-run.js": "23bdc345377e31ccec85a50469edf86c02a4ceced79f01e24edea9d1f94980fe",
+    "tests/fixtures/fake-zcode.cjs": "94dfc287c2383f17650592c23075c3b89954ccfe17831169767afcee9d460150",
+    "tests/zcode-chat.test.js": "6a4f97312aa52e5bda73e3626dc55504ee3cefe949a1bf5162fb241e61ab96a7"
+  },
+  "review_sha256": "60aaaf769b57f917e41f1beced5f94f7cde1fcd41668d791004181a69ab2248b"
+}

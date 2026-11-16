@@ -1,0 +1,26 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "summary", "findings"],
+  "properties": {
+    "version": {"type": "integer", "description": "Protocol version. Return the integer 1."},
+    "summary": {"type": "string", "minLength": 1},
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "severity", "title", "evidence_refs", "condition", "impact", "recommendation"],
+        "properties": {
+          "kind": {"type": "string", "enum": ["confirmed_defect", "evidence_gap", "advisory"]},
+          "severity": {"type": "string", "enum": ["P1", "P2"]},
+          "title": {"type": "string", "minLength": 1},
+          "evidence_refs": {"type": "array", "items": {"type": "string", "minLength": 1}},
+          "condition": {"type": "string", "minLength": 1},
+          "impact": {"type": "string", "minLength": 1},
+          "recommendation": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

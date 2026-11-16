@@ -1,0 +1,4 @@
+interface:
+  display_name: "ZCode"
+  short_description: "ZCode CLI text chat, review and challenge"
+  default_prompt: "Use $zcode to independently review the authorized material."

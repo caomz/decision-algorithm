@@ -1,0 +1,7 @@
+{
+  "format": 1,
+  "model": null,
+  "max_tokens": 524288,
+  "request_timeout_seconds": 21600,
+  "wrapper_timeout_seconds": 21630
+}
