@@ -8,8 +8,13 @@ const { createHash } = require("node:crypto");
 const { spawn, spawnSync } = require("node:child_process");
 const { buildPrompt, validateReview, validateIds, strictJson } = require("./review.js");
 
-const VERSION = "1.1.1";
+const VERSION = "1.2.0";
 const SUPPORTED_CLI = "0.17.1";
+// The CLI accepts build/edit/plan/yolo/guarded. This wrapper only ever uses the
+// two read-only modes: macOS keeps the plan mode it was accepted with, Windows
+// keeps the guarded mode it was adapted to. ZCODE_CLI_MODE overrides both.
+const CLI_MODES = Object.freeze(["plan", "guarded"]);
+const DEFAULT_MODE = Object.freeze({ win32: "guarded" });
 const MAX_BYTES = 64 * 1024 * 1024;
 const DENIED_TOOLS = Object.freeze([
   "Read", "Write", "Edit", "ApplyPatch", "Bash", "Glob", "Grep", "WebFetch", "WebSearch", "js",
@@ -40,7 +45,14 @@ function readUtf8(file) {
   if (!bytes.length || bytes.includes(0)) fail("input_error");
   return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 }
-function hashFile(file) { return createHash("sha256").update(fs.readFileSync(file)).digest("hex"); }
+// Hash the file with CRLF normalized to LF. Repositories checked out on Windows
+// carry CRLF line endings while the same file checked out on macOS carries LF;
+// hashing raw bytes would make one platform's release manifest fail the other
+// platform's install check. Normalizing keeps a single manifest valid on both.
+function hashFile(file) {
+  const content = fs.readFileSync(file).toString("utf8").replace(/\r\n/g, "\n");
+  return createHash("sha256").update(content, "utf8").digest("hex");
+}
 
 function checkInstall() {
   const root = fs.realpathSync(path.join(__dirname, ".."));
@@ -65,15 +77,27 @@ function findCli(explicit, env = process.env) {
     if (!directory) continue;
     for (const name of process.platform === "win32" ? ["zcode.exe", "zcode.cmd", "zcode"] : ["zcode"]) {
       const file = path.resolve(directory, name);
-      try { fs.accessSync(file, fs.constants.X_OK); return fs.realpathSync(file); } catch {}
+      try {
+        // A directory on PATH is not a launcher. On Windows an application
+        // install directory can share the CLI's name, and accessSync would
+        // accept it because a directory is also "executable".
+        if (!fs.statSync(file).isFile()) continue;
+        fs.accessSync(file, fs.constants.X_OK);
+        return fs.realpathSync(file);
+      } catch {}
     }
   }
   fail("cli_missing");
 }
 
 function resolveLaunch(cli, originalHome = os.homedir()) {
-  if (/\.(cmd|bat)$/i.test(cli)) fail("unsupported_launcher");
   if (/\.(cjs|mjs|js)$/i.test(cli)) return { command: process.execPath, prefix: [cli], entry: cli };
+  // Windows npm shim (.cmd/.bat): read the batch text and resolve the JS
+  // entry it launches. The batch file itself is never handed to a shell.
+  if (/\.(cmd|bat)$/i.test(cli)) {
+    const entry = resolveWindowsShim(cli);
+    return { command: process.execPath, prefix: [entry], entry };
+  }
   const fd = fs.openSync(cli, "r");
   const header = Buffer.alloc(4096);
   const length = fs.readSync(fd, header, 0, header.length, 0);
@@ -83,9 +107,39 @@ function resolveLaunch(cli, originalHome = os.homedir()) {
   if (/^#![^\n]*\bnode(?:\s|$)/.test(text)) return { command: process.execPath, prefix: [cli], entry: cli };
   // 本机 mise launcher 依赖 HOME；在隔离 HOME 前解析实际 bundle，不执行任意 shell。
   const match = text.match(/^#!\/bin\/sh\r?\nexec mise exec node@[0-9.]+ -- node "\$HOME\/([^"\r\n]+\/zcode\.cjs)" "\$@"\s*$/);
-  if (!match || length === header.length) fail("unsupported_launcher");
-  const entry = fs.realpathSync(path.resolve(originalHome, match[1]));
-  return { command: process.execPath, prefix: [entry], entry };
+  if (match && length !== header.length) {
+    const entry = fs.realpathSync(path.resolve(originalHome, match[1]));
+    return { command: process.execPath, prefix: [entry], entry };
+  }
+  // POSIX-style npm shim: a shell script that ends up running a JS file.
+  const shim = text.match(/node_modules[\\/]([^"\r\n]+?)[\\/]bin[\\/]([^"\r\n]+?\.js)/);
+  if (shim) {
+    const entry = resolveShimEntry(path.dirname(cli), shim[1], shim[2]);
+    return { command: process.execPath, prefix: [entry], entry };
+  }
+  fail("unsupported_launcher");
+}
+
+// Resolve the JS entry a Windows npm shim launches. Only the documented npm
+// shim shape is accepted; anything else stays unsupported rather than being
+// handed to a shell.
+function resolveWindowsShim(cli) {
+  let text;
+  try { text = fs.readFileSync(cli, "utf8"); }
+  catch { fail("unsupported_launcher"); }
+  const match = text.match(/node_modules[\\/]([^"\r\n]+?)[\\/]bin[\\/]([^"\r\n]+?\.js)/);
+  if (!match) fail("unsupported_launcher");
+  return resolveShimEntry(path.dirname(cli), match[1], match[2]);
+}
+
+// An npm global install keeps the shim and node_modules side by side, so the
+// package root is the shim's own directory.
+function resolveShimEntry(directory, packageName, scriptName) {
+  let entry;
+  try { entry = fs.realpathSync(path.resolve(directory, "node_modules", packageName, "bin", scriptName)); }
+  catch { fail("unsupported_launcher"); }
+  if (!fs.statSync(entry).isFile()) fail("unsupported_launcher");
+  return entry;
 }
 
 function isolatedEnv(home, env = process.env) {
@@ -183,14 +237,33 @@ class EventParser {
 async function terminateTree(child) {
   if (!child.pid) return true;
   if (process.platform === "win32") {
-    const result = spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { shell: false, stdio: "ignore" });
-    return result.status === 0 ? true : null;
+    // A process that already exited cannot be killed and taskkill reports it as
+    // not found. Probe first so a normally finished request is recorded as
+    // confirmed cleanup rather than an unresolved cleanup gap.
+    try { process.kill(child.pid, 0); } catch (error) { if (error.code === "ESRCH") return true; }
+    const result = spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { encoding: "utf8", shell: false, stdio: ["ignore", "pipe", "pipe"] });
+    if (result.status === 0) return true;
+    const output = `${result.stdout || ""}${result.stderr || ""}`;
+    if (/could not be found|not found/i.test(output)) return true;
+    return null;
   }
   try { process.kill(-child.pid, "SIGTERM"); } catch (error) { return error.code === "ESRCH"; }
   await new Promise(resolve => setTimeout(resolve, 200));
   try { process.kill(-child.pid, "SIGKILL"); } catch (error) { if (error.code !== "ESRCH") return false; }
   await new Promise(resolve => setTimeout(resolve, 50));
   try { process.kill(-child.pid, 0); return false; } catch (error) { return error.code === "ESRCH"; }
+}
+
+// Resolve the CLI permission mode. ZCODE_CLI_MODE wins when set and must name
+// a mode the CLI supports; otherwise the platform default applies, so the same
+// wrapper keeps the mode each platform was accepted with.
+function resolveMode(env = process.env, platform = process.platform) {
+  const override = env.ZCODE_CLI_MODE;
+  if (override !== undefined && override !== "") {
+    if (!CLI_MODES.includes(override)) fail("usage_error");
+    return override;
+  }
+  return DEFAULT_MODE[platform] || "plan";
 }
 
 function parseArgs(argv) {
@@ -222,6 +295,7 @@ async function main(argv, deps = {}) {
     const prompt = buildPrompt(material, args.mode, ids);
     const cli = findCli(args.cli);
     const launch = resolveLaunch(cli);
+    const mode = (deps.resolveMode || resolveMode)();
     const version = spawnSync(launch.command, [...launch.prefix, "--version"], { encoding: "utf8", timeout: 10000, maxBuffer: 4096, shell: false });
     receipt.cli_version = version.stdout?.trim().replace(/^zcode\s+/, "") || null;
     // zcode-app-cli 3.x prints two lines ("zcode-app-cli <n>\nzcode-runtime <n>");
@@ -249,13 +323,13 @@ async function main(argv, deps = {}) {
     privateWrite(path.join(home, ".zcode/cli/config.json"), JSON.stringify(RUNTIME_CONFIG));
     receipt.auth_environment = (deps.setupMacKeychain || setupMacKeychain)(home);
     privateWrite(path.join(directory, "prompt.txt"), prompt);
-    privateWrite(path.join(directory, "launch.json"), JSON.stringify({ wrapper_version: VERSION, cli_version: receipt.cli_version, launcher: cli, entry: launch.entry, entry_sha256: hashFile(launch.entry), runtime: launch.command, mode: "guarded", denied_tools: DENIED_TOOLS, timeout_seconds: args.timeout, shared_auth_data: true }, null, 2));
+    privateWrite(path.join(directory, "launch.json"), JSON.stringify({ wrapper_version: VERSION, cli_version: receipt.cli_version, launcher: cli, entry: launch.entry, entry_sha256: hashFile(launch.entry), runtime: launch.command, mode, denied_tools: DENIED_TOOLS, timeout_seconds: args.timeout, shared_auth_data: true }, null, 2));
     const stdoutFd = fs.openSync(path.join(directory, "stdout.ndjson"), "wx", 0o600);
     const stderrFd = fs.openSync(path.join(directory, "stderr.log"), "wx", 0o600);
     const parser = new EventParser();
     const decoder = new TextDecoder("utf-8", { fatal: true });
     let pending = "", bytes = 0, problem = null, termination;
-    const cliArgs = [...launch.prefix, "--prompt", prompt, "--cwd", work, "--mode", "guarded", "--output-format", "stream-json", "--workflow-mode", "disabled", "--toolsearch-mode", "off", "--disallowed-tools", DENIED_TOOLS.join(","), "--no-color"];
+    const cliArgs = [...launch.prefix, "--prompt", prompt, "--cwd", work, "--mode", mode, "--output-format", "stream-json", "--workflow-mode", "disabled", "--toolsearch-mode", "off", "--disallowed-tools", DENIED_TOOLS.join(","), "--no-color"];
     child = spawn(launch.command, cliArgs, { cwd: work, env: isolatedEnv(home), shell: false, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
     receipt.cli_invoked = Boolean(child.pid);
     progress("running");
@@ -331,4 +405,4 @@ if (require.main === module) main(process.argv.slice(2)).then(result => {
   process.exitCode = ["ok", "usage", "version"].includes(result.status) ? 0 : 1;
 }).catch(() => { process.stdout.write('{"status":"internal_error","complete":false}\n'); process.exitCode = 1; });
 
-module.exports = { EventParser, resolveLaunch, isolatedEnv, setupMacKeychain, DENIED_TOOLS, RUNTIME_CONFIG, checkInstall, parseArgs, main };
+module.exports = { EventParser, resolveLaunch, isolatedEnv, setupMacKeychain, DENIED_TOOLS, RUNTIME_CONFIG, CLI_MODES, checkInstall, parseArgs, resolveMode, main };

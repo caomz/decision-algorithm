@@ -1,6 +1,7 @@
 ---
 name: zcode
 description: Use the ZCode CLI for text-only chat, review, challenge, or an explicitly requested second opinion. Applies to "/zcode", "用 ZCode 问一下", "通过 zcode cli 交叉验证" and review workflows that name ZCode.
+version: 1.2.0
 ---
 
 # /zcode — ZCode 文本复核
@@ -41,10 +42,10 @@ Review/Challenge 为材料分配稳定 ID（例如 `E1`、`E2`），在材料中
 
 每次请求在启动和首个模型请求时原子更新 `progress.json`，记录 wrapper/CLI PID、阶段及观察到的模型；只有最终有效回执才可作为完成依据。监督器另给 wrapper 预检与清理 45 秒余量，超出后终止本任务进程组并保留真实退出记录。
 
-- 固定 `plan`、关闭动态工作流和 ToolSearch，使用独立子进程用户目录、工作目录及运行配置；禁用扩展、Hook、记忆和工具。现有 provider/认证数据根用于 CLI 复用认证；macOS 额外链接当前默认 Keychain，保持系统访问控制，不复制凭据或修改系统默认设置，不宣称完整账号隔离。
+- 固定只读权限模式、关闭动态工作流和 ToolSearch，使用独立子进程用户目录、工作目录及运行配置；禁用扩展、Hook、记忆和工具。权限模式按平台取默认值：macOS/Linux 为 `plan`，Windows 为 `guarded`；`ZCODE_CLI_MODE` 可显式覆盖为 `plan` 或 `guarded`，其它值直接拒绝。实际使用的模式记入 `launch.json`。现有 provider/认证数据根用于 CLI 复用认证；macOS 额外链接当前默认 Keychain，保持系统访问控制，不复制凭据或修改系统默认设置，不宣称完整账号隔离。
 - `--prompt-file` 是 wrapper 接口。ZCode 原生只有 `--prompt`，正文最终进入 CLI 子进程参数；仅传获准的非敏感材料。包装器不用 shell，也不接受模型或 token 参数。
 - `status=ok` 要求实际模型请求事件、成功回合、唯一末尾 result、身份一致、零工具调用、完整结束及零 CLI 退出码。缺失模型或结束原因不能由配置推断。`usage` 缺失保持 `null`。
 - `review_gate=PASS|FAIL|NOT_EVALUATED` 独立于传输状态；有效返回可能发现 P1 缺陷而给出 `FAIL`。呈现外部发现、证据缺口、本地处置及原文链接。
 - 截断、未知终态、工具违规、超时、认证/额度错误或协议错误如实报告，原始流留在私有目录。失败不自动重试。stderr 不原样复制到公开错误提示。
 
-当前适配 ZCode `0.17.1`。真实验收结论以对应完整回执为准。其他版本先按参考文档重新验收，不降级权限继续调用。独立安装清单存在时调用前核对文件哈希。安装到新会话后，Codex 使用 `$zcode`，Claude 使用 `/zcode`。
+当前适配 ZCode `0.17.1`（本机 `zcode --version` 输出两行，取其中的 `zcode-runtime` 版本）。真实验收结论以对应完整回执为准。其他版本先按参考文档重新验收，不降级权限继续调用。独立安装清单存在时调用前核对文件哈希；清单按 LF 归一化内容计算，Mac 与 Windows 共用同一份。安装到新会话后，Codex 使用 `$zcode`，Claude 使用 `/zcode`。

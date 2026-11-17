@@ -6,7 +6,9 @@
 
 官方参考：[CLI 参数](https://github.com/zai-org/ZCode/blob/main/apps/zcode-cli/docs/usage/02-cli-reference.md)、[运行配置](https://github.com/zai-org/ZCode/blob/main/apps/zcode-cli/docs/usage/03-config.md)、[自动化](https://github.com/zai-org/ZCode/blob/main/apps/zcode-cli/docs/usage/13-automation.md)。升级后需复核解析器、事件契约、工具清单及禁用配置。版本相同不证明两个构建相同；每轮 `launch.json` 保存实际入口 SHA256。
 
-`--prompt` 默认使用 `yolo`，本 wrapper 固定改为 `plan`。项目配置会过滤 `features` 等设置，因此不能靠项目配置关闭个人插件。wrapper 为 CLI 子进程创建独立用户目录，在其中写入用户运行配置，关闭 MCP、插件、skills、记忆、Hook、compact、rewind 和子 Agent，并传入全部已知工具 denylist。运行事件中的 `model_request.toolCount`、`model_complete.toolCallCount` 和 `turn.completed.toolCallCount` 均须为零；发现暴露工具或工具/权限事件立即终止并记录违规。运行事件校验属于检测，不能替代启动时配置。
+`--prompt` 默认使用 `yolo`，本 wrapper 固定改为只读权限模式。模式按平台取默认值：macOS/Linux 为 `plan`（Mac 端既有验收结论），Windows 为 `guarded`（Windows 端既有适配）。`ZCODE_CLI_MODE` 可显式覆盖为 `plan` 或 `guarded`，其它值在请求前拒绝（`usage_error`）。实际使用的模式写入 `launch.json` 的 `mode` 字段，回溯以该文件为准。项目配置会过滤 `features` 等设置，因此不能靠项目配置关闭个人插件。wrapper 为 CLI 子进程创建独立用户目录，在其中写入用户运行配置，关闭 MCP、插件、skills、记忆、Hook、compact、rewind 和子 Agent，并传入全部已知工具 denylist。运行事件中的 `model_request.toolCount`、`model_complete.toolCallCount` 和 `turn.completed.toolCallCount` 均须为零；发现暴露工具或工具/权限事件立即终止并记录违规。运行事件校验属于检测，不能替代启动时配置。
+
+本机 `zcode --version` 输出两行：`zcode-app-cli 3.18.1-46` 与 `zcode-runtime 0.17.1`。受支持的契约是 runtime 版本，取第二行的 `zcode-runtime`；单行输出（如 `zcode 0.17.1`）按原样比较。
 
 子进程通过原 `ZCODE_DATA_BASE_DIR` 和 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` 引用既有 provider/认证数据，不读取其内容到报告。CLI 自身按既有机制认证；wrapper 不执行登录、登出或配置迁移命令。用户目录、session DB、存储和日志独立，provider 数据根共享。仅转发必要 PATH/系统、语言、证书和明确的 `ZCODE_HTTP_PROXY`、`ZCODE_NO_PROXY`、`ZCODE_AGENT_CA_CERT`；用户运行配置中的网络设置不会自动继承。
 
@@ -45,11 +47,11 @@ NDJSON 逐行解析并检查唯一末尾 result、匹配的会话/回合和成�
 
 ## Launcher 与平台
 
-- Node.js 18+ wrapper；CLI 自身的 Node 要求以安装版本为准。当前本机 Node 24。
-- 原生可执行文件、Node JS 入口和 Node shebang 可直接使用。默认从 PATH 查找 `zcode`，`--cli-path` 可指定绝对入口。
+- Node.js 18+ wrapper；CLI 自身的 Node 要求以安装版本为准。当前本机 Node 24（macOS）、22.20.0（Windows）。
+- 原生可执行文件、Node JS 入口和 Node shebang 可直接使用。默认从 PATH 查找 `zcode`，`--cli-path` 可指定绝对入口。PATH 扫描只接受普通文件：Windows 上与 CLI 同名的应用安装目录（`D:\Program Files (x86)\zcode`）会被跳过，因为目录同样能通过 `accessSync(X_OK)`。
 - 本机 `mise` shell launcher 中的 `$HOME/.../zcode.cjs` 在设置隔离用户目录之前解析，然后用当前 `process.execPath` 启动实际 bundle；原 launcher 不会在临时用户目录下运行。`launch.json` 记录实际 Node 路径。
-- 未识别的 shell launcher、Windows `.cmd/.bat` 返回 `unsupported_launcher`，不拼接 shell。Windows 用户可指定 JS bundle 或原生 `.exe`。
-- 本次只在 macOS arm64 执行离线和真实检查；Windows、Linux/WSL 未真机验收。POSIX 权限位不等于 Windows ACL；Windows 进程树终止结果保留实际状态。
+- npm shim 解析：Windows 的 `zcode.cmd` 与 POSIX 的无扩展名 `zcode` 都是 npm 生成的包装脚本。wrapper 从其文本中解析出 `node_modules/<pkg>/bin/<entry>.js`，用 `process.execPath` 启动真实入口，batch 文本从不交给 shell。非 npm 形态的 `.cmd/.bat` 与无法识别的 shell launcher 返回 `unsupported_launcher`。
+- 2026-11-17 已在 Windows x64 执行离线检查与真实调用（`zcode-app-cli 3.18.1-46` / `zcode-runtime 0.17.1`，`mode=guarded`）；Linux/WSL 未真机验收。POSIX 权限位不等于 Windows ACL；Windows 进程树终止结果保留实际状态，进程已自然退出时记为清理确认。
 
 ## 离线验收
 
@@ -59,6 +61,7 @@ NDJSON 逐行解析并检查唯一末尾 result、匹配的会话/回合和成�
 node --check scripts/zcode-chat.js
 node --check scripts/review.js
 node --check scripts/zcode-run.js
+node --check scripts/repin-release.js
 node --test tests/zcode-chat.test.js
 node scripts/zcode-chat.js --version
 ```
@@ -72,5 +75,7 @@ node scripts/zcode-chat.js --version
 ## 安装和恢复
 
 源码与安装副本分开。新安装到一个不存在的 skill 目录，Codex 入口指向共享副本；逐文件核对 SHA256，在 skill 内创建 `.zcode-release.json`（`format: 1`、`files: {relative_path: sha256}`），不写 AGY/MMX 的发布清单。清单只包括本 skill 的受管文件。存在清单时 wrapper 检查路径、符号链接和哈希；缺少清单允许源码开发调用，因此清单完整性依赖受保护的安装目录。
+
+清单哈希按 **LF 归一化**内容计算（`sha256(content.replace(/\r\n/g, "\n"))`）。仓库在 Windows 上以 CRLF 检出、在 macOS 上以 LF 检出，按原始字节计算会让一端生成的清单在另一端必然失配。归一化后同一份清单在两个平台双向有效。改动任何受管文件后清单按设计失效，用 `node scripts/repin-release.js` 重钉（`--dry-run` 只报告不写入）；**Mac 正本同步 wrapper 变更后同样必须重钉**，否则安装副本报 `install_mismatch`。
 
 安装前记录目标状态与源文件指纹；遇到目录冲突、并发变化或不一致时停止覆盖。运行文件与凭据不得加入安装包。更新先备份当前安装文件再审查逐文件差异；恢复只依据本轮快照处理对应补丁，不批量删除目录或覆盖后续改动。

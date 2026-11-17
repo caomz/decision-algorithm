@@ -5,14 +5,21 @@ const { spawn } = require("node:child_process");
 
 exports.run = scenario => {
   const args = process.argv.slice(2);
-  if (args.includes("--version")) { process.stdout.write(scenario === "version" ? "9.9.9\n" : "0.17.1\n"); return; }
+  if (args.includes("--version")) {
+    if (scenario === "version") { process.stdout.write("9.9.9\n"); return; }
+    // zcode-app-cli 3.x prints the runtime version on its own second line.
+    if (scenario === "runtime_version_bad") { process.stdout.write("zcode-app-cli 3.18.1-46\nzcode-runtime 9.9.9\n"); return; }
+    if (scenario === "runtime_version_ok") { process.stdout.write("zcode-app-cli 3.18.1-46\nzcode-runtime 0.17.1\n"); return; }
+    process.stdout.write("0.17.1\n");
+    return;
+  }
   const value = name => args[args.indexOf(name) + 1];
   const prompt = value("--prompt");
   const work = value("--cwd");
   const home = process.env.HOME;
   const config = JSON.parse(fs.readFileSync(path.join(home, ".zcode/cli/config.json"), "utf8"));
   const denied = value("--disallowed-tools").split(",");
-  const isolated = value("--mode") === "plan" && value("--workflow-mode") === "disabled" &&
+  const isolated = ["plan", "guarded"].includes(value("--mode")) && value("--workflow-mode") === "disabled" &&
     value("--toolsearch-mode") === "off" && value("--output-format") === "stream-json" &&
     work !== home && path.dirname(work) === path.dirname(home) && process.cwd() === work &&
     !process.env.ZCODE_MODEL && !process.env.FAKE_UNTRUSTED && !process.env.NODE_OPTIONS &&

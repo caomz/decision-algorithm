@@ -6,7 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { createHash } = require("node:crypto");
-const { resolveLaunch, isolatedEnv, setupMacKeychain, DENIED_TOOLS } = require("../scripts/zcode-chat.js");
+const { resolveLaunch, isolatedEnv, setupMacKeychain, resolveMode, DENIED_TOOLS } = require("../scripts/zcode-chat.js");
 const { validateReview, strictJson } = require("../scripts/review.js");
 
 const wrapper = path.resolve(__dirname, "../scripts/zcode-chat.js");
@@ -65,7 +65,8 @@ for (const [scenario, status] of Object.entries({
   missing_result: "schema_mismatch", duplicate_turn: "schema_mismatch", duplicate_result: "schema_mismatch",
   mismatch: "schema_mismatch", trailing: "schema_mismatch", badjson: "schema_mismatch", invalid_utf8: "schema_mismatch",
   cancelled: "schema_mismatch", tool: "policy_violation", exposed_tools: "policy_violation", permission: "policy_violation",
-  nonzero: "cli_error", stderr: "cli_error", auth: "auth_error", quota: "quota_error", version: "unsupported_cli", truncated: "incomplete",
+  nonzero: "cli_error", stderr: "cli_error", auth: "auth_error", quota: "quota_error", version: "unsupported_cli",
+  runtime_version_bad: "unsupported_cli", truncated: "incomplete",
 })) test(`rejects ${scenario}`, () => {
   const { result, receipt } = run(scenario);
   assert.equal(result.status, 1);
@@ -82,6 +83,25 @@ test("split UTF-8 and large replies are retained without silent truncation", () 
   assert.equal(receipt.truncated, false);
 });
 test("missing usage stays null", () => assert.equal(run("missing_usage").receipt.usage, null));
+test("the two-line runtime version is accepted on the second line", () => {
+  const { receipt } = run("runtime_version_ok");
+  assert.equal(receipt.status, "ok");
+  assert.equal(receipt.cli_version, "0.17.1");
+});
+test("a runtime version other than the supported one is rejected", () => {
+  const { receipt } = run("runtime_version_bad");
+  assert.equal(receipt.status, "unsupported_cli");
+  assert.equal(receipt.cli_invoked, false);
+});
+test("the permission mode is platform-specific, overridable and recorded", () => {
+  assert.equal(resolveMode({}, "win32"), "guarded");
+  assert.equal(resolveMode({}, "darwin"), "plan");
+  assert.equal(resolveMode({}, "linux"), "plan");
+  assert.equal(resolveMode({ ZCODE_CLI_MODE: "plan" }, "win32"), "plan");
+  assert.equal(resolveMode({ ZCODE_CLI_MODE: "guarded" }, "darwin"), "guarded");
+  assert.throws(() => resolveMode({ ZCODE_CLI_MODE: "yolo" }, "win32"), { status: "usage_error" });
+  assert.throws(() => resolveMode({ ZCODE_CLI_MODE: "build" }, "darwin"), { status: "usage_error" });
+});
 test("native network status frames sharing model IDs are not misclassified as ModelRequest", () => {
   const { receipt } = run("network_events");
   assert.equal(receipt.status, "ok");
@@ -119,7 +139,9 @@ test("installed manifest mismatch blocks model invocation", () => {
     fs.mkdirSync(path.dirname(target), { recursive: true });
     const data = fs.readFileSync(path.resolve(__dirname, "..", name));
     fs.writeFileSync(target, data);
-    files[name] = createHash("sha256").update(data).digest("hex");
+    // The manifest hashes LF-normalized content, so the same manifest verifies
+    // a CRLF checkout and an LF checkout of the same file.
+    files[name] = createHash("sha256").update(data.toString("utf8").replace(/\r\n/g, "\n"), "utf8").digest("hex");
   }
   fs.writeFileSync(path.join(directory, ".zcode-release.json"), JSON.stringify({ format: 1, files }));
   const baseline = spawnSync(process.execPath, ["-e", `require(${JSON.stringify(path.join(directory, "scripts/zcode-chat.js"))}).checkInstall();`], { encoding: "utf8" });
@@ -130,6 +152,39 @@ test("installed manifest mismatch blocks model invocation", () => {
   assert.equal(result.status, 1);
   assert.equal(receipt.status, "install_mismatch");
   assert.equal(receipt.cli_invoked, false);
+});
+test("one manifest verifies both a CRLF and an LF copy of the same file", () => {
+  const source = fs.readFileSync(path.resolve(__dirname, "..", "SKILL.md"));
+  const lf = source.toString("utf8").replace(/\r\n/g, "\n");
+  const crlf = lf.replace(/\n/g, "\r\n");
+  assert.notEqual(lf, crlf, "the fixture must exercise a real line-ending difference");
+  const directory = path.join(root, "eol-fixture");
+  fs.mkdirSync(path.join(directory, "scripts"), { recursive: true });
+  fs.mkdirSync(path.join(directory, "references"), { recursive: true });
+  // Copy the real wrapper so checkInstall runs its actual verification path.
+  const wrapperSource = fs.readFileSync(path.resolve(__dirname, "..", "scripts/zcode-chat.js"));
+  const reviewSource = fs.readFileSync(path.resolve(__dirname, "..", "scripts/review.js"));
+  const schemaSource = fs.readFileSync(path.resolve(__dirname, "..", "references/review-v1.schema.json"));
+  fs.writeFileSync(path.join(directory, "scripts/zcode-chat.js"), wrapperSource);
+  fs.writeFileSync(path.join(directory, "scripts/review.js"), reviewSource);
+  fs.writeFileSync(path.join(directory, "scripts/zcode-run.js"), "module.exports = {};\n");
+  fs.writeFileSync(path.join(directory, "references/review-v1.schema.json"), schemaSource);
+  const digest = data => createHash("sha256").update(data.toString("utf8").replace(/\r\n/g, "\n"), "utf8").digest("hex");
+  fs.writeFileSync(path.join(directory, ".zcode-release.json"), JSON.stringify({
+    format: 1,
+    files: {
+      "SKILL.md": digest(Buffer.from(lf, "utf8")),
+      "scripts/zcode-chat.js": digest(wrapperSource),
+      "scripts/zcode-run.js": digest(Buffer.from("module.exports = {};\n", "utf8")),
+      "scripts/review.js": digest(reviewSource),
+      "references/review-v1.schema.json": digest(schemaSource),
+    },
+  }));
+  const check = () => spawnSync(process.execPath, ["-e", `require(${JSON.stringify(path.join(directory, "scripts/zcode-chat.js"))}).checkInstall();`], { encoding: "utf8" });
+  fs.writeFileSync(path.join(directory, "SKILL.md"), Buffer.from(crlf, "utf8"));
+  assert.equal(check().status, 0, "a CRLF checkout must pass the manifest");
+  fs.writeFileSync(path.join(directory, "SKILL.md"), Buffer.from(lf, "utf8"));
+  assert.equal(check().status, 0, "an LF checkout must pass the same manifest");
 });
 test("timeout terminates the child process group", () => {
   const { receipt } = run("hang", { timeout: 0.2 });
@@ -177,7 +232,24 @@ test("launcher resolution preserves isolation and refuses arbitrary shell wrappe
   assert.equal(resolveLaunch(cli, root).entry, bundle);
   fs.writeFileSync(cli, "#!/bin/sh\necho dangerous\n");
   assert.throws(() => resolveLaunch(cli, root), { status: "unsupported_launcher" });
+  // A batch file that is not the documented npm shim stays unsupported; the
+  // batch text is never handed to a shell.
   assert.throws(() => resolveLaunch("example.cmd"), { status: "unsupported_launcher" });
+});
+test("npm shims resolve to their JavaScript entry instead of running a shell", () => {
+  const directory = path.join(root, "npm-global");
+  const script = path.join(directory, "node_modules/zcode-app-cli/bin/zcode.js");
+  fs.mkdirSync(path.dirname(script), { recursive: true });
+  fs.writeFileSync(script, "");
+  const windows = path.join(directory, "zcode.cmd");
+  fs.writeFileSync(windows, '@ECHO off\r\nSETLOCAL\r\n"%_prog%" "%dp0%\\node_modules\\zcode-app-cli\\bin\\zcode.js" %*\r\n');
+  const resolved = resolveLaunch(windows);
+  assert.equal(resolved.command, process.execPath);
+  assert.equal(resolved.entry, fs.realpathSync(script));
+  assert.deepEqual(resolved.prefix, [resolved.entry]);
+  const posix = path.join(directory, "zcode");
+  fs.writeFileSync(posix, '#!/bin/sh\nbasedir=$(dirname "$0")\nexec node "$basedir/node_modules/zcode-app-cli/bin/zcode.js" "$@"\n');
+  assert.equal(resolveLaunch(posix).entry, fs.realpathSync(script));
 });
 test("environment shares only auth roots and explicit supported transport settings", () => {
   const env = isolatedEnv("/scratch/home", { PATH: "/bin", NODE_OPTIONS: "bad", ZCODE_STORAGE_DIR: "/original", ZCODE_HTTP_PROXY: "http://proxy.example", ZCODE_DATA_BASE_DIR: "/auth" });
@@ -188,7 +260,16 @@ test("environment shares only auth roots and explicit supported transport settin
   assert.notEqual(env.ZCODE_STORAGE_DIR, "/original");
   assert.ok(DENIED_TOOLS.includes("escalate"));
 });
-test("macOS auth bridge links the existing default keychain without copying or changing it", () => {
+test("the auth bridge stays inert off macOS and reports a lookup failure", () => {
+  const home = path.join(root, "mac-home-inert");
+  assert.equal(setupMacKeychain(home, "linux", () => { throw new Error("must not run"); }), null);
+  assert.equal(setupMacKeychain(home, "win32", () => { throw new Error("must not run"); }), null);
+  assert.throws(() => setupMacKeychain(home, "darwin", () => ({ status: 1 })), { status: "auth_environment_error" });
+});
+// The macOS branch links a file, which needs POSIX symlink semantics. On
+// Windows the same call needs elevated rights, so the link itself is asserted
+// where it can be created.
+test("macOS auth bridge links the existing default keychain without copying or changing it", { skip: process.platform === "win32" }, () => {
   const home = path.join(root, "mac-home");
   const store = path.join(root, "synthetic.keychain-db");
   fs.writeFileSync(store, "synthetic-store");
@@ -203,8 +284,6 @@ test("macOS auth bridge links the existing default keychain without copying or c
   assert.ok(fs.lstatSync(link).isSymbolicLink());
   assert.equal(fs.realpathSync(link), store);
   assert.equal(fs.readFileSync(store, "utf8"), "synthetic-store");
-  assert.equal(setupMacKeychain(home, "linux", () => { throw new Error("must not run"); }), null);
-  assert.throws(() => setupMacKeychain(home, "darwin", () => ({ status: 1 })), { status: "auth_environment_error" });
 });
 test("empty invocation and version do not invoke a CLI", () => {
   for (const args of [[], ["--version"]]) {
