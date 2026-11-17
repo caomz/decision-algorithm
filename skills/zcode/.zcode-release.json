@@ -2,7 +2,7 @@
   "format": 1,
   "version": "1.2.0",
   "files": {
-    "README.md": "71af9b7b6e41c70831cc7de1356d23c16e3a44b9d9a828bb6043691ebba2cbd6",
+    "README.md": "e7565cdbc4ec116296e52dc56f415b6f93ed51dd61da6c8139342ccbb5b86d59",
     "SKILL.md": "cbcdad16ff314122758523244c34b854aa7cd41c8cbb8fb7b9b62e11ba0fe9d0",
     "agents/openai.yaml": "e9b77f7b33258700dfae902efc91a4058f7fc76f6d5f675641eb201fb9fd2052",
     "references/review-v1.schema.json": "f269a080098ecb4ab34ed8fd5aa4e76206ba662a6358be7fbd5451e9392bc546",

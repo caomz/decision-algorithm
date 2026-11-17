@@ -13,6 +13,15 @@ ZCode CLI 的文本复核封装：单轮 chat、review、challenge。当前版�
 
 合并后两个平台共用**同一份代码和同一份 `.zcode-release.json`**。
 
+## 两台机器的安装形态
+
+| 平台 | 安装位 | 更新方式 |
+|---|---|---|
+| Windows | 各 harness 的 `skills/zcode/` 都是指向本仓库的 junction（`~/.zcode`、`~/.agents`、`~/.claude`、`~/.codex`、`~/.minimax`、`~/.openclaw` 等） | 改本目录即两端生效，无需重钉清单 |
+| macOS | `~/.claude/skills/zcode/` 等安装位 | 同步本目录后用 `node scripts/repin-release.js` 重钉清单 |
+
+两端的清单内容相同（哈希按 LF 归一化计算），差别只在更新动作：Windows 的 junction 自动跟随仓库，macOS 需要显式同步并重钉。
+
 ## 两处必须统一的差异
 
 ### 1. 权限模式
