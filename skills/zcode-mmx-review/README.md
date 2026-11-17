@@ -30,11 +30,11 @@
 
 | 内容 | 正本路径 |
 |---|---|
-| `zcode` skill | `/Volumes/WorkSSD/.claude/skills/zcode/` |
-| `mmx` skill | `/Volumes/WorkSSD/.claude/skills/mmx/` |
-| 本规则文档 | `/Users/mingtian/.agents/harness/docs/` |
+| `zcode` skill | 各 harness 的 `skills/zcode/`（macOS：`~/.claude/skills/zcode/`；Windows：`~/.zcode/skills/zcode/` 等） |
+| `mmx` skill | 各 harness 的 `skills/mmx/`（同上布局） |
+| 本规则文档 | macOS：`/Users/mingtian/.agents/harness/docs/` |
 
-规则文档里的绝对路径链接指向这些**正本**（调用时读的是正本，不是本副本）。要更新本副本，从正本重新同步：
+两台机器上 `zcode` 与 `mmx` 都以 junction/符号链接指向本仓库的 `skills/<name>`，仓库内容即唯一基准，改仓库即两端生效。规则文档里的绝对路径链接指向上述**正本**（调用时读的是正本，不是本副本）。要更新本副本，从正本重新同步：
 
 ```bash
 cp /Users/mingtian/.agents/harness/docs/zcode-mmx-review.md \
@@ -44,10 +44,12 @@ cp /Users/mingtian/.agents/harness/docs/zcode-mmx-review.md \
 
 ## 校验
 
-`zcode` skill 自带发布清单 `.zcode-release.json`，按 skill 要求「调用前核对文件哈希」：
+`zcode` skill 自带发布清单 `.zcode-release.json`，按 skill 要求「调用前核对文件哈希」。
+
+**哈希按 LF 归一化内容计算**：仓库在 Windows 以 CRLF 检出、macOS 以 LF 检出，按原始字节计算会让一端生成的清单在另一端必然失配。下面的脚本两平台通用（Windows 用 `py -3` 代替 `python3`）：
 
 ```bash
-cd /Volumes/WorkSSD/Dev/decision-algorithm/skills/zcode
+cd <repo>/skills/zcode
 python3 - <<'PY'
 import json, hashlib
 from pathlib import Path
@@ -55,7 +57,14 @@ root = Path(".")
 man = json.loads((root / ".zcode-release.json").read_text())
 bad = [r for r, e in man["files"].items()
        if not (root / r).is_file()
-       or hashlib.sha256((root / r).read_bytes()).hexdigest() != e]
+       or hashlib.sha256((root / r).read_bytes().replace(b"\r\n", b"\n")).hexdigest() != e]
 print("清单校验：", "全部通过" if not bad else f"不符 {bad}")
 PY
+```
+
+或直接用 skill 自带工具重钉 / 校验：
+
+```bash
+node scripts/repin-release.js --dry-run   # 只报告
+node scripts/repin-release.js             # 重写清单
 ```

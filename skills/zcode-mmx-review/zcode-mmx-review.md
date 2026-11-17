@@ -26,7 +26,7 @@
 
 ## 一轮如何执行
 
-1. 核对本地验证结果、材料相关性、已安装清单和 CLI；读取 [ZCode skill](</Volumes/WorkSSD/.claude/skills/zcode/SKILL.md>)、[MMX skill](</Volumes/WorkSSD/.claude/skills/mmx/SKILL.md>) 及[供应方规则](provider-agent-review.md)。skill 要求核对授权时，直接引用本持续授权。两个文本入口由任务负责者分别调度；旧 `cross-validation` 协调器固定为 AGY/MMX，不用于这个默认组合。
+1. 核对本地验证结果、材料相关性、已安装清单和 CLI；读取 [ZCode skill](../zcode/SKILL.md)、[MMX skill](../mmx/SKILL.md) 及[供应方规则](provider-agent-review.md)。两台机器上的安装位都是指向本仓库的链接，读仓库副本与读安装正本内容一致。skill 要求核对授权时，直接引用本持续授权。两个文本入口由任务负责者分别调度；旧 `cross-validation` 协调器固定为 AGY/MMX，不用于这个默认组合。
 2. 为同一任务修订创建一轮私有记录，包含材料指纹、授权来源、双方输入、请求句柄、原始回执和处置。摘要事实包可采用 `constraints`、`facts[{id,text}]`、`assumptions`、`uncovered` 并控制在 32 KiB 内；原文超过摘要校验器边界时，使用各 skill 的文件输入和证据 ID，不为沿用摘要校验器而遗漏必要证据。真实路径和原始日志仅在复核需要时发送，先脱敏。
 3. ZCode 使用 `zcode-run.js start` 的持久 job，Review 模式配证据 ID；MMX 使用 `mmx-chat.js --prompt-file` 的同步文本入口，由持续会话或持久后台监督保存 stdout/stderr 和退出码。两方可独立并发，首轮不互传结论。
 4. 默认每方请求时限 600 秒；ZCode 监督器沿用其清理余量，MMX 可用 `MMX_CHAT_REQ_TIMEOUT=600`、`MMX_CHAT_WRAP_TIMEOUT=630`，其余参数沿用 skill。默认时限、token 和轮次是执行基线，不是重新请示的授权上限；因材料量、超时或必要补验可在 CLI 支持范围内自行调整单次参数，记录原因，不改全局登录或凭据。

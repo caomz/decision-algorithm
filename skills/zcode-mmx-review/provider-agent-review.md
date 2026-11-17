@@ -7,7 +7,7 @@
 | 默认 ZCode/MMX 双模型复核 | 任务负责者分别调用已安装的两方文本 skill，使用相同必要材料并脱敏 | 两份完整原始回执、实际模型独立性、材料覆盖、各自判定与本地处置；详见[默认合同](zcode-mmx-review.md) |
 | AGY 审核 | AGY 主审核 Agent 派发原生子 Agent | 实际子会话 ID、终态、结构化回传和工具边界记录 |
 | MMX 审核 | 已安装的 MMX skill 和 `mmx-chat.js` 单轮文本入口 | 实际模型、完整回复、结束原因和结构化判定 |
-| ZCode 文本交叉验证 | 已安装的 [zcode skill](</Volumes/WorkSSD/.claude/skills/zcode/SKILL.md>) 和 `zcode-run.js` 持久后台入口 | 实际模型、完整回执、退出码/信号、零工具边界、review-v1 发现与本地处置 |
+| ZCode 文本交叉验证 | 已安装的 [zcode skill](../zcode/SKILL.md) 和 `zcode-run.js` 持久后台入口 | 实际模型、完整回执、退出码/信号、零工具边界、review-v1 发现与本地处置 |
 | 项目双模型摘要复核 | 项目指定协调器及其摘要合同 | 两方各自回执、模型身份、材料覆盖和项目门禁 |
 
 本持续授权同时满足下文旧协议所述的“本轮授权”“须另行获准”等交叉验证许可前置，不再为这些相同动作请示；所选入口的实际权限、参数、完整回执与验收要求仍须满足。
@@ -25,7 +25,8 @@
 | AGY 原生双子（协议 2，CLI 1.5.2 重验） | 2026-11-06（Asia/Taipei），AGY CLI 自动更新至 1.5.2 后重跑合成双子审核。流程沿用 Plan mode runner 的预检、观察和核验，仅把预期的 `agy.real` 哈希和 CLI 版本换成新值。新二进制的 Google LLC Developer ID 签名有效，Team ID 为 `EQHXZ8M8AV`。证据和风险角色各以 `DONE` 结束并成功回传一次，状态为 `EVIDENCE_VALIDATED`，CLI 与观察器退出码均为 0。launcher、`project_review.py` 等源文件、三个角色、两份 `~/.gemini` 配置及隔离 settings 的指纹均与 1.5.1 回执一致。2026-11-07 起 Plan mode runner 改为固定此组回执；自动审核还需 Codex hook 同步 runner 指纹，并在桌面设置中重新信任。本次由 Claude 会话发起，未经过桌面 Plan mode hook | [运行回执](</Volumes/WorkSSD/Archives/claude-tests/agy-reaccept-20261106-itrawgpe/dual-runtime/run/evidence.json>) · [预检指纹](</Volumes/WorkSSD/Archives/claude-tests/agy-reaccept-20261106-itrawgpe/dual-runtime/preflight.json>) · [启动计划](</Volumes/WorkSSD/Archives/claude-tests/agy-reaccept-20261106-itrawgpe/dual-runtime/run/launch.json>) · [退出回执](</Volumes/WorkSSD/Archives/claude-tests/agy-reaccept-20261106-itrawgpe/dual-runtime/execution.json>) · [记录哈希](</Volumes/WorkSSD/Archives/claude-tests/agy-reaccept-20261106-itrawgpe/attestation-hashes.json>) · [重验过程与签名](</Volumes/WorkSSD/Archives/claude-tests/agy-reaccept-20261106-itrawgpe/reaccept-notes.json>) · [锁定切换离线核验](</Volumes/WorkSSD/Archives/claude-tests/agy-lock-152-20261107-obOb68X3/offline-verify-2/offline-verify.json>) |
 | AGY 原生双子（协议 2，CLI 1.5.3 重验，当前锁定） | 2026-11-10（Asia/Taipei），按用户明确授权修复版本及配置迁移导致的入口阻断。Google LLC 签名验证通过；原派发、回传、`strict` 隔离配置和工具守卫保持一致。证据与风险角色均 `DONE` 且各成功回传一次，两者 `PASS`，CLI 和观察器退出码为 0。验收新增绑定实际生效的 `~/.gemini/antigravity-cli/settings.json`，同时保留原两份配置指纹；运行前后指纹一致。runner 已固定此组新回执，Codex 两处 Hook 的 runner 指纹已同步；用户已于 2026-11-10 明确确认桌面重新信任；该确认不等于新的桌面端到端验收 | [运行回执](</Volumes/WorkSSD/Archives/claude-tests/agy-entry-repair-20261110-5g7buo9_/dual-runtime/run/evidence.json>) · [预检指纹](</Volumes/WorkSSD/Archives/claude-tests/agy-entry-repair-20261110-5g7buo9_/dual-runtime/preflight.json>) · [启动计划](</Volumes/WorkSSD/Archives/claude-tests/agy-entry-repair-20261110-5g7buo9_/dual-runtime/run/launch.json>) · [退出回执](</Volumes/WorkSSD/Archives/claude-tests/agy-entry-repair-20261110-5g7buo9_/dual-runtime/execution.json>) · [正向及漂移拒绝检查](</Volumes/WorkSSD/Archives/claude-tests/agy-entry-repair-20261110-5g7buo9_/entry-checks.json>) |
 | MMX 常规单轮审核 | MMX CLI 1.0.28，已安装 wrapper 单次调用；实际模型 `MiniMax-M3.1-Flash`，`end_turn` 且未截断，结构化审核校验通过 | [wrapper 回执](</Volumes/WorkSSD/Archives/claude-tests/codex-provider-acceptance-20261105-h_iph9af/mmx-wrapper.json>) · [发布清单与配置预检](</Volumes/WorkSSD/Archives/claude-tests/codex-provider-acceptance-20261105-h_iph9af/mmx-preflight.json>) |
-| ZCode 文本复核（2026-11-15） | ZCode CLI 0.17.1 / skill 1.1.1，macOS arm64；`GLM-5.3-Flash` 的 Chat 使用原默认 max 档，Review 使用临时 high 档；固定 plan、零工具，stop 且未截断，最终 review-v1 为 PASS、无遗留发现；源码与安装副本各 42 项离线测试通过 | [验收报告](</Volumes/WorkSSD/Archives/claude-tests/zcode-acceptance-20261115-4rgphro4/verification.md>) · [最终原始回执](</Volumes/WorkSSD/Archives/claude-tests/zcode-acceptance-20261115-4rgphro4/final-review/run/receipt.json>) |
+| ZCode 文本复核（2026-11-15，macOS） | ZCode CLI 0.17.1 / skill 1.1.1，macOS arm64；`GLM-5.3-Flash` 的 Chat 使用原默认 max 档，Review 使用临时 high 档；固定 plan、零工具，stop 且未截断，最终 review-v1 为 PASS、无遗留发现；源码与安装副本各 42 项离线测试通过 | [验收报告](</Volumes/WorkSSD/Archives/claude-tests/zcode-acceptance-20261115-4rgphro4/verification.md>) · [最终原始回执](</Volumes/WorkSSD/Archives/claude-tests/zcode-acceptance-20261115-4rgphro4/final-review/run/receipt.json>) |
+| ZCode 文本复核（2026-11-17，Windows，skill 1.2.0 跨平台合并后） | ZCode CLI 0.17.1（`zcode-app-cli 3.18.1-46` + `zcode-runtime 0.17.1`）/ skill 1.2.0，Windows x64；平台默认 `guarded`、零工具；实测 Chat `stop` 未截断、Review `review_gate=PASS`，实际模型 `GLM-5.3`（`model_identity_source=runtime.model_request`）；离线 49 项 46 通过 / 0 失败 / 3 跳过（跳过为 POSIX 专属）；清单按 LF 归一化，与 Mac 共用同一份 `.zcode-release.json` | 本机回执目录 `C:\Users\AI\AppData\Local\Temp\xval\zjob\run\receipt.json`（本次双模型交叉验证轮次） |
 
 - 每次调用前对照本节和下方 AGY 现行协议的回执做本地核对。AGY 核对 CLI、runner、所用角色和实际生效的临时权限、工具守卫与回传约束。MMX 核对 CLI、受管发布清单、wrapper、有效模型与运行配置；wrapper 和 profile 的哈希见启动规则回执。临时目录、会话 ID、审核材料和无关文档变化不影响入口验收。
 - 协议 1 双子回执的启动计划未标协议版本。CLI 版本及可执行文件哈希、runner 和角色指纹、有效模型配置、`strict` 隔离权限，以及证据和风险各一次派发和回传的守卫均匹配时，方可复用该回执。当前 `project_review.py` 生成协议 2 计划，runner 指纹与该协议 1 回执不同。按下方协议 2 回执核对当前入口。
@@ -75,11 +76,11 @@ python3 -B /Users/mingtian/.agents/harness/providers/agy/project_review.py prepa
 
 ## MMX 常规单轮审核
 
-按 [MMX skill](/Volumes/WorkSSD/.claude/skills/mmx/SKILL.md) 选择 Review 或 Challenge。通过已安装的 wrapper 发送一份获准材料，验证完整响应和结构化发现，保存原文回执。使用本机配置的模型预算和超时，按既有规则处理失败和重试。
+按 [MMX skill](../mmx/SKILL.md) 选择 Review 或 Challenge。通过已安装的 wrapper 发送一份获准材料，验证完整响应和结构化发现，保存原文回执。使用本机配置的模型预算和超时，按既有规则处理失败和重试。
 
 ## ZCode 文本交叉验证
 
-默认与 MMX 一起按[双模型合同](zcode-mmx-review.md)执行；用户最新的单方或跳过指令优先。按 [zcode skill](</Volumes/WorkSSD/.claude/skills/zcode/SKILL.md>) 选择 Review 或 Challenge，自行选取任务所需材料、脱敏并分配稳定证据 ID。材料类型、额度和必要追加调用均已有授权；模型与时限据实际 CLI 支持核对。
+默认与 MMX 一起按[双模型合同](zcode-mmx-review.md)执行；用户最新的单方或跳过指令优先。按 [zcode skill](../zcode/SKILL.md) 选择 Review 或 Challenge，自行选取任务所需材料、脱敏并分配稳定证据 ID。材料类型、额度和必要追加调用均已有授权；模型与时限据实际 CLI 支持核对。
 
 优先使用 `zcode-run.js start` 创建一次私有 job，再用同一 job 的 `status` 跟踪。观察超时或 `unknown` 时继续核对原进程；`finished` 只表示外层进程退出。实际接受需同时核对退出码/信号、wrapper 完整性、运行事件中的模型和零工具边界、review-v1 结构化发现及本地处置。失败保留原始回执；wrapper 单次调用与外层有依据的追加调用分开记录，后者按持续授权自行执行。
 
