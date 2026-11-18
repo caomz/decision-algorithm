@@ -34,7 +34,7 @@ node <ZCODE_SKILL_DIR>/scripts/zcode-chat.js --prompt-file <file> --mode review 
 node <ZCODE_SKILL_DIR>/scripts/zcode-chat.js --prompt-file <file> --mode challenge --evidence-ids-file <ids.json>
 ```
 
-Review/Challenge 为材料分配稳定 ID（例如 `E1`、`E2`），在材料中标明相应范围；`ids.json` 是非空、无重复的 ID 数组。wrapper 自动加入本地 [review-v1 schema](references/review-v1.schema.json)、材料边界和审查指令，并验证返回结构、证据引用与 P1/P2 语义。它不调用现有 AGY/MMX 双模型协调器。
+Review/Challenge 为材料分配稳定 ID（例如 `E1`、`E2`），在材料中标明相应范围；`ids.json` 是非空、无重复的**字符串** ID 数组（如 `["E1","E2"]`，元素须匹配 `[A-Za-z0-9][A-Za-z0-9_.-]{0,63}`，不是对象数组）。wrapper 自动加入本地 [review-v1 schema](references/review-v1.schema.json)、材料边界和审查指令，并验证返回结构、证据引用与 P1/P2 语义。它不调用现有 AGY/MMX 双模型协调器。
 
 ## 分片批量
 

@@ -311,6 +311,12 @@ async function main() {
   }
 
   const args = parseArgs(argv);
+  if (args.evidenceIdsFile !== null) {
+    // Fail fast at the batch level instead of letting every shard spawn a
+    // wrapper that dies with input_error on the same missing ids file.
+    try { if (!fs.statSync(args.evidenceIdsFile).isFile()) throw new Error(); }
+    catch { usageError(`--evidence-ids-file not found or not a file: ${args.evidenceIdsFile}`); }
+  }
   const shards = collectShardFiles(args);
   const timeout = args.timeout ?? DEFAULT_TIMEOUT_SECONDS;
 

@@ -116,6 +116,14 @@ test("usage: mode and evidence-id combinations follow the single-shot contract",
   assert.equal(receiptOf(runBatch(["--prompt-file", file, "--mode", "bogus"])).status, "usage_error");
 });
 
+test("usage: a missing evidence-ids file fails fast at the batch level", () => {
+  const file = shardFile("x.txt", "hi");
+  const missing = path.join(root, "no-such-ids.json");
+  const run = runBatch(["--prompt-file", file, "--mode", "review", "--evidence-ids-file", missing]);
+  assert.equal(receiptOf(run).status, "usage_error");
+  assert.ok(run.stderr === "", "no wrapper is spawned for a batch-level usage error");
+});
+
 test("pass-through: mode, evidence ids, cli path and timeout reach every shard", () => {
   const before = fs.existsSync(argsDump) ? fs.readFileSync(argsDump, "utf8").split("\n").filter(Boolean).length : 0;
   const file = shardFile("pt.txt", "plain shard");
