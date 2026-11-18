@@ -209,6 +209,12 @@ for (const mode of ["review", "challenge"]) test(`${mode} validates review-v1 wi
   assert.equal(invalid.status, "review_schema_mismatch");
   assert.equal(invalid.review_gate, "NOT_EVALUATED");
   assert.equal(invalid.text, "not a review");
+  assert.ok(typeof invalid.review_error === "string" && invalid.review_error.length > 0 && invalid.review_error.length <= 300);
+});
+test("default request timeout matches the MMX-paired 1200 seconds", () => {
+  const { parseArgs } = require("../scripts/zcode-chat.js");
+  assert.equal(parseArgs(["--prompt-file", "x"]).timeout, 1200);
+  assert.equal(parseArgs(["--prompt-file", "x", "--timeout-seconds", "60"]).timeout, 60);
 });
 
 function finding(kind, severity, evidence_refs = ["E1"]) {
@@ -223,6 +229,9 @@ test("review semantic gates match the shared protocol", () => {
     assert.throws(() => validateReview(review([invalid]), ["E1"]));
   }
   assert.throws(() => validateReview('{"version":1,"version":1,"summary":"x","findings":[]}', ["E1"]));
+  // Regression: the 2026-11-15 cross-review rounds failed with the opaque "review field
+  // type/value" because the model returned "version":"1" (string). The error must name the field.
+  assert.throws(() => validateReview(review([]).replace('"version":1', '"version":"1"'), ["E1"]), /version.*expected integer/);
   assert.throws(() => strictJson('{"a":1,"\\u0061":2}'));
 });
 test("launcher resolution preserves isolation and refuses arbitrary shell wrappers", () => {
@@ -231,7 +240,7 @@ test("launcher resolution preserves isolation and refuses arbitrary shell wrappe
   fs.mkdirSync(path.dirname(bundle), { recursive: true });
   fs.writeFileSync(bundle, "");
   fs.writeFileSync(cli, '#!/bin/sh\nexec mise exec node@24.14.0 -- node "$HOME/Workspace/app/zcode.cjs" "$@"\n');
-  assert.equal(resolveLaunch(cli, root).entry, bundle);
+  assert.equal(resolveLaunch(cli, root).entry, fs.realpathSync(bundle));
   fs.writeFileSync(cli, "#!/bin/sh\necho dangerous\n");
   assert.throws(() => resolveLaunch(cli, root), { status: "unsupported_launcher" });
   // A batch file that is not the documented npm shim stays unsupported; the
@@ -284,7 +293,7 @@ test("macOS auth bridge links the existing default keychain without copying or c
   assert.equal(setupMacKeychain(home, "darwin", fakeSecurity), "existing-default-keychain-link");
   const link = path.join(home, "Library/Keychains/login.keychain-db");
   assert.ok(fs.lstatSync(link).isSymbolicLink());
-  assert.equal(fs.realpathSync(link), store);
+  assert.equal(fs.realpathSync(link), fs.realpathSync(store));
   assert.equal(fs.readFileSync(store, "utf8"), "synthetic-store");
 });
 test("empty invocation and version do not invoke a CLI", () => {

@@ -5,17 +5,27 @@ const path = require("node:path");
 const schema = JSON.parse(fs.readFileSync(path.join(__dirname, "../references/review-v1.schema.json"), "utf8"));
 const evidencePattern = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 
-function check(value, spec) {
+function check(value, spec, path = "review") {
   const matches = spec.type === "object" ? value !== null && typeof value === "object" && !Array.isArray(value)
     : spec.type === "array" ? Array.isArray(value)
       : spec.type === "integer" ? Number.isSafeInteger(value) : typeof value === spec.type;
-  if (!matches || (spec.enum && !spec.enum.includes(value))) throw new Error("review field type/value");
-  if (spec.type === "string" && !value.trim()) throw new Error("empty review field");
-  if (spec.type === "object") {
-    if (Object.keys(value).sort().join("\0") !== [...spec.required].sort().join("\0")) throw new Error("review fields");
-    for (const [key, child] of Object.entries(spec.properties)) check(value[key], child);
+  if (!matches || (spec.enum && !spec.enum.includes(value))) {
+    // Field paths (e.g. "version", "findings[2].severity") make receipt review_error
+    // actionable: the model's near-miss (string "1" vs 1, wrong enum value) is visible
+    // without a second model round just to repair format.
+    const got = value === null ? "null" : Array.isArray(value) ? "array" : `${typeof value}${typeof value === "string" ? ` ${JSON.stringify(value.slice(0, 40))}` : ""}`;
+    throw new Error(`${path}: expected ${spec.type}${spec.enum ? ` (${spec.enum.join("|")})` : ""}, got ${got}`);
   }
-  if (spec.type === "array") for (const item of value) check(item, spec.items);
+  if (spec.type === "string" && !value.trim()) throw new Error(`${path}: empty string`);
+  if (spec.type === "object") {
+    const missing = spec.required.filter(key => !(key in value));
+    const unexpected = Object.keys(value).filter(key => !spec.required.includes(key));
+    if (missing.length || unexpected.length) {
+      throw new Error(`${path}: fields mismatch${missing.length ? `, missing ${missing.join(", ")}` : ""}${unexpected.length ? `, unexpected ${unexpected.join(", ")}` : ""}`);
+    }
+    for (const [key, child] of Object.entries(spec.properties)) check(value[key], child, `${path}.${key}`);
+  }
+  if (spec.type === "array") value.forEach((item, index) => check(item, spec.items, `${path}[${index}]`));
 }
 
 // JSON.parse accepts duplicate keys. A small lexical pass rejects them before parsing.
@@ -48,12 +58,13 @@ function validateReview(text, ids) {
   validateIds(ids);
   const review = strictJson(text);
   check(review, schema);
-  if (review.version !== 1) throw new Error("review version");
+  if (review.version !== 1) throw new Error(`version: expected the literal integer 1, got ${JSON.stringify(review.version)}`);
   let gate = "PASS";
-  for (const finding of review.findings) {
-    if (finding.evidence_refs.some(id => !ids.includes(id))) throw new Error("unknown evidence ID");
-    if (finding.kind === "confirmed_defect" && !finding.evidence_refs.length) throw new Error("defect without evidence");
-    if (finding.kind === "advisory" && finding.severity === "P1") throw new Error("P1 advisory");
+  for (const [index, finding] of review.findings.entries()) {
+    const label = `findings[${index}]`;
+    if (finding.evidence_refs.some(id => !ids.includes(id))) throw new Error(`${label}: unknown evidence ID in [${finding.evidence_refs.join(", ")}]`);
+    if (finding.kind === "confirmed_defect" && !finding.evidence_refs.length) throw new Error(`${label}: confirmed_defect without evidence`);
+    if (finding.kind === "advisory" && finding.severity === "P1") throw new Error(`${label}: advisory cannot be P1`);
     if (finding.severity === "P1") {
       if (finding.kind === "confirmed_defect") gate = "FAIL";
       else if (finding.kind === "evidence_gap" && gate !== "FAIL") gate = "NOT_EVALUATED";

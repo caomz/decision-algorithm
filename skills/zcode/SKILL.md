@@ -41,7 +41,7 @@ Review/Challenge 为材料分配稳定 ID（例如 `E1`、`E2`），在材料中
 多分片评审不要逐片串行调用：一次工具调用送整批，`zcode-batch.js` 经有界并发池并行执行每片 `zcode-chat.js`，合并回执并聚合双 gate：
 
 ```text
-node <ZCODE_SKILL_DIR>/scripts/zcode-batch.js --prompt-file <f1> [--prompt-file <f2> ...] | --prompts-dir <dir> [--concurrency 2] [--mode chat|review|challenge --evidence-ids-file <ids.json>] [--timeout-seconds 600] [--cli-path <exe>] [--receipt-file <path>]
+node <ZCODE_SKILL_DIR>/scripts/zcode-batch.js --prompt-file <f1> [--prompt-file <f2> ...] | --prompts-dir <dir> [--concurrency 2] [--mode chat|review|challenge --evidence-ids-file <ids.json>] [--timeout-seconds 1200] [--cli-path <exe>] [--receipt-file <path>]
 ```
 
 - 每片仍是一次完整 `zcode-chat.js` 调用（guarded 权限、独立 HOME/cwd、零工具校验、每片独立 `zcode-text-*` 证据目录原样继承）。**不要给批量传 `--output-dir`**：每片及每次重试由 wrapper 自建目录，全部证据保留。
@@ -53,7 +53,7 @@ node <ZCODE_SKILL_DIR>/scripts/zcode-batch.js --prompt-file <f1> [--prompt-file 
 
 ## 执行与结果
 
-默认运行时限 600 秒；`--timeout-seconds` 可在本次授权内调整。`--output-dir` 指向一个尚不存在的目录，用于保存输入、完整原始运行流、stderr、启动指纹与 `receipt.json`；省略时在系统临时目录创建并保留私有目录。
+默认运行时限 1200 秒（与 MMX `local.json` 1200/1260 对齐）；`--timeout-seconds` 可在本次授权内调整，更大的评审事实包建议显式放宽。宿主前台同步调用仍受宿主工具时限约束，评审规模请求走持久后台 job 或 batch 入口。`--output-dir` 指向一个尚不存在的目录，用于保存输入、完整原始运行流、stderr、启动指纹与 `receipt.json`；省略时在系统临时目录创建并保留私有目录。
 
 每次请求在启动和首个模型请求时原子更新 `progress.json`，记录 wrapper/CLI PID、阶段及观察到的模型；只有最终有效回执才可作为完成依据。监督器另给 wrapper 预检与清理 45 秒余量，超出后终止本任务进程组并保留真实退出记录。
 

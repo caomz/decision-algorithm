@@ -23,7 +23,7 @@ const DEFAULT_WRAPPER = path.join(__dirname, "zcode-chat.js");
 const DEFAULT_CONCURRENCY = 2;
 const MAX_CONCURRENCY = 8;
 const MAX_SHARDS = 32;
-const DEFAULT_TIMEOUT_SECONDS = 600;
+const DEFAULT_TIMEOUT_SECONDS = 1200;
 const MAX_TIMEOUT_SECONDS = 21600;
 // Test hook only: a production run never overrides the quota/timeout backoff.
 const RETRY_DELAY_MS = (() => {
