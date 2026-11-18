@@ -12,6 +12,7 @@
 | 两片真实并行批量 + 小预算自愈 | 真实：2 片并行，含一次预算重发 | 批级墙钟 4.5s；`--max-tokens 128` 片首发 `thinking_budget_exhausted`，按 profile 提至 524288 重发一次，`first_attempt` 与终态回执均保留 |
 | 外层超时公式复核 | 构造 | 修正为 `ceil(N/C)×(2×wrap-timeout+30s)+60s`，覆盖每片一次重发与限流退避；原单次公式会误杀重试中的批次 |
 | 目录自然序与 `receipt_file` 一致性 | 构造/离线 | `.txt` 按 `p1,p2,p10` 自然序处理；stdout 与落盘回执分片顺序一致，落盘文件同样携带 `receipt_file` 字段 |
+| `mmx-clean-temp.js` 清理形态扩展（v1.1.0） | 构造：`tests/mmx-clean-temp.test.js`，隔离 fixture（TEMP/TMP/TMPDIR 指向合成根） | 6/6 通过；`mmx.`/`mmxP1.`/`mmxA2.`/`mmxrun.`/`mmxdbg3.` 形态旧目录入列并可删；`mmx-chat-*`/`mcv.*` 恒豁免；短后缀/无点/大写/普通文件/嵌套链接保留；修复 usage 错误被后续扫描覆盖退出码的缺陷 |
 
 ## 2026-11-17 合并验证（Windows，mmx-cli 1.0.28，Node v22.20.0）
 

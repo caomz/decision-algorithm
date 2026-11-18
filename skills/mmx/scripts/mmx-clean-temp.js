@@ -3,12 +3,18 @@
 //
 // Background: SKILL.md's POSIX / PowerShell blocks create one `mmx.XXXXXX`
 // directory per call and deliberately leave it for the OS. Windows never
-// reclaims those, so prompt text accumulates in %TEMP% indefinitely.
+// reclaims those, so prompt text accumulates in %TEMP% indefinitely. Later
+// calling sessions also staged prompts in ad-hoc dirs (`mmxP1.219edd`,
+// `mmxA.d47cef`, `mmxrun.*`, `mmxdbg3.*`, ...) that the original single-prefix
+// rule never matched, so prompt text kept piling up there too.
 //
 // Safety model (never a blind prefix delete):
-//   - only DIRECT children of os.tmpdir() whose name matches ^mmx\.[0-9A-Za-z]{6,12}$
-//     (mktemp 6 chars / PowerShell guid6). This never matches wrapper-internal
-//     `mmx-chat-*` dirs or mcode's `mcv.*` dirs.
+//   - only DIRECT children of os.tmpdir() whose name matches the SHAPE
+//     ^mmx[A-Za-z0-9]*\.[0-9A-Za-z]{6,12}$ — an `mmx` stem, an optional
+//     alphanumeric label, a dot, then a 6-12 char suffix (mktemp / guid6).
+//     The explicit EXEMPT_RE guard keeps wrapper-internal `mmx-chat-*` dirs
+//     and mcode's `mcv.*` dirs untouchable even if the shape rule is widened
+//     later by mistake. `zcode-text-*` evidence dirs never match either.
 //   - only dirs whose age (max(birthtime>0, mtime)) exceeds 24h, so a running
 //     call is never touched.
 //   - reparse points / symlinks are rejected before reading and again before
@@ -31,10 +37,11 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 const IS_WIN = process.platform === 'win32';
 const STALE_MS = 24 * 3600 * 1000;
-const NAME_RE = /^mmx\.[0-9A-Za-z]{6,12}$/;
+const NAME_RE = /^mmx[A-Za-z0-9]*\.[0-9A-Za-z]{6,12}$/;
+const EXEMPT_RE = /^(mmx-chat-|mcv\.)/;
 
 function emit(obj, code) {
   process.stdout.write(JSON.stringify(obj) + '\n');
@@ -43,6 +50,7 @@ function emit(obj, code) {
 
 function usage(msg) {
   emit({ status: 'usage_error', error: msg, usage: 'node mmx-clean-temp.js [--apply]' }, 1);
+  process.exit(1);
 }
 
 const argv = process.argv.slice(2);
@@ -53,7 +61,7 @@ for (const a of argv) {
     process.stdout.write(
       `mmx-clean-temp ${VERSION}\n` +
       'Usage: node mmx-clean-temp.js [--apply]\n' +
-      '  default: dry-run (list only); --apply deletes stale mmx.* dirs older than 24h\n'
+      '  default: dry-run (list only); --apply deletes stale mmx-shaped dirs older than 24h\n'
     );
     process.exit(0);
   } else {
@@ -161,7 +169,7 @@ const candidates = [];
 
 for (const e of entries) {
   scanned++;
-  if (!e.isDirectory() || !NAME_RE.test(e.name)) continue;
+  if (!e.isDirectory() || !NAME_RE.test(e.name) || EXEMPT_RE.test(e.name)) continue;
   matched++;
   const dir = path.join(root, e.name);
 

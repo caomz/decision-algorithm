@@ -33,7 +33,7 @@ mmx/
 │   ├── mmx-chat.js                   # 同步文本 wrapper（唯一 JSON 回执信封）
 │   ├── mmx-batch.js                  # 分片批量入口（并行池 + 传输层 gate + 预算自愈）
 │   ├── mcode-verify.js               # 最高思考等级独立通道（mcode --effort max）
-│   ├── mmx-clean-temp.js             # Windows %TEMP% 外层目录清理（默认 dry-run）
+│   ├── mmx-clean-temp.js             # Windows %TEMP% 外层目录清理（特征形态 + 显式豁免，默认 dry-run）
 │   └── repin-release.js              # 受管发布清单重钉工具
 ├── profiles/local.json               # 本机运行配置（模型、输出预算、请求/包装超时）
 ├── tests/mmx-chat.test.js            # 离线测试（假 CLI，不触网、不耗额度）
@@ -56,7 +56,7 @@ mmx/
 
 - wrapper 的受管根按**结构**判定（同级 `agy/` 与 `cross-validation/` 目录 + 发布清单），不再依赖某一台机器的绝对路径。
 - Windows 分支已在真机验证：`.cmd` shim 解析、`taskkill` 树终止、MSYS 路径转换、`node --check` 与 36 个离线测试（PowerShell 与 Git Bash 各一遍）。
-- Windows 上 `%TEMP%` 不会自动回收，`mmx.*` 外层目录会持续积累，用 `node scripts/mmx-clean-temp.js` 清理（默认 dry-run，`--apply` 才删）。
+- Windows 上 `%TEMP%` 不会自动回收，`mmx` 形态的外层目录（含 `mmxP1.*`、`mmxA.*`、`mmxrun.*`、`mmxdbg3.*` 等手工暂存）会持续积累，用 `node scripts/mmx-clean-temp.js` 清理（默认 dry-run，`--apply` 才删；`mmx-chat-*` 与 `mcv.*` 显式豁免）。
 - 受管安装更新 wrapper 后清单哈希必然失配，需重钉：
 
 ```bash
@@ -83,6 +83,7 @@ node --check scripts/mmx-chat.js
 node --check scripts/mmx-batch.js
 node --test tests/mmx-chat.test.js
 node --test tests/mmx-batch.test.js
+node --test tests/mmx-clean-temp.test.js
 node scripts/mmx-chat.js --version
 node scripts/mmx-batch.js --version
 ```

@@ -1,7 +1,7 @@
 ---
 name: mmx
 description: Use MiniMax through the MMX CLI for text-only chat, review, challenge, or an explicitly authorized second opinion, and for the full MiniMax CLI surface (images, video, speech, transcription, web search). Applies to asks such as "/mmx", "用 MMX 问一下", "用 MiniMax 交叉验证", "生成图片/视频/语音", "MiniMax 搜索" and approved review workflows that name MMX. Cross-validation runs through the synchronous text wrapper; media and search go through the bundled CLI reference.
-version: 2.5.0
+version: 2.6.0
 ---
 
 # /mmx — MiniMax 文本复核
@@ -121,7 +121,7 @@ stdout 恒为单个 JSON，字段与 `mmx-chat.js` 对齐，多出 `effort` 与 
 - wrapper 在 `--output json` 非流式路径只拼接 `type=="text"` 块，**思考块不进 `text`**（返回文本不含推理痕迹），但 `output_tokens` 仍包含 thinking token，做算术前别把两者混为一谈。
 - `-m` 传入未知模型时 mmx 会**静默回退**默认模型，以响应里的 `model` 字段为准。
 - prompt 与 system 只经临时文件 + JSON encoder 传递，NEVER 出现在 `ps` argv。wrapper 内部临时文件在成功与失败路径都逐个清理；目录内出现非预期文件时保留目录交由系统处理，NEVER 递归删除。外层临时目录留给系统回收，代价是**prompt 与被审内容会以明文残留在系统临时目录**（0600/0700 权限，暴露有界）。
-- **Windows 上 `%TEMP%` 不会主动回收**（macOS/Linux 才有该语义），`mmx.*` 外层目录会持续积累。用 `node scripts/mmx-clean-temp.js` 清理（默认 dry-run 只列清单，`--apply` 才删除；只清理 `os.tmpdir()` 下匹配 `mmx.` + 6–12 位字母数字、目录龄超过 24h 的目录，拒绝 reparse point，删除失败保留并告警）。
+- **Windows 上 `%TEMP%` 不会主动回收**（macOS/Linux 才有该语义），`mmx` 形态的外层目录会持续积累（含各会话即兴暂存的 `mmxP1.*`、`mmxA.*`、`mmxrun.*`、`mmxdbg3.*` 等）。用 `node scripts/mmx-clean-temp.js` 清理（默认 dry-run 只列清单，`--apply` 才删除；只清理 `os.tmpdir()` 直接子目录中名称匹配 `mmx` + 可选字母数字标签 + 点 + 6–12 位后缀、目录龄超过 24h 的目录；`mmx-chat-*`（wrapper 内部）与 `mcv.*`（mcode 自清）显式豁免，`zcode-text-*` 永不匹配；拒绝 reparse point，删除失败保留并告警）。
 - `mcode-verify.js` 需要在临时目录生成一份含明文 apiKey 的 Runtime 配置（mcode 运行时不支持用环境变量提供 custom provider 的 apiKey），它已做 ACL 收紧 / 即刻删除 / 残留清扫，但 SIGKILL 或断电仍可能留下残留。排查密钥泄漏时优先怀疑本机 `~/.minimax/config.yaml` 与 `%TEMP%\mcv.*`。
 
 ## 文本之外的 CLI 能力
