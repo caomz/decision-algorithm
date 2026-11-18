@@ -68,6 +68,18 @@ exit "$_RC"
 
 WSL 内 `node -p "process.platform"` 为 `linux` 时使用 POSIX 路径；调用 Windows `node.exe` 为 `win32` 时先用 `wslpath -w` 转换路径，并核对 Windows PATH。两种 WSL 路径本次未真机验证。
 
+## 分片批量（mmx-batch.js）
+
+`scripts/mmx-batch.js` 在单片契约之上做批量编排，每片仍是一次完整的 `mmx-chat.js` 调用（预算、超时、错误分类与回执结构原样继承）：
+
+- **stdout 契约**：恰好一个 JSON 对象，字段 `status`（ok|partial|failed，按传输可用性）、`gate`（PASS|NOT_EVALUATED，**传输层**：全片 `status=ok`、`complete=true`、未截断 → PASS）、`batch`（shards/ok/transport_ok/truncated_or_incomplete/retried/concurrency/wall_seconds/effective_max_tokens/retry_max_tokens）、`shards[]`（每片完整单片回执 + shard/prompt_file/retried/retry_reason/duration_seconds，重试时含 `first_attempt` 旧回执）。findings 级 P1/P2 判定仍由宿主完成，批级 gate 不冒充内容判定。可选 `--receipt-file` 落盘，内容与 stdout 字段一致。
+- **预算自愈**：片 `thinking_budget_exhausted` 或截断、且调用预算低于 profile 预算时，自动按 profile 预算（默认 524288）重发一次；`quota_error` 退避 30 秒重试一次。两类重试都显式记录（`retried`/`retry_reason`/`first_attempt`），不隐藏内部重试；`auth_error`、`schema_mismatch` 类与其余失败不重试。
+- **退出码**：`gate=PASS` → 0，否则 1。
+- **调用面**：`--prompt-file`（可重复）与 `--prompts-dir` 互斥（`.txt` 自然序，≤32 片）；`--concurrency` 默认 2、上限 8；`--model`/`--max-tokens`/`--timeout`/`--wrap-timeout`/`--profile-file` 透传给每片。
+- **外层超时公式**：`ceil(片数/并发) × (2×wrap-timeout + 30s) + 60s`（两次完整尝试 + 30s 退避 + 批级余量）；漏算重试会把重试中的批次误判为超时。
+- **测试钩子**：`MMX_BATCH_WRAPPER`（替换为假 wrapper）、`MMX_BATCH_QUOTA_RETRY_MS`（仅离线缩短退避，生产默认 30000ms，非法值回退默认）。
+- **裸 CLI 陷阱**：绕过 wrapper 直接 `mmx text chat` 时 CLI 自身默认 `--max-tokens 4096`，服务端思考计入输出预算，评审类 prompt 必截断；所有评审调用必须经 `mmx-chat.js` / `mmx-batch.js`。
+
 ## 契约与来源
 
 - Node.js `>=18`：本机 `mmx-cli 1.0.26`（macOS）与 `1.0.28`（Windows）的 `package.json` 与[官方仓库](https://github.com/MiniMax-AI/cli/blob/main/package.json)。本机 Node.js `v24.15.0`（macOS）、`v22.20.0`（Windows）。
