@@ -23,7 +23,8 @@
         "Review prompt 明确按 documentation/specification 类型审查",
         "不会因为目标不是代码而拒绝审查",
         "findings 使用统一 JSON 协议并区分已确认缺陷、证据不足和建议",
-        "合法的无发现结果使用空 findings 数组"
+        "合法的无发现结果使用空 findings 数组",
+        "被审材料用每次请求专属的 nonce 定界，不使用固定字面定界符"
       ]
     },
     {
@@ -44,8 +45,44 @@
       "files": [],
       "expectations": [
         "不调用 mmx text wrapper",
-        "明确图片生成和 web search 不在此 skill 范围",
+        "明确图片生成和 web search 不在文本复核范围内，但由本 skill 的 CLI 参考承接",
         "不把媒体或搜索请求伪装成文本第二意见"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "/mmx review 这个 3000 行的模块，wrapper 返回 status=thinking_budget_exhausted 且没有正文。",
+      "expected_output": "识别输出预算被服务端思考吃光，按预算问题处理而非契约漂移。",
+      "files": [],
+      "expectations": [
+        "不把 thinking_budget_exhausted 当作 schema_mismatch 去核对 CLI 契约",
+        "建议加大 --max-tokens 重发",
+        "不把空正文表述为 MMX 的有效意见"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "/mmx challenge 这个架构方案需要最高推理强度，你能不能用最大思考档再验一次？",
+      "expected_output": "说明 mmx CLI 无 effort 档位，改用 mcode 通道并视为独立家族意见。",
+      "files": [],
+      "expectations": [
+        "说明 mmx CLI 没有 thinking/reasoning/effort 开关",
+        "使用 scripts/mcode-verify.js 且 effort 为 max",
+        "把 mcode 结论视为与 mmx 不同的独立模型家族，不互相替代",
+        "不因 mcode 思考更久就采信其结论"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "这批交叉验证有 4 个分片 prompt，逐片串行调 mmx 太慢，而且上一片输出还被截断了。",
+      "expected_output": "改用 mmx-batch.js 一次送整批并行执行，读取批级传输层 gate 与各片回执，截断片的预算自愈记录在 first_attempt。",
+      "files": [],
+      "expectations": [
+        "不逐片串行调用 mmx-chat.js，改用 scripts/mmx-batch.js 的 --prompt-file/--prompts-dir",
+        "外层工具超时按 ceil(片数/并发)×(2×wrap-timeout+30s)+60s 预留（2 倍 wrap-timeout 覆盖自愈重发）",
+        "批级 gate 是传输层判定，P1/P2 内容判定仍由宿主完成",
+        "不裸调 mmx CLI 送评审（CLI 默认 4096 预算会被思考吃光）",
+        "预算自愈只在小预算低于 profile 预算时触发一次，新旧回执都保留"
       ]
     }
   ]

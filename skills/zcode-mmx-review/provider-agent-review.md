@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | 默认 ZCode/MMX 双模型复核 | 任务负责者分别调用已安装的两方文本 skill，使用相同必要材料并脱敏 | 两份完整原始回执、实际模型独立性、材料覆盖、各自判定与本地处置；详见[默认合同](zcode-mmx-review.md) |
 | AGY 审核 | AGY 主审核 Agent 派发原生子 Agent | 实际子会话 ID、终态、结构化回传和工具边界记录 |
-| MMX 审核 | 已安装的 MMX skill 和 `mmx-chat.js` 单轮文本入口 | 实际模型、完整回复、结束原因和结构化判定 |
+| MMX 审核 | 已安装的 MMX skill：单片 `mmx-chat.js` 单轮入口、多分片 `mmx-batch.js` 批量入口（并行 + 传输层 gate + 预算自愈） | 实际模型、完整回复、结束原因和结构化判定 |
 | ZCode 文本交叉验证 | 已安装的 [zcode skill](../zcode/SKILL.md) 和 `zcode-run.js` 持久后台入口 | 实际模型、完整回执、退出码/信号、零工具边界、review-v1 发现与本地处置 |
 | 项目双模型摘要复核 | 项目指定协调器及其摘要合同 | 两方各自回执、模型身份、材料覆盖和项目门禁 |
 
@@ -76,7 +76,7 @@ python3 -B /Users/mingtian/.agents/harness/providers/agy/project_review.py prepa
 
 ## MMX 常规单轮审核
 
-按 [MMX skill](../mmx/SKILL.md) 选择 Review 或 Challenge。通过已安装的 wrapper 发送一份获准材料，验证完整响应和结构化发现，保存原文回执。使用本机配置的模型预算和超时，按既有规则处理失败和重试。
+按 [MMX skill](../mmx/SKILL.md) 选择 Review 或 Challenge。通过已安装的 wrapper 发送一份获准材料，验证完整响应和结构化发现，保存原文回执。使用本机配置的模型预算和超时，按既有规则处理失败和重试。多分片评审用 `mmx-batch.js` 一次送整批（并行执行、预算自愈），不逐片串行，也不绕过 wrapper 裸调 CLI（默认 4096 预算必截断）。
 
 ## ZCode 文本交叉验证
 

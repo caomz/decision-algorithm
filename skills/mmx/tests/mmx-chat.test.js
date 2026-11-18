@@ -74,6 +74,8 @@ switch (process.env.FAKE_MODE || "success") {
   case "string_error": process.stdout.write(JSON.stringify({ error: { code: "429" } })); break;
   case "array_response": process.stdout.write(JSON.stringify([ok])); break;
   case "tool_block": ok.content.push({type: "tool_use", id: "fake"}); process.stdout.write(JSON.stringify(ok)); break;
+  case "thinking_only": ok.content = [{type: "thinking", thinking: "internal"}]; process.stdout.write(JSON.stringify(ok)); break;
+  case "thinking_only_truncated": ok.content = [{type: "thinking", thinking: "internal"}]; ok.stop_reason = "max_tokens"; process.stdout.write(JSON.stringify(ok)); break;
   case "split_utf8": {
     const data = Buffer.from(JSON.stringify(ok));
     const at = data.indexOf(Buffer.from("中")) + 1;
@@ -159,7 +161,7 @@ after(() => {
 test("version remains a plain-text compatibility exception", () => {
   const run = runWrapper(["--version"]);
   assert.equal(run.status, 0);
-  assert.equal(run.stdout, "mmx-chat 2.3.0\n");
+  assert.equal(run.stdout, "mmx-chat 2.4.0\n");
 });
 
 test("success preserves the public JSON schema and skips auth status", () => {
@@ -177,8 +179,8 @@ test("success preserves the public JSON schema and skips auth status", () => {
   assert.ok(!args.includes("--quiet"));
   assert.equal(fs.readFileSync(invocationLog, "utf8"), "text chat\n");
   assert.equal(args[args.indexOf("--max-tokens") + 1], "524288");
-  assert.equal(args[args.indexOf("--timeout") + 1], "21600");
-  assert.equal(JSON.parse(fs.readFileSync(profile, "utf8")).wrapper_timeout_seconds, 21630);
+  assert.equal(args[args.indexOf("--timeout") + 1], "600");
+  assert.equal(JSON.parse(fs.readFileSync(profile, "utf8")).wrapper_timeout_seconds, 630);
 });
 
 test("BOM, Chinese, shell metacharacters, system, and model are preserved without argv leakage", () => {
@@ -254,6 +256,42 @@ test("complete prompt and system are forwarded beyond the old byte limits", () =
   const messages = JSON.parse(fs.readFileSync(messagesDumpPath, "utf8"));
   assert.equal(messages[0].content, system);
   assert.equal(messages[1].content, prompt);
+});
+
+test("timeout flags win over the environment, which wins over the profile", () => {
+  writeInputs("timeouts");
+  const args = JSON.parse(fs.readFileSync(argsDumpPath, "utf8"));
+  assert.equal(args[args.indexOf("--timeout") + 1], "600");
+  assert.equal(jsonResult(runChat(["--timeout", "7"], { MMX_CHAT_REQ_TIMEOUT: "70" })).status, "ok");
+  const flagged = JSON.parse(fs.readFileSync(argsDumpPath, "utf8"));
+  assert.equal(flagged[flagged.indexOf("--timeout") + 1], "7");
+  const fromEnv = jsonResult(runChat([], { MMX_CHAT_REQ_TIMEOUT: "70" }));
+  assert.equal(fromEnv.status, "ok");
+  const envArgs = JSON.parse(fs.readFileSync(argsDumpPath, "utf8"));
+  assert.equal(envArgs[envArgs.indexOf("--timeout") + 1], "70");
+  for (const invalid of ["0", "1.2", "abc", "3601"]) {
+    assert.equal(jsonResult(runChat(["--timeout", invalid])).status, "usage_error");
+    assert.equal(jsonResult(runChat(["--wrap-timeout", invalid])).status, "usage_error");
+  }
+  assert.equal(jsonResult(runChat(["--timeout", "100", "--wrap-timeout", "100"])).status, "usage_error");
+});
+
+test("a reply made only of thinking blocks is a budget problem, not a contract problem", () => {
+  writeInputs("thinking");
+  const result = jsonResult(runChat([], { FAKE_MODE: "thinking_only" }));
+  assert.equal(result.status, "thinking_budget_exhausted");
+  assert.match(result.note, /--max-tokens/);
+  const truncated = jsonResult(runChat([], { FAKE_MODE: "thinking_only_truncated" }));
+  assert.equal(truncated.status, "thinking_budget_exhausted");
+});
+
+test("auth and timeout failures carry an actionable instruction", () => {
+  writeInputs("auth");
+  const auth = jsonResult(runChat([], { FAKE_MODE: "auth" }));
+  assert.equal(auth.status, "auth_error");
+  assert.match(auth.error, /mmx auth login/);
+  const timedOut = jsonResult(runChat([], { FAKE_MODE: "quota" }));
+  assert.equal(timedOut.status, "quota_error");
 });
 
 test("full output survives the old combined capture limit", () => {
@@ -515,4 +553,72 @@ test("managed release rejects mixed or interrupted installation before launching
   for (const name of ["agy/scripts", "agy", "mmx/scripts", "mmx/profiles", "mmx",
                       "cross-validation/scripts", "cross-validation"]) fs.rmdirSync(path.join(managed, name));
   fs.rmdirSync(managed);
+});
+
+// The managed root is detected from its layout, so the same rule holds on
+// every platform instead of one host's absolute path.
+test("a managed layout without a release marker fails closed before the CLI runs", () => {
+  const managed = path.join(root, "managed-layout");
+  const files = {
+    "agy/scripts/agy_runner.py": Buffer.from("# fixture runner"),
+    "mmx/scripts/mmx-chat.js": fs.readFileSync(wrapper),
+    "mmx/profiles/local.json": fs.readFileSync(profile),
+    "cross-validation/scripts/cross_validate.py": Buffer.from("# fixture coordinator"),
+  };
+  for (const [name, bytes] of Object.entries(files)) {
+    const file = path.join(managed, name);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, bytes);
+  }
+  fs.writeFileSync(invocationLog, "");
+  const run = spawnSync(process.execPath, [path.join(managed, "mmx", "scripts", "mmx-chat.js"),
+    "--prompt-file", promptPath], {
+    env: { ...process.env, PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`, TMPDIR: wrapperTmp,
+      TMP: wrapperTmp, TEMP: wrapperTmp, FAKE_INVOCATIONS: invocationLog },
+    encoding: "utf8", timeout: 15000,
+  });
+  const result = jsonResult(run);
+  assert.equal(result.status, "install_mismatch");
+  assert.equal(result.cli_invoked, false);
+  assert.equal(fs.readFileSync(invocationLog, "utf8"), "");
+  for (const name of Object.keys(files)) unlinkKnown(path.join(managed, name));
+  for (const name of ["agy/scripts", "agy", "mmx/scripts", "mmx/profiles", "mmx",
+                      "cross-validation/scripts", "cross-validation"]) fs.rmdirSync(path.join(managed, name));
+  fs.rmdirSync(managed);
+});
+
+test("a plain install without siblings and without a marker is not treated as managed", () => {
+  const plain = path.join(root, "plain-layout");
+  const files = {
+    "mmx/scripts/mmx-chat.js": fs.readFileSync(wrapper),
+    "mmx/profiles/local.json": fs.readFileSync(profile),
+  };
+  for (const [name, bytes] of Object.entries(files)) {
+    const file = path.join(plain, name);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, bytes);
+  }
+  writeInputs("plain install");
+  fs.writeFileSync(invocationLog, "");
+  const run = spawnSync(process.execPath, [path.join(plain, "mmx", "scripts", "mmx-chat.js"),
+    "--prompt-file", promptPath], {
+    env: { ...process.env, PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`, TMPDIR: wrapperTmp,
+      TMP: wrapperTmp, TEMP: wrapperTmp, FAKE_INVOCATIONS: invocationLog },
+    encoding: "utf8", timeout: 15000,
+  });
+  assert.equal(jsonResult(run).status, "ok");
+  assert.equal(fs.readFileSync(invocationLog, "utf8"), "text chat\n");
+  for (const name of Object.keys(files)) unlinkKnown(path.join(plain, name));
+  for (const name of ["mmx/scripts", "mmx/profiles", "mmx"]) fs.rmdirSync(path.join(plain, name));
+  fs.rmdirSync(plain);
+});
+
+// Both sides of the cross-validation pair must return the same structure,
+// otherwise their findings cannot be compared.
+const siblingSchema = path.join(skillRoot, "..", "zcode", "references", "review-v1.schema.json");
+test("the review schema matches the ZCode copy byte for byte", {
+  skip: fs.existsSync(siblingSchema) ? false : "ZCode skill is not installed next to this skill",
+}, () => {
+  const local = fs.readFileSync(path.join(skillRoot, "references", "review-v1.schema.json"));
+  assert.deepEqual(local, fs.readFileSync(siblingSchema));
 });

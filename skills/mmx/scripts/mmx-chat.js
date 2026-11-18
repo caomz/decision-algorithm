@@ -12,12 +12,15 @@ const path = require("path");
 const { spawn, spawnSync } = require("child_process");
 const { TextDecoder } = require("util");
 
-const VERSION = "2.3.0";
+const VERSION = "2.4.0";
 const DEFAULT_PROFILE = path.join(__dirname, "..", "profiles", "local.json");
-const MANAGED_ROOT = "/Volumes/WorkSSD/.claude/skills/mmx";
+const LEGACY_MANAGED_ROOT = "/Volumes/WorkSSD/.claude/skills/mmx";
 const RELEASE_MARKER = ".gstack-cross-validation-release.json";
+const MANAGED_SIBLINGS = ["agy", "cross-validation"];
 const MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const TERMINAL_REASONS = new Set(["end_turn", "stop_sequence", "max_tokens"]);
+const MAX_TIMEOUT_SEC = 3600; // ceiling for the per-call timeout flags
+const MAX_TIMER_SEC = 2147483; // Node timer range for profile and environment values
 let requestedModel = null;
 let cliInvoked = false;
 
@@ -57,6 +60,16 @@ function tokenCount(value) {
   return Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
+// A managed release installs <skills_root>/{agy,mmx,cross-validation} with the
+// marker next to them. Detect that layout instead of hardcoding one host's
+// path, so the same rule holds on every platform.
+function isManagedLayout(skillsRoot) {
+  return MANAGED_SIBLINGS.every(name => {
+    try { return fs.statSync(path.join(skillsRoot, name)).isDirectory(); }
+    catch { return false; }
+  });
+}
+
 function validateInstall() {
   const skillRoot = fs.realpathSync(path.join(__dirname, ".."));
   const skillsRoot = path.dirname(skillRoot);
@@ -64,7 +77,10 @@ function validateInstall() {
   let markerStat;
   try { markerStat = fs.lstatSync(marker); }
   catch (err) {
-    if (err.code === "ENOENT" && skillRoot !== MANAGED_ROOT) return;
+    // No marker: only a managed layout must fail closed. A plain install
+    // (this repository, a symlinked skill) has no release to verify.
+    const managed = skillRoot === LEGACY_MANAGED_ROOT || isManagedLayout(skillsRoot);
+    if (err.code === "ENOENT" && !managed) return;
     throw err;
   }
   if (!markerStat.isFile()) throw new Error("release marker is not a regular file");
@@ -112,6 +128,15 @@ function timeoutOverride(name, defaultValue) {
   if (value === undefined) return defaultValue;
   if (!/^\d+$/.test(value) || !positiveInteger(Number(value))) usageError(`${name} must be a positive integer`);
   return Number(value);
+}
+
+// CLI flags win over the environment, which wins over the profile.
+function timeoutArgument(value) {
+  if (value === undefined) return null;
+  if (!/^\d+$/.test(value) || !positiveInteger(Number(value))) usageError("Timeout flags must be a positive integer");
+  const seconds = Number(value);
+  if (seconds > MAX_TIMEOUT_SEC) usageError(`Timeout flags must not exceed ${MAX_TIMEOUT_SEC} seconds`);
+  return seconds;
 }
 
 // ---------------------------------------------------------------------------
@@ -338,13 +363,15 @@ function readInput(file, label) {
 function apiFailure(exitCode, code) {
   const result = { status: "api_error", exit_code: exitCode, code };
   if (exitCode === 3 || [3, 401, 403].includes(code)) {
-    return { ...result, status: "auth_error", error: "MMX authentication failed. Check the active login locally." };
+    return { ...result, status: "auth_error",
+      error: "MMX authentication failed. Run `mmx auth login` locally, then retry." };
   }
   if (exitCode === 4 || [429, 1028, 1030].includes(code)) {
     return { ...result, status: "quota_error", error: "MMX quota or rate limit blocked the request." };
   }
   if (exitCode === 5 || [408, 504].includes(code)) {
-    return { ...result, status: "timeout", error: "The MMX CLI reported a request timeout." };
+    return { ...result, status: "timeout", error: "The MMX CLI reported a request timeout.",
+      note: "Retry with a larger --timeout/--wrap-timeout pair if the prompt is large." };
   }
   if (exitCode === 130) {
     return { ...result, status: "cancelled", error: "The MMX CLI was interrupted." };
@@ -388,7 +415,17 @@ function classifyReply(out, err, exitCode) {
     return schemaFailure(exitCode, "Invalid or unsupported response content blocks.");
   }
   const text = body.content.filter(block => block.type === "text").map(block => block.text).join("\n");
-  if (!text.trim()) return schemaFailure(exitCode, "No response text.");
+  if (!text.trim()) {
+    // The server thinks by default and the thinking blocks are not text. A
+    // reply made only of thinking means the output budget was consumed
+    // before any answer was written, not that the contract drifted.
+    const thinking = body.content.some(block => block.type === "thinking" || block.type === "redacted_thinking");
+    if (thinking) {
+      return { status: "thinking_budget_exhausted", exit_code: exitCode,
+        note: "the model produced only thinking blocks and no text: the output budget was fully consumed by server-side thinking. Re-run with a larger --max-tokens." };
+    }
+    return schemaFailure(exitCode, "No response text.");
+  }
   const truncated = body.stop_reason === "max_tokens";
   const result = {
     status: "ok", exit_code: exitCode, text, model: body.model, model_identity_source: "response.model",
@@ -410,7 +447,8 @@ async function main() {
   const options = new Map();
   for (let i = 0; i < argv.length; i += 2) {
     const flag = argv[i] === "-m" ? "--model" : argv[i];
-    if (!["--prompt-file", "--system-file", "--model", "--max-tokens", "--profile-file"].includes(flag)) {
+    if (!["--prompt-file", "--system-file", "--model", "--max-tokens", "--profile-file",
+          "--timeout", "--wrap-timeout"].includes(flag)) {
       usageError("Unknown MMX wrapper option.");
     }
     if (i + 1 >= argv.length || !argv[i + 1] || argv[i + 1].startsWith("--") || options.has(flag)) {
@@ -439,10 +477,15 @@ async function main() {
   if ((maxTokensArg !== undefined && !/^\d+$/.test(maxTokensArg)) || !positiveInteger(maxTokens)) {
     usageError("--max-tokens must be a positive integer.");
   }
-  const requestTimeout = timeoutOverride("MMX_CHAT_REQ_TIMEOUT", profile.request_timeout_seconds);
-  const wrapperTimeout = timeoutOverride("MMX_CHAT_WRAP_TIMEOUT", profile.wrapper_timeout_seconds);
-  if (wrapperTimeout <= requestTimeout || wrapperTimeout > 2147483) {
-    usageError("The wrapper timeout must exceed the request timeout and fit the Node timer range.");
+  const requestTimeout = timeoutArgument(options.get("--timeout"))
+    ?? timeoutOverride("MMX_CHAT_REQ_TIMEOUT", profile.request_timeout_seconds);
+  const wrapperTimeout = timeoutArgument(options.get("--wrap-timeout"))
+    ?? timeoutOverride("MMX_CHAT_WRAP_TIMEOUT", profile.wrapper_timeout_seconds);
+  if (wrapperTimeout <= requestTimeout) {
+    usageError("The wrapper timeout must exceed the request timeout.");
+  }
+  if (requestTimeout > MAX_TIMER_SEC || wrapperTimeout > MAX_TIMER_SEC) {
+    usageError("Timeouts must fit the Node timer range.");
   }
 
   const prompt = readInput(promptFile, "prompt");
