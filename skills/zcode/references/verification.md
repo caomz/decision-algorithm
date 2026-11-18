@@ -37,7 +37,9 @@ const child = spawn(process.execPath, [
 ], { shell: false, stdio: ["ignore", "pipe", "pipe"] });
 ```
 
-Review/Challenge 增加 `--mode review` 或 `--mode challenge`，并传 `--evidence-ids-file`。先明确材料 ID，wrapper 不会给未覆盖材料虚构引用。`ids.json` 必须是非空、无重复的**字符串**数组（如 `["E1","E2"]`）；对象数组会被 `validateIds` 拒绝为 `input_error`。正文置于 JSON 数据边界，避免 `/logout` 等开头被 CLI 当作本地命令。prompt 最终仍存在于子进程 argv；不承诺进程列表隐私。
+Review/Challenge 增加 `--mode review` 或 `--mode challenge`，并传 `--evidence-ids-file`。先明确材料 ID，wrapper 不会给未覆盖材料虚构引用。`ids.json` 必须是非空、无重复的**字符串**数组（如 `["E1","E2"]`）；对象数组会被 `validateIds` 拒绝为 `input_error`。正文置于 JSON 数据边界，避免 `/logout` 等开头被 CLI 当作本地命令。
+
+**大材料与命令行长度**：CLI 只接受 `--prompt <text>`，prompt 走 argv。Windows 命令行上限约 32 KiB，超过即 `spawn ENAMETOOLONG`（表现为 `input_error`、`cli_invoked=false`）。wrapper 因此在 prompt 超过 24 KiB 时改用 `--attach <私有文件>`，argv 只保留一句短指令；材料落在运行目录 `work/attached-material.txt`（0700/0600），完整 prompt 仍另存 `prompt.txt` 供审计。阈值以下走原 argv 路径。
 
 stdout 恰好一个 JSON 对象，包含 `status`、`cli_invoked`、`exit_code`、`signal`、`complete`、`model`、`stop_reason`、`truncated`、`usage`、`review_gate` 和存在时的 `artifacts_dir`。成功时还包含 `text`、`provider`、`model_identity_source`、session/turn/trace 标识；Review 有 `review`。错误保留未知字段为 `null`，不从退出码 1 推断认证或额度；仅结构化错误码 401/403、429 分别归类。
 

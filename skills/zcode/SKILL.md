@@ -1,7 +1,7 @@
 ---
 name: zcode
 description: Use the ZCode CLI for text-only chat, review, challenge, or an explicitly requested second opinion. Applies to "/zcode", "用 ZCode 问一下", "通过 zcode cli 交叉验证" and review workflows that name ZCode.
-version: 1.3.0
+version: 1.4.0
 ---
 
 # /zcode — ZCode 文本复核

@@ -67,8 +67,14 @@ function positiveInteger(value) {
 function parseArgs(argv) {
   const out = { promptFiles: [], promptsDir: null, concurrency: null, mode: "chat",
     evidenceIdsFile: null, cliPath: null, timeout: null, receiptFile: null };
+  const seen = new Set();
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
+    // A repeated flag is a usage error: silently keeping the last value would
+    // hide a caller mistake that the single-shot wrapper rejects outright.
+    // --prompt-file is the one flag that may repeat.
+    if (arg !== "--prompt-file" && seen.has(arg)) usageError(`${arg} must not be given more than once.`);
+    seen.add(arg);
     const next = () => {
       if (i + 1 >= argv.length) usageError(`${arg} requires a value.`);
       return argv[++i];
@@ -239,6 +245,13 @@ async function runShardWithRetries(shard, fixedArgs) {
   }
   const retryReason = first.receipt.status;
   await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
+  // A cancellation during the backoff must not spawn a new child.
+  if (cancelled) {
+    return { shard: shard.label, prompt_file: shard.file, retried: false, retry_reason: retryReason,
+      retry_backoff_seconds: RETRY_DELAY_MS / 1000,
+      duration_seconds: first.duration + RETRY_DELAY_MS / 1000,
+      first_attempt: first.receipt, status: "cancelled", complete: false };
+  }
   const second = await runWrapperOnce(shard.file, fixedArgs);
   return {
     shard: shard.label, prompt_file: shard.file, retried: true, retry_reason: retryReason,
@@ -265,11 +278,14 @@ function aggregate(results, shards, args, started) {
     if (!result) continue; // A cancelled batch may leave unscheduled shards empty.
     if (result.status === "ok") {
       okCount++;
-      if (result.complete === true && result.truncated !== true) transportOkCount++;
-      else truncatedCount++;
-      if (result.review_gate === "PASS") reviewPass++;
-      else if (result.review_gate === "FAIL") reviewFail++;
-      else reviewNotEvaluated++;
+      if (result.complete === true && result.truncated !== true) {
+        transportOkCount++;
+        // Only a fully delivered shard may contribute to the content gate: a
+        // truncated reply must not vote on the review verdict.
+        if (result.review_gate === "PASS") reviewPass++;
+        else if (result.review_gate === "FAIL") reviewFail++;
+        else reviewNotEvaluated++;
+      } else truncatedCount++;
     }
     if (result.retried) retriedCount++;
   }
@@ -313,9 +329,18 @@ async function main() {
   const args = parseArgs(argv);
   if (args.evidenceIdsFile !== null) {
     // Fail fast at the batch level instead of letting every shard spawn a
-    // wrapper that dies with input_error on the same missing ids file.
-    try { if (!fs.statSync(args.evidenceIdsFile).isFile()) throw new Error(); }
-    catch { usageError(`--evidence-ids-file not found or not a file: ${args.evidenceIdsFile}`); }
+    // wrapper that dies with input_error on the same malformed ids file.
+    let raw;
+    try { raw = fs.readFileSync(args.evidenceIdsFile); }
+    catch { usageError(`--evidence-ids-file is not readable: ${args.evidenceIdsFile}`); }
+    let parsed;
+    try { parsed = JSON.parse(raw.toString("utf8")); }
+    catch { usageError("--evidence-ids-file is not valid JSON."); }
+    // The upstream validator owns the exact id rules; reuse it so the batch
+    // gate cannot drift from the single-shot contract.
+    const { validateIds } = require("./review.js");
+    try { validateIds(parsed); }
+    catch { usageError("--evidence-ids-file must be a nonempty unique array of plain id strings."); }
   }
   const shards = collectShardFiles(args);
   const timeout = args.timeout ?? DEFAULT_TIMEOUT_SECONDS;

@@ -109,7 +109,7 @@ function main() {
 
   const manifest = {
     format: 1,
-    version: "1.3.0",
+    version: "1.4.0",
     files: digests,
     review_sha256: digests["scripts/review.js"],
   };

@@ -58,6 +58,12 @@ function usageError(message) {
   throw Object.assign(new Error(message), { envelope: { status: "usage_error", error: message } });
 }
 
+function validModel(value) {
+  // Mirrors the single-shot wrapper: a credential-looking id is refused so a
+  // key can never travel as a model name.
+  return typeof value === "string" && MODEL_PATTERN.test(value) && !/^sk-/i.test(value);
+}
+
 function positiveInteger(value) {
   return Number.isSafeInteger(value) && value > 0;
 }
@@ -89,8 +95,13 @@ function readProfileBudget(file) {
 function parseArgs(argv) {
   const out = { promptFiles: [], promptsDir: null, concurrency: null, model: null,
     maxTokens: null, timeout: null, wrapTimeout: null, profileFile: null, receiptFile: null };
+  const seen = new Set();
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
+    // A repeated flag is a usage error (--prompt-file is the one exception),
+    // matching the single-shot wrapper's rejection of duplicate flags.
+    if (arg !== "--prompt-file" && seen.has(arg)) usageError(`${arg} must not be given more than once.`);
+    seen.add(arg);
     const next = () => {
       if (i + 1 >= argv.length) usageError(`${arg} requires a value.`);
       return argv[++i];
@@ -137,7 +148,7 @@ function parseArgs(argv) {
   if (out.concurrency !== null && (out.concurrency < 1 || out.concurrency > MAX_CONCURRENCY)) {
     usageError(`--concurrency must be between 1 and ${MAX_CONCURRENCY}.`);
   }
-  if (out.model !== null && !MODEL_PATTERN.test(out.model)) usageError("--model must be a plain model id.");
+  if (out.model !== null && !validModel(out.model)) usageError("--model must be a plain model id.");
   if (out.timeout !== null && out.wrapTimeout !== null && out.wrapTimeout <= out.timeout) {
     usageError("The wrapper timeout must exceed the request timeout.");
   }
@@ -286,6 +297,12 @@ async function runShardWithRetries(shard, fixedArgs, effectiveBudget, retryBudge
   if (retryReason === "quota_error") {
     await new Promise(resolve => setTimeout(resolve, QUOTA_RETRY_DELAY_MS));
     backoffSeconds = QUOTA_RETRY_DELAY_MS / 1000;
+    // A cancellation during the backoff must not spawn a new child.
+    if (cancelled) {
+      return { shard: shard.label, prompt_file: shard.file, retried: false, retry_reason: retryReason,
+        retry_backoff_seconds: backoffSeconds, duration_seconds: first.duration + backoffSeconds,
+        first_attempt: first.receipt, status: "cancelled", complete: false };
+    }
     second = await runWrapperOnce(shard.file, fixedArgs);
   } else {
     // Swap the caller budget for the profile budget on the retry attempt.

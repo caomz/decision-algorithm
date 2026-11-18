@@ -1,19 +1,19 @@
 {
   "format": 1,
-  "version": "1.3.0",
+  "version": "1.4.0",
   "files": {
-    "README.md": "1f9940d2f0e00e377d8de4808b174636a984040bf346dca4b25d3488bff81377",
-    "SKILL.md": "dde8e082376c5a8980121f91209df4572953bc2275e0d97c0fa38f98f497c815",
+    "README.md": "c97f7e7afee1ad6ac3325321017a58274064cdd83f8ffca154e5589b9d306536",
+    "SKILL.md": "2bd66577441d1a6edab7a512c08de1500659d564e95943cf2ed1bcea856fa7ee",
     "agents/openai.yaml": "e9b77f7b33258700dfae902efc91a4058f7fc76f6d5f675641eb201fb9fd2052",
     "references/review-v1.schema.json": "f269a080098ecb4ab34ed8fd5aa4e76206ba662a6358be7fbd5451e9392bc546",
-    "references/verification.md": "9a342b4caa115feb7ad99114855a27cc85eeae61e43d5eff998b1422f0a34073",
-    "scripts/repin-release.js": "6b587dca21593b233a0fa1df575f5137c2ad6c8f71450c16b8f97a40af48ee68",
+    "references/verification.md": "9656289b42976335db8e5a6e366011355bcc17f48501800c0ce095fc630741ef",
+    "scripts/repin-release.js": "fe5673f0da4d39ed55aeb330e048870e2a598e2b9e1a4c5b67fcfe4f26c98d22",
     "scripts/review.js": "0ea0bc9f01b8969876a159d9d419719b333ba2b6f28e865b2b2919e60ecaa1ff",
-    "scripts/zcode-batch.js": "8b5450c493b83d4feb5bef91edf567ce0c60f760e9ba76efd161e586f34f0b6e",
-    "scripts/zcode-chat.js": "f3358b59722e00be4f7d9dae69c8f0e89d6653026ccb8813b574f462eb38650d",
+    "scripts/zcode-batch.js": "a0599ae6644a567815dad2d043b5a838646aca008d19bc7c171c75f9c9ebfe8a",
+    "scripts/zcode-chat.js": "3f0e0c7e5f297d79a8c4a5889227b76957f72357e40c964cf91d899aa4f7737e",
     "scripts/zcode-run.js": "23bdc345377e31ccec85a50469edf86c02a4ceced79f01e24edea9d1f94980fe",
     "tests/fixtures/fake-zcode.cjs": "03b71562fcf09247d4d703b0d2ae15d0694fe8e507978b8fc22ab1b7df48a7ec",
-    "tests/zcode-batch.test.js": "2ac423c705afbf0c8fdb98c2758524601d8056ace4b017963acefa67e83a4d0a",
+    "tests/zcode-batch.test.js": "4913198418ffe63d8c346dab11b4c6fc05ba6345aa7e4842bb6672e03741e6a0",
     "tests/zcode-chat.test.js": "ff45a22e585086e99a288e45214aa3f656b3d7c5f54bb5fe1a7116e4a7fac9a1"
   },
   "review_sha256": "0ea0bc9f01b8969876a159d9d419719b333ba2b6f28e865b2b2919e60ecaa1ff"

@@ -22,7 +22,9 @@ const idsFile = path.join(root, "ids.json");
 
 fs.mkdirSync(stateDir);
 after(() => { try { fs.rmSync(root, { recursive: true, force: true }); } catch {} });
-fs.writeFileSync(idsFile, JSON.stringify([{ id: "E1", quote: "evidence one" }]));
+// The upstream validator requires a nonempty unique array of plain id
+// STRINGS; an object array is rejected as input_error.
+fs.writeFileSync(idsFile, JSON.stringify(["E1", "E2"]));
 fs.writeFileSync(fakeWrapper, `
 "use strict";
 const fs = require("node:fs");
@@ -57,7 +59,7 @@ if (prompt.includes("REVIEW_PASS")) { emit(ok({ review_gate: "PASS" })); return;
 if (prompt.includes("REVIEW_FAIL")) { emit(ok({ review_gate: "FAIL" })); return; }
 if (prompt.includes("AUTH_ERR")) { emit({ status: "auth_error", cli_invoked: false, complete: false, review_gate: "NOT_EVALUATED", error: "auth failed" }); return; }
 if (prompt.includes("POLICY_ERR")) { emit({ status: "policy_violation", cli_invoked: true, complete: false, review_gate: "NOT_EVALUATED", error: "tool used" }); return; }
-if (prompt.includes("TRUNC")) { emit(ok({ truncated: true, complete: false, stop_reason: "max_tokens" })); return; }
+if (prompt.includes("TRUNC")) { emit(ok({ truncated: true, complete: false, stop_reason: "max_tokens", review_gate: "PASS" })); return; }
 if (prompt.includes("QUOTA_ONCE") && invocations === 0) { emit({ status: "quota_error", cli_invoked: true, complete: false, review_gate: "NOT_EVALUATED", error: "rate limited" }); return; }
 if (prompt.includes("TIMEOUT_ONCE") && invocations === 0) { emit({ status: "timeout", cli_invoked: true, complete: false, review_gate: "NOT_EVALUATED", error: "timed out" }); return; }
 if (prompt.includes("QUOTA_ALWAYS")) { emit({ status: "quota_error", cli_invoked: true, complete: false, review_gate: "NOT_EVALUATED", error: "rate limited" }); return; }
@@ -123,6 +125,20 @@ test("usage: a missing evidence-ids file fails fast at the batch level", () => {
   const run = runBatch(["--prompt-file", file, "--mode", "review", "--evidence-ids-file", missing]);
   assert.equal(receiptOf(run).status, "usage_error");
   assert.ok(run.stderr === "", "no wrapper is spawned for a batch-level usage error");
+});
+
+test("usage: a malformed evidence-ids file fails fast at the batch level", () => {
+  const file = shardFile("x.txt", "hi");
+  const bad = path.join(root, "bad-ids.json");
+  fs.writeFileSync(bad, JSON.stringify([{ id: "E1", quote: "q" }]));
+  const run = runBatch(["--prompt-file", file, "--mode", "review", "--evidence-ids-file", bad]);
+  assert.equal(receiptOf(run).status, "usage_error");
+});
+
+test("usage: a repeated flag is refused instead of silently taking the last value", () => {
+  const file = shardFile("x.txt", "hi");
+  const run = runBatch(["--prompt-file", file, "--mode", "chat", "--mode", "review"]);
+  assert.equal(receiptOf(run).status, "usage_error");
 });
 
 test("pass-through: mode, evidence ids, cli path and timeout reach every shard", () => {
@@ -194,6 +210,18 @@ test("truncated shard: transport NOT_EVALUATED and counted", () => {
   assert.equal(run.status, 1);
   assert.equal(receipt.transport_gate, "NOT_EVALUATED");
   assert.equal(receipt.batch.truncated_or_incomplete, 1);
+});
+
+test("a truncated shard must not vote on the content gate", () => {
+  // TRUNC replies with complete=false but a review_gate of its own; a shard
+  // that was not fully delivered must not contribute to the review verdict.
+  const files = [shardFile("tv.txt", "REVIEW_PASS delivered"), shardFile("tv2.txt", "TRUNC partial")];
+  const run = runBatch(["--prompt-file", files[0], "--prompt-file", files[1], "--mode", "review", "--evidence-ids-file", idsFile]);
+  const receipt = receiptOf(run);
+  assert.equal(receipt.transport_gate, "NOT_EVALUATED");
+  assert.equal(receipt.batch.review_pass, 1, "only the fully delivered shard votes");
+  assert.equal(receipt.batch.truncated_or_incomplete, 1);
+  assert.equal(receipt.gate, "NOT_EVALUATED", "a truncated shard cannot make the batch PASS");
 });
 
 test("quota retry: one backoff retry then ok, first attempt kept", () => {

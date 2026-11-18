@@ -15,7 +15,7 @@
 //     The explicit EXEMPT_RE guard keeps wrapper-internal `mmx-chat-*` dirs
 //     and mcode's `mcv.*` dirs untouchable even if the shape rule is widened
 //     later by mistake. `zcode-text-*` evidence dirs never match either.
-//   - only dirs whose age (max(birthtime>0, mtime)) exceeds 24h, so a running
+//   - only dirs whose age (mtime, falling back to birthtime) exceeds 24h, so a running
 //     call is never touched.
 //   - reparse points / symlinks are rejected before reading and again before
 //     deleting (realpath must stay a direct child of the temp root).
@@ -184,7 +184,9 @@ for (const e of entries) {
   // Age = last activity (mtime), falling back to creation time. mtime is the
   // practical signal: a call writes prompt.txt at start, so a dir untouched for
   // 24h cannot belong to a running call. birthtime is used only when mtime is
-  // unavailable (some volumes report 0).
+  // unavailable (some volumes report 0). Using the newer of the two would let
+  // a touched-but-old dir count as recent; using mtime is the conservative
+  // choice, so keep it and state it exactly as implemented.
   const mtime = Number.isFinite(lst.mtimeMs) && lst.mtimeMs > 0 ? lst.mtimeMs : 0;
   const birth = Number.isFinite(lst.birthtimeMs) && lst.birthtimeMs > 0 ? lst.birthtimeMs : 0;
   const born = mtime || birth;

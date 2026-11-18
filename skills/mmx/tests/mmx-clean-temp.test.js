@@ -62,19 +62,25 @@ test("dry-run lists every stale shape-matched dir and deletes nothing", () => {
   const badNoDot = fx.stale("mmxfoo");
   const badUpper = fx.stale("MMX.ABCDEF");
   const plainFile = fx.file("mmx.file12", "not a dir");
+  const linked = path.join(fx.root, "mmxlnk.abcdef");
   fx.stale("mmxlnk.abcdef");
-  try { fs.symlinkSync(fx.root, path.join(fx.root, "mmxlnk.abcdef", "inner"), "junction"); }
-  catch { /* links unavailable: degrade to the non-link assertions below */ }
+  let linkCreated = true;
+  try { fs.symlinkSync(fx.root, path.join(linked, "inner"), "junction"); }
+  catch { linkCreated = false; }
 
   const result = run([], fx.root);
   assert.equal(result.status, 0);
   const out = receipt(result);
   assert.equal(out.mode, "dry-run");
   assert.equal(out.matched, 7, "five stale shapes + fresh + linked shape match the shape rule");
-  assert.equal(out.aged, 5, "the linked candidate is skipped by containsLink");
+  assert.equal(out.aged, linkCreated ? 5 : 6, linkCreated
+    ? "the linked candidate is skipped by containsLink"
+    : "without a link the shape-matched candidate ages normally");
   assert.equal(out.deleted, 0);
-  assert.equal(out.candidates.length, 5);
-  assert.deepEqual(out.candidates.map(c => c.name).sort(), expected.slice().sort());
+  assert.equal(out.candidates.length, linkCreated ? 5 : 6);
+  const listed = out.candidates.map(c => c.name);
+  for (const name of expected) assert.ok(listed.includes(name), `${name} must be listed`);
+  if (!linkCreated) assert.ok(listed.includes("mmxlnk.abcdef"));
   for (const keep of [fresh, exemptChat, exemptMcv, badShort, badNoDot, badUpper, plainFile]) {
     assert.ok(fs.existsSync(keep), `${path.basename(keep)} must survive dry-run`);
   }

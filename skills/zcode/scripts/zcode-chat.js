@@ -8,7 +8,7 @@ const { createHash } = require("node:crypto");
 const { spawn, spawnSync } = require("node:child_process");
 const { buildPrompt, validateReview, validateIds, strictJson } = require("./review.js");
 
-const VERSION = "1.3.0";
+const VERSION = "1.4.0";
 const SUPPORTED_CLI = "0.17.1";
 // The CLI accepts build/edit/plan/yolo/guarded. This wrapper only ever uses the
 // two read-only modes: macOS keeps the plan mode it was accepted with, Windows
@@ -16,6 +16,10 @@ const SUPPORTED_CLI = "0.17.1";
 const CLI_MODES = Object.freeze(["plan", "guarded"]);
 const DEFAULT_MODE = Object.freeze({ win32: "guarded" });
 const MAX_BYTES = 64 * 1024 * 1024;
+// Windows caps a command line at roughly 32 KiB, so a prompt larger than this
+// cannot travel on argv. Above the limit the material is attached as a file.
+const ARGV_PROMPT_LIMIT = 24 * 1024;
+const ATTACHED_PROMPT = "The attached file contains the complete request material. Review it exactly as instructed below and answer from it only.";
 const DENIED_TOOLS = Object.freeze([
   "Read", "Write", "Edit", "ApplyPatch", "Bash", "Glob", "Grep", "WebFetch", "WebSearch", "js",
   "Agent", "Task", "Skill", "TodoRead", "TodoWrite", "ToolSearch", "LocalToolSearch", "DeferredToolCall",
@@ -324,14 +328,22 @@ async function main(argv, deps = {}) {
     receipt.auth_environment = (deps.setupMacKeychain || setupMacKeychain)(home);
     privateWrite(path.join(directory, "prompt.txt"), prompt);
     privateWrite(path.join(directory, "launch.json"), JSON.stringify({ wrapper_version: VERSION, cli_version: receipt.cli_version, launcher: cli, entry: launch.entry, entry_sha256: hashFile(launch.entry), runtime: launch.command, mode, denied_tools: DENIED_TOOLS, timeout_seconds: args.timeout, shared_auth_data: true }, null, 2));
+    const attachedFile = path.join(work, "attached-material.txt");
+    privateWrite(attachedFile, prompt);
     const stdoutFd = fs.openSync(path.join(directory, "stdout.ndjson"), "wx", 0o600);
     const stderrFd = fs.openSync(path.join(directory, "stderr.log"), "wx", 0o600);
     const parser = new EventParser();
     const decoder = new TextDecoder("utf-8", { fatal: true });
     let pending = "", bytes = 0, problem = null, termination;
-    const cliArgs = [...launch.prefix, "--prompt", prompt, "--cwd", work, "--mode", mode, "--output-format", "stream-json", "--workflow-mode", "disabled", "--toolsearch-mode", "off", "--disallowed-tools", DENIED_TOOLS.join(","), "--no-color"];
-    child = spawn(launch.command, cliArgs, { cwd: work, env: isolatedEnv(home), shell: false, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
-    receipt.cli_invoked = Boolean(child.pid);
+    // The CLI takes the prompt on the command line, and Windows caps a command
+    // line at ~32 KiB. A large material would fail the spawn with
+    // ENAMETOOLONG, so oversized prompts are passed as an attached file and the
+    // argv keeps only a short instruction.
+    const promptBytes = Buffer.byteLength(prompt, "utf8");
+    const cliArgs = promptBytes > ARGV_PROMPT_LIMIT
+      ? [...launch.prefix, "--prompt", ATTACHED_PROMPT, "--attach", attachedFile, "--cwd", work, "--mode", mode, "--output-format", "stream-json", "--workflow-mode", "disabled", "--toolsearch-mode", "off", "--disallowed-tools", DENIED_TOOLS.join(","), "--no-color"]
+      : [...launch.prefix, "--prompt", prompt, "--cwd", work, "--mode", mode, "--output-format", "stream-json", "--workflow-mode", "disabled", "--toolsearch-mode", "off", "--disallowed-tools", DENIED_TOOLS.join(","), "--no-color"];
+    child = spawn(launch.command, cliArgs, { cwd: work, env: isolatedEnv(home), shell: false, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });    receipt.cli_invoked = Boolean(child.pid);
     progress("running");
     const stop = status => { if (!problem) { problem = status; termination = terminateTree(child); } };
     const timeout = setTimeout(() => stop("timeout"), args.timeout * 1000);

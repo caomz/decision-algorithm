@@ -105,6 +105,17 @@ test("usage: concurrency outside 1..8 is refused", () => {
   assert.equal(receiptOf(run).status, "usage_error");
 });
 
+test("usage: a credential-looking --model is refused like the single-shot wrapper", () => {
+  const run = runBatch(["--prompt-file", shardFile("x.txt", "hi"), "--model", "sk-secret-value"]);
+  assert.equal(receiptOf(run).status, "usage_error");
+});
+
+test("usage: a repeated flag is refused instead of silently taking the last value", () => {
+  const file = shardFile("x.txt", "hi");
+  const run = runBatch(["--prompt-file", file, "--concurrency", "2", "--concurrency", "4"]);
+  assert.equal(receiptOf(run).status, "usage_error");
+});
+
 test("all shards ok: gate PASS, input order preserved", () => {
   const files = [shardFile("p2.txt", "second shard"), shardFile("p1.txt", "first shard")];
   const run = runBatch(["--prompt-file", files[0], "--prompt-file", files[1], "--concurrency", "2"]);
