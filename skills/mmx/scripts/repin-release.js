@@ -9,8 +9,9 @@
 // Usage:
 //   node repin-release.js --root <skills_root> [--dry-run]
 //
-// <skills_root> is the directory that holds agy/, mmx/ and cross-validation/.
-// The marker is written to <skills_root>/.gstack-cross-validation-release.json.
+// <skills_root> is REQUIRED: it is the directory that holds agy/, mmx/ and
+// cross-validation/. The marker is written to
+// <skills_root>/.gstack-cross-validation-release.json.
 
 "use strict";
 
@@ -35,6 +36,8 @@ function usageError(message) {
 }
 
 function parseArgs(argv) {
+  // --root is required here: it must point at the managed install root that
+  // holds agy/, mmx/ and cross-validation/ side by side.
   const options = { root: null, dryRun: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -48,7 +51,7 @@ function parseArgs(argv) {
       usageError(`unknown option: ${arg}`);
     }
   }
-  if (!options.root) usageError("--root is required");
+  if (!options.root) usageError("--root is required (the managed install root that holds agy/, mmx/ and cross-validation/)");
   return options;
 }
 
