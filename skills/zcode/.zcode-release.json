@@ -7,14 +7,14 @@
     "agents/openai.yaml": "e9b77f7b33258700dfae902efc91a4058f7fc76f6d5f675641eb201fb9fd2052",
     "references/review-v1.schema.json": "f269a080098ecb4ab34ed8fd5aa4e76206ba662a6358be7fbd5451e9392bc546",
     "references/verification.md": "9656289b42976335db8e5a6e366011355bcc17f48501800c0ce095fc630741ef",
-    "scripts/repin-release.js": "fe5673f0da4d39ed55aeb330e048870e2a598e2b9e1a4c5b67fcfe4f26c98d22",
+    "scripts/repin-release.js": "03b66e58ddc551735a9a8293c20b7f38ce4c239acaf8405b28f260b5f47e7c35",
     "scripts/review.js": "e75efea752475b5919051c9167dbe27e80d986f3b65062464fb0a36d9391e36b",
-    "scripts/zcode-batch.js": "9b5065e51ec6a680fbcf23daf65c76188c8f25605269feb33078c2b591690065",
+    "scripts/zcode-batch.js": "671169b40b7e56730d6379bcf3e84d1c1918260e9630677d86f2827000609553",
     "scripts/zcode-chat.js": "1285a3ac9c5cd7c06c01a056e0fc75db51f5eae5a5232f550966a7fc66d2421f",
     "scripts/zcode-run.js": "23bdc345377e31ccec85a50469edf86c02a4ceced79f01e24edea9d1f94980fe",
     "tests/fixtures/fake-zcode.cjs": "a2e5648cdcf8d1fe270c012625553528366d01d89ff4e430424991b8d9a480df",
     "tests/zcode-batch.test.js": "4913198418ffe63d8c346dab11b4c6fc05ba6345aa7e4842bb6672e03741e6a0",
     "tests/zcode-chat.test.js": "f6ba1485408fede2714edec96c09a595c4a99006092c54844b0bd36be6034b9a"
   },
-  "review_sha256": "0ea0bc9f01b8969876a159d9d419719b333ba2b6f28e865b2b2919e60ecaa1ff"
+  "review_sha256": "e75efea752475b5919051c9167dbe27e80d986f3b65062464fb0a36d9391e36b"
 }

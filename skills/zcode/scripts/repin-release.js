@@ -107,9 +107,16 @@ function main() {
     process.exit(1);
   }
 
+  const wrapperSource = fs.readFileSync(path.join(root, "scripts/zcode-chat.js"), "utf8");
+  const versionMatch = wrapperSource.match(/^const VERSION = "([^"]+)";$/m);
+  if (!versionMatch) {
+    process.stderr.write("repin-release: cannot derive version from scripts/zcode-chat.js\n");
+    process.exit(1);
+  }
   const manifest = {
     format: 1,
-    version: "1.4.0",
+    // Derived from the wrapper's VERSION so a version bump cannot be forgotten here.
+    version: versionMatch[1],
     files: digests,
     review_sha256: digests["scripts/review.js"],
   };
