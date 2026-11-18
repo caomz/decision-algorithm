@@ -4,7 +4,7 @@
 // is served by a fake wrapper (ZCODE_BATCH_WRAPPER) that scripts replies from
 // the prompt content and a per-shard invocation counter.
 
-const { test } = require("node:test");
+const { test, after } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -21,6 +21,7 @@ const stateDir = path.join(root, "state");
 const idsFile = path.join(root, "ids.json");
 
 fs.mkdirSync(stateDir);
+after(() => { try { fs.rmSync(root, { recursive: true, force: true }); } catch {} });
 fs.writeFileSync(idsFile, JSON.stringify([{ id: "E1", quote: "evidence one" }]));
 fs.writeFileSync(fakeWrapper, `
 "use strict";

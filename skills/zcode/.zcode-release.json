@@ -13,7 +13,7 @@
     "scripts/zcode-chat.js": "f3358b59722e00be4f7d9dae69c8f0e89d6653026ccb8813b574f462eb38650d",
     "scripts/zcode-run.js": "23bdc345377e31ccec85a50469edf86c02a4ceced79f01e24edea9d1f94980fe",
     "tests/fixtures/fake-zcode.cjs": "03b71562fcf09247d4d703b0d2ae15d0694fe8e507978b8fc22ab1b7df48a7ec",
-    "tests/zcode-batch.test.js": "d8d0413d9ce17a9cf0c1952bb962001b8e902ebcf6f0dbece89a54d1fa8e642a",
+    "tests/zcode-batch.test.js": "2ac423c705afbf0c8fdb98c2758524601d8056ace4b017963acefa67e83a4d0a",
     "tests/zcode-chat.test.js": "ff45a22e585086e99a288e45214aa3f656b3d7c5f54bb5fe1a7116e4a7fac9a1"
   },
   "review_sha256": "0ea0bc9f01b8969876a159d9d419719b333ba2b6f28e865b2b2919e60ecaa1ff"

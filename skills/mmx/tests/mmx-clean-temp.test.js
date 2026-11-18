@@ -4,7 +4,7 @@
 // TEMP/TMP/TMPDIR pointed at a synthetic fixture root; the real %TEMP% is
 // never touched and --apply is only ever executed against fixtures.
 
-const { test } = require("node:test");
+const { test, after } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -14,6 +14,8 @@ const { spawnSync } = require("node:child_process");
 const script = path.resolve(__dirname, "..", "scripts", "mmx-clean-temp.js");
 const base = fs.mkdtempSync(path.join(os.tmpdir(), "mmx-clean-contract-"));
 const OLD = new Date(Date.now() - 30 * 3600 * 1000);
+
+after(() => { try { fs.rmSync(base, { recursive: true, force: true }); } catch {} });
 
 function makeFixture(name) {
   const root = path.join(base, name);

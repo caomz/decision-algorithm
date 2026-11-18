@@ -315,6 +315,10 @@ async function main() {
     process.stdout.write(`mmx-batch ${VERSION}\n`);
     return;
   }
+  if (argv.length === 1 && argv[0] === "--help") {
+    process.stdout.write(JSON.stringify({ status: "usage", usage: "node mmx-batch.js --prompt-file FILE [--prompt-file FILE ...] | --prompts-dir DIR [--concurrency 2] [--model ID] [--max-tokens N] [--timeout SEC] [--wrap-timeout SEC] [--profile-file FILE] [--receipt-file FILE]" }) + "\n");
+    return;
+  }
 
   const args = parseArgs(argv);
   const shards = collectShardFiles(args);

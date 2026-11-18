@@ -4,7 +4,7 @@
 // is served by a fake wrapper (MMX_BATCH_WRAPPER) that scripts replies from
 // the prompt content and a per-shard invocation counter.
 
-const { test } = require("node:test");
+const { test, after } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -19,6 +19,7 @@ const argsDump = path.join(root, "args-dump.txt");
 const stateDir = path.join(root, "state");
 
 fs.mkdirSync(stateDir);
+after(() => { try { fs.rmSync(root, { recursive: true, force: true }); } catch {} });
 fs.writeFileSync(fakeWrapper, `
 "use strict";
 const fs = require("node:fs");
@@ -70,6 +71,12 @@ test("usage: rejects a request with no shard source", () => {
   const run = runBatch([]);
   assert.equal(run.status, 1);
   assert.equal(receiptOf(run).status, "usage_error");
+});
+
+test("--help prints usage and exits 0 without touching a wrapper", () => {
+  const run = runBatch(["--help"]);
+  assert.equal(run.status, 0);
+  assert.equal(JSON.parse(run.stdout).status, "usage");
 });
 
 test("usage: rejects --prompt-file combined with --prompts-dir", () => {
