@@ -8,7 +8,7 @@ const { createHash } = require("node:crypto");
 const { spawn, spawnSync } = require("node:child_process");
 const { buildPrompt, validateReview, validateIds, strictJson } = require("./review.js");
 
-const VERSION = "1.2.0";
+const VERSION = "1.3.0";
 const SUPPORTED_CLI = "0.17.1";
 // The CLI accepts build/edit/plan/yolo/guarded. This wrapper only ever uses the
 // two read-only modes: macOS keeps the plan mode it was accepted with, Windows
@@ -60,7 +60,7 @@ function checkInstall() {
   if (!fs.existsSync(marker)) return;
   if (fs.lstatSync(marker).isSymbolicLink()) fail("install_mismatch");
   const manifest = strictJson(fs.readFileSync(marker, "utf8"));
-  const required = ["SKILL.md", "scripts/zcode-chat.js", "scripts/zcode-run.js", "scripts/review.js", "references/review-v1.schema.json"];
+  const required = ["SKILL.md", "scripts/zcode-chat.js", "scripts/zcode-run.js", "scripts/zcode-batch.js", "scripts/review.js", "references/review-v1.schema.json"];
   if (manifest.format !== 1 || !manifest.files || !required.every(name => Object.hasOwn(manifest.files, name))) fail("install_mismatch");
   for (const [relative, digest] of Object.entries(manifest.files)) {
     const parts = relative.split("/");

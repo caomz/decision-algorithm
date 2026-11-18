@@ -23,6 +23,7 @@ const REQUIRED_FILES = [
   "SKILL.md",
   "scripts/zcode-chat.js",
   "scripts/zcode-run.js",
+  "scripts/zcode-batch.js",
   "scripts/review.js",
   "references/review-v1.schema.json",
 ];
@@ -108,7 +109,7 @@ function main() {
 
   const manifest = {
     format: 1,
-    version: "1.2.0",
+    version: "1.3.0",
     files: digests,
     review_sha256: digests["scripts/review.js"],
   };

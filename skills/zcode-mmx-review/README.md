@@ -18,7 +18,7 @@
 
 - **持续授权**：2026-11-15 用户明确授权「进行交叉验证时，无论什么情况都默认授权」。供应方调用、材料外发、额度使用、追加复核与合理重试均视为持续获准，**不再逐轮询问**。本文优先于 skill 中较早的逐次授权要求。
 - **默认组合**：ZCode / MMX。两方首轮用相同材料和稳定证据 ID，彼此不接收对方结论。
-- **调用方式**：ZCode 用 `zcode-run.js start` 的持久 job（Review 模式配证据 ID）；MMX 用 `mmx-chat.js --prompt-file` 的同步文本入口。两方可独立并发。
+- **调用方式**：ZCode 单片用 `zcode-run.js start` 的持久 job、多分片用 `zcode-batch.js` 整批并行（Review 模式配证据 ID）；MMX 单片用 `mmx-chat.js --prompt-file` 的同步入口、多分片用 `mmx-batch.js` 整批并行。两方可独立并发。
 - **默认时限**：每方 600 秒。ZCode 监督器留 45 秒清理余量；MMX 可用 `MMX_CHAT_REQ_TIMEOUT=600`、`MMX_CHAT_WRAP_TIMEOUT=630`。
 - **结果判定**：`COMPLETED` 只表示两方有效完整返回、材料覆盖相同、模型身份可核验且相互独立（当前 GLM 与 MiniMax）。传输/超时/结构校验失败、截断、模型未知或同族时为 `NOT_EVALUATED`。
 - **独立性**：以原生传输元数据为准（`receipt.provider` / `receipt.model` / `model_identity_source`），**不采信审核正文里的自称**。不同 CLI 名字不等于模型独立。

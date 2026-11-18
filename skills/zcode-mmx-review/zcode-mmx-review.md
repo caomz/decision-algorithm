@@ -28,8 +28,8 @@
 
 1. 核对本地验证结果、材料相关性、已安装清单和 CLI；读取 [ZCode skill](../zcode/SKILL.md)、[MMX skill](../mmx/SKILL.md) 及[供应方规则](provider-agent-review.md)。两台机器上的安装位都是指向本仓库的链接，读仓库副本与读安装正本内容一致。skill 要求核对授权时，直接引用本持续授权。两个文本入口由任务负责者分别调度；旧 `cross-validation` 协调器固定为 AGY/MMX，不用于这个默认组合。
 2. 为同一任务修订创建一轮私有记录，包含材料指纹、授权来源、双方输入、请求句柄、原始回执和处置。摘要事实包可采用 `constraints`、`facts[{id,text}]`、`assumptions`、`uncovered` 并控制在 32 KiB 内；原文超过摘要校验器边界时，使用各 skill 的文件输入和证据 ID，不为沿用摘要校验器而遗漏必要证据。真实路径和原始日志仅在复核需要时发送，先脱敏。
-3. ZCode 使用 `zcode-run.js start` 的持久 job，Review 模式配证据 ID；MMX 单片用 `mmx-chat.js --prompt-file` 的同步文本入口，**多分片用 `mmx-batch.js` 一次送整批**（有界并发池并行、批级回执与传输层 gate、小预算自动按 profile 重发一次），由持续会话或持久后台监督保存 stdout/stderr 和退出码。两方可独立并发，首轮不互传结论。
-4. 默认每方请求时限 600 秒；ZCode 监督器沿用其清理余量，MMX 可用 `MMX_CHAT_REQ_TIMEOUT=600`、`MMX_CHAT_WRAP_TIMEOUT=630`，其余参数沿用 skill。MMX 批量入口的外层工具超时按 `ceil(片数/并发)×(2×wrap-timeout+30s)+60s` 预留（2 倍 wrap-timeout 覆盖一次自愈重发，漏算会把重试中的批次误判超时）。默认时限、token 和轮次是执行基线，不是重新请示的授权上限；因材料量、超时或必要补验可在 CLI 支持范围内自行调整单次参数，记录原因，不改全局登录或凭据。NEVER 绕过 wrapper 裸调 `mmx text chat`（CLI 默认 4096 预算，评审思考量必截断）。
+3. ZCode 单片用 `zcode-run.js start` 的持久 job（易断线/跨终端），**多分片用 `zcode-batch.js` 一次送整批**（有界并发池并行、双 gate：传输层 + review_gate 内容级、quota/timeout 一次退避重试），Review 模式配证据 ID；MMX 单片用 `mmx-chat.js --prompt-file` 的同步文本入口，**多分片用 `mmx-batch.js` 一次送整批**（有界并发池并行、批级回执与传输层 gate、小预算自动按 profile 重发一次），由持续会话或持久后台监督保存 stdout/stderr 和退出码。两方可独立并发，首轮不互传结论。
+4. 默认每方请求时限 600 秒；ZCode 监督器沿用其清理余量，MMX 可用 `MMX_CHAT_REQ_TIMEOUT=600`、`MMX_CHAT_WRAP_TIMEOUT=630`，其余参数沿用 skill。批量入口的外层工具超时：MMX 按 `ceil(片数/并发)×(2×wrap-timeout+30s)+60s` 预留（2 倍 wrap-timeout 覆盖一次自愈重发，漏算会把重试中的批次误判超时）；ZCode 按 `ceil(片数/并发)×(2×(timeout-seconds+45s)+30s)+60s` 预留。默认时限、token 和轮次是执行基线，不是重新请示的授权上限；因材料量、超时或必要补验可在 CLI 支持范围内自行调整单次参数，记录原因，不改全局登录或凭据。NEVER 绕过 wrapper 裸调 `mmx text chat`（CLI 默认 4096 预算，评审思考量必截断）或 `zcode` CLI（失去 guarded 隔离与回执校验）。
 5. 同一轮两方各发起一次，持续查询原 job/会话；观察超时或未知状态不等于请求终止，不能据此重发。已确认终止后，需要修正输入、故障原因、预算或补充证据时，可自行合理重试/追加并保留新旧回执；wrapper 自身仍单次调用，不隐藏内部重试。不因次数或失败再次申请用户授权，也不无变化反复调用。认证、额度或真实权限问题先诊断；状态未改善时停止耗费并报告阻断，不以改供应方冒充原方成功。
 6. 两方均要求 review-v1 的结构化发现及有效证据引用，分别按自己的传输协议验收。ZCode 的 `stop` 与 MMX 的 `end_turn` 等结束原因不能套用成同一回执格式。
 

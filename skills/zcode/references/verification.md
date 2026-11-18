@@ -45,6 +45,17 @@ NDJSON 逐行解析并检查唯一末尾 result、匹配的会话/回合和成�
 
 输出流总量超过 64 MiB 会终止，报告 `output_limit`；终止缓冲可能使原始文件略超过该阈值。POSIX 使用独立进程组，先 SIGTERM，再 SIGKILL；`cleanup_confirmed` 不为 true 时如实保留清理缺口。所有运行文件保留，不自动删除。失败不自动重试。
 
+## 分片批量（zcode-batch.js）
+
+`scripts/zcode-batch.js` 在单片契约之上做批量编排，每片仍是完整的 `zcode-chat.js` 调用：
+
+- **stdout 契约**：恰好一个 JSON 对象，字段 `status`（ok|partial|failed）、`gate`（PASS|FAIL|NOT_EVALUATED，内容级）、`transport_gate`（PASS|NOT_EVALUATED）、`batch`（shards/ok/transport_ok/truncated_or_incomplete/retried/review_pass/review_fail/review_not_evaluated/mode/concurrency/wall_seconds）、`shards[]`（每片完整单片回执 + shard/prompt_file/retried/retry_reason/duration_seconds，重试时含 `first_attempt`）。可选 `--receipt-file` 落盘，内容与 stdout 字段一致。
+- **双 gate**：`transport_gate` 仅在全部片 `status=ok`、`complete=true`、`truncated!==true` 时为 PASS；内容 `gate` 任一片 `review_gate=FAIL` → FAIL（不被其他片的传输失败掩盖），全 PASS → PASS，其余 NOT_EVALUATED；chat 模式恒 NOT_EVALUATED。退出码只跟 `status`：`ok` → 0（即使内容 FAIL），partial/failed → 1。与单片一致，内容 FAIL 是有效审核结果而非调用故障。
+- **重试边界**：仅 `quota_error` / `timeout` 退避 30 秒重发一次（`first_attempt` 完整保留）；`auth_error`、`policy_violation`、schema 类、无法解析的 stdout、内容 FAIL 均不重试。持续失败恰好两次调用。
+- **隔离与证据**：不提供批量 `--output-dir`；每片每次尝试由 wrapper 自建 `zcode-text-*` 目录并保留全部证据。错误回执不回显子进程 stderr，明细在各片 `artifacts_dir`。
+- **外层超时公式**：`ceil(片数/并发) × (2×(timeout-seconds+45s) + 30s) + 60s`（两次尝试 + 每试监督余量 + 退避 + 批级余量）。
+- **测试钩子**：`ZCODE_BATCH_WRAPPER`（替换为假 wrapper）、`ZCODE_BATCH_RETRY_MS`（仅离线缩短退避，生产默认 30000ms，非法值回退默认）。
+
 ## Launcher 与平台
 
 - Node.js 18+ wrapper；CLI 自身的 Node 要求以安装版本为准。当前本机 Node 24（macOS）、22.20.0（Windows）。
@@ -61,12 +72,17 @@ NDJSON 逐行解析并检查唯一末尾 result、匹配的会话/回合和成�
 node --check scripts/zcode-chat.js
 node --check scripts/review.js
 node --check scripts/zcode-run.js
+node --check scripts/zcode-batch.js
 node --check scripts/repin-release.js
 node --test tests/zcode-chat.test.js
+node --test tests/zcode-batch.test.js
 node scripts/zcode-chat.js --version
+node scripts/zcode-batch.js --version
 ```
 
 测试使用独立 fake CLI，覆盖隔离配置、参数数组、UTF-8/BOM/畸形输入、原始流保留、分块中文、大回复、缺失用量、模型与终态缺失、重复/不匹配终态、工具违规、结构化错误、非零退出、超时进程树和 review-v1 语义。
+
+批量测试经 `ZCODE_BATCH_WRAPPER` 注入假 wrapper，覆盖参数拒绝、mode/evidence 组合、透传、双 gate 聚合（含内容 FAIL 与传输失败并存）、quota/timeout 重试与不重试边界、坏 stdout、自然序与落盘一致性，以及实际并发不超过设定值。
 
 监督器测试还覆盖后台成功、超时退出、wrapper 被 SIGKILL 后独立保存退出信号与残留运行阶段，以及冲突目录拒绝。假 CLI 不访问真实模型；Keychain 适配使用合成数据，监督器测试使用注入的本地 fake driver。
 

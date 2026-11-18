@@ -1,7 +1,7 @@
 ---
 name: zcode
 description: Use the ZCode CLI for text-only chat, review, challenge, or an explicitly requested second opinion. Applies to "/zcode", "用 ZCode 问一下", "通过 zcode cli 交叉验证" and review workflows that name ZCode.
-version: 1.2.0
+version: 1.3.0
 ---
 
 # /zcode — ZCode 文本复核
@@ -35,6 +35,21 @@ node <ZCODE_SKILL_DIR>/scripts/zcode-chat.js --prompt-file <file> --mode challen
 ```
 
 Review/Challenge 为材料分配稳定 ID（例如 `E1`、`E2`），在材料中标明相应范围；`ids.json` 是非空、无重复的 ID 数组。wrapper 自动加入本地 [review-v1 schema](references/review-v1.schema.json)、材料边界和审查指令，并验证返回结构、证据引用与 P1/P2 语义。它不调用现有 AGY/MMX 双模型协调器。
+
+## 分片批量
+
+多分片评审不要逐片串行调用：一次工具调用送整批，`zcode-batch.js` 经有界并发池并行执行每片 `zcode-chat.js`，合并回执并聚合双 gate：
+
+```text
+node <ZCODE_SKILL_DIR>/scripts/zcode-batch.js --prompt-file <f1> [--prompt-file <f2> ...] | --prompts-dir <dir> [--concurrency 2] [--mode chat|review|challenge --evidence-ids-file <ids.json>] [--timeout-seconds 600] [--cli-path <exe>] [--receipt-file <path>]
+```
+
+- 每片仍是一次完整 `zcode-chat.js` 调用（guarded 权限、独立 HOME/cwd、零工具校验、每片独立 `zcode-text-*` 证据目录原样继承）。**不要给批量传 `--output-dir`**：每片及每次重试由 wrapper 自建目录，全部证据保留。
+- 批级回执含每片完整回执与**双 gate**：`transport_gate`（全片 `status=ok`、`complete` 且未截断）与内容 `gate`（任一片 `review_gate=FAIL` → FAIL，即使他片传输失败也保留确定发现；全 PASS → PASS；其余 NOT_EVALUATED；chat 模式恒 NOT_EVALUATED）。
+- `status=ok` 时退出 0，即使内容 gate 为 `FAIL`（P1 发现是有效审核结果，与单片一致）；传输或批处理失败退出 1。
+- 重试：仅 `quota_error` / `timeout` 退避 30 秒重发一次，`first_attempt` 完整保留；auth/policy/schema 类错误与内容 FAIL 不重试。
+- `--concurrency` 默认 2（上限 8，不声称已标定账号限流阈值）；分片目录按 `pN.txt` 自然序整批读取。外层工具超时按 `ceil(片数/并发) × (2×(timeout-seconds+45s) + 30s) + 60s` 预留（两次尝试 + 每试监督余量 + 退避 + 批级余量）。
+- 单片或易断线场景仍用上面的 `zcode-run.js` 持久 job；批量入口面向持续会话的一次宿主工具调用，不宣称自身具备跨终端持久恢复能力。
 
 ## 执行与结果
 

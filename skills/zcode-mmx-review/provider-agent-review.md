@@ -7,7 +7,7 @@
 | 默认 ZCode/MMX 双模型复核 | 任务负责者分别调用已安装的两方文本 skill，使用相同必要材料并脱敏 | 两份完整原始回执、实际模型独立性、材料覆盖、各自判定与本地处置；详见[默认合同](zcode-mmx-review.md) |
 | AGY 审核 | AGY 主审核 Agent 派发原生子 Agent | 实际子会话 ID、终态、结构化回传和工具边界记录 |
 | MMX 审核 | 已安装的 MMX skill：单片 `mmx-chat.js` 单轮入口、多分片 `mmx-batch.js` 批量入口（并行 + 传输层 gate + 预算自愈） | 实际模型、完整回复、结束原因和结构化判定 |
-| ZCode 文本交叉验证 | 已安装的 [zcode skill](../zcode/SKILL.md) 和 `zcode-run.js` 持久后台入口 | 实际模型、完整回执、退出码/信号、零工具边界、review-v1 发现与本地处置 |
+| ZCode 文本交叉验证 | 已安装的 [zcode skill](../zcode/SKILL.md)：单片 `zcode-run.js` 持久后台入口、多分片 `zcode-batch.js` 批量入口（并行 + 双 gate 聚合） | 实际模型、完整回执、退出码/信号、零工具边界、review-v1 发现与本地处置 |
 | 项目双模型摘要复核 | 项目指定协调器及其摘要合同 | 两方各自回执、模型身份、材料覆盖和项目门禁 |
 
 本持续授权同时满足下文旧协议所述的“本轮授权”“须另行获准”等交叉验证许可前置，不再为这些相同动作请示；所选入口的实际权限、参数、完整回执与验收要求仍须满足。
@@ -83,6 +83,8 @@ python3 -B /Users/mingtian/.agents/harness/providers/agy/project_review.py prepa
 默认与 MMX 一起按[双模型合同](zcode-mmx-review.md)执行；用户最新的单方或跳过指令优先。按 [zcode skill](../zcode/SKILL.md) 选择 Review 或 Challenge，自行选取任务所需材料、脱敏并分配稳定证据 ID。材料类型、额度和必要追加调用均已有授权；模型与时限据实际 CLI 支持核对。
 
 优先使用 `zcode-run.js start` 创建一次私有 job，再用同一 job 的 `status` 跟踪。观察超时或 `unknown` 时继续核对原进程；`finished` 只表示外层进程退出。实际接受需同时核对退出码/信号、wrapper 完整性、运行事件中的模型和零工具边界、review-v1 结构化发现及本地处置。失败保留原始回执；wrapper 单次调用与外层有依据的追加调用分开记录，后者按持续授权自行执行。
+
+多分片评审用 `zcode-batch.js` 一次送整批：每片仍是完整单片调用（guarded/零工具/独立证据目录），批级回执带 `transport_gate` 与内容 `gate`（任一片 review_gate=FAIL 即 FAIL，不被传输失败掩盖）；仅 quota/timeout 退避重试一次；外层工具超时按 `ceil(片数/并发)×(2×(timeout-seconds+45s)+30s)+60s` 预留。不逐片串行，也不绕过 wrapper 裸调 CLI。
 
 入口验收匹配时复用上表证据；本次任务的审核结论仍以本轮实际回执为准。自动调用的触发、授权和次数以双模型合同为准。
 

@@ -1,6 +1,8 @@
 # zcode skill
 
-ZCode CLI 的文本复核封装：单轮 chat、review、challenge。当前版本 **1.2.0**，适配 CLI `0.17.1`。
+ZCode CLI 的文本复核封装：单轮 chat、review、challenge。当前版本 **1.3.0**，适配 CLI `0.17.1`。
+
+> **1.3.0 新增** `scripts/zcode-batch.js` 分片批量入口：有界并发池并行执行多片 `zcode-chat.js`，聚合传输层与内容级（review_gate）双 gate，quota/timeout 一次退避重试。单片与易断线场景仍用 `zcode-run.js`。
 
 ## 合并来源
 
@@ -79,9 +81,12 @@ node scripts/repin-release.js --dry-run # 只报告不写入
 node --check scripts/zcode-chat.js
 node --check scripts/review.js
 node --check scripts/zcode-run.js
+node --check scripts/zcode-batch.js
 node --check scripts/repin-release.js
 node --test tests/zcode-chat.test.js
+node --test tests/zcode-batch.test.js
 node scripts/zcode-chat.js --version
+node scripts/zcode-batch.js --version
 ```
 
 ## 平台验收状态

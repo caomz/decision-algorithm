@@ -132,7 +132,7 @@ test("existing output directories remain untouched", () => {
 });
 test("installed manifest mismatch blocks model invocation", () => {
   const directory = path.join(root, "install-fixture");
-  const names = ["SKILL.md", "scripts/zcode-chat.js", "scripts/zcode-run.js", "scripts/review.js", "references/review-v1.schema.json"];
+  const names = ["SKILL.md", "scripts/zcode-chat.js", "scripts/zcode-run.js", "scripts/zcode-batch.js", "scripts/review.js", "references/review-v1.schema.json"];
   const files = {};
   for (const name of names) {
     const target = path.join(directory, name);
@@ -168,6 +168,7 @@ test("one manifest verifies both a CRLF and an LF copy of the same file", () => 
   fs.writeFileSync(path.join(directory, "scripts/zcode-chat.js"), wrapperSource);
   fs.writeFileSync(path.join(directory, "scripts/review.js"), reviewSource);
   fs.writeFileSync(path.join(directory, "scripts/zcode-run.js"), "module.exports = {};\n");
+  fs.writeFileSync(path.join(directory, "scripts/zcode-batch.js"), "module.exports = {};\n");
   fs.writeFileSync(path.join(directory, "references/review-v1.schema.json"), schemaSource);
   const digest = data => createHash("sha256").update(data.toString("utf8").replace(/\r\n/g, "\n"), "utf8").digest("hex");
   fs.writeFileSync(path.join(directory, ".zcode-release.json"), JSON.stringify({
@@ -176,6 +177,7 @@ test("one manifest verifies both a CRLF and an LF copy of the same file", () => 
       "SKILL.md": digest(Buffer.from(lf, "utf8")),
       "scripts/zcode-chat.js": digest(wrapperSource),
       "scripts/zcode-run.js": digest(Buffer.from("module.exports = {};\n", "utf8")),
+      "scripts/zcode-batch.js": digest(Buffer.from("module.exports = {};\n", "utf8")),
       "scripts/review.js": digest(reviewSource),
       "references/review-v1.schema.json": digest(schemaSource),
     },
