@@ -90,7 +90,9 @@ python3 <CROSS_VALIDATION_SKILL_DIR>/scripts/cross_validate.py validate-review -
 - `complete=false` 与 `truncated=true` 表示达到输出预算，保留收到的正文和截断状态。
 - 请求模型与实际模型不同时分别展示 `requested_model` 和 `model`。模型以响应里的 `model` 为准，CLI 静默回退不改变这个事实。
 - `auth_error`、`quota_error`、`timeout`、`schema_mismatch`、`install_mismatch`、`thinking_budget_exhausted` 等状态按实际分类报告。一次调用结束后交还结论，不自动重试。
-- `thinking_budget_exhausted` 表示模型只吐了思考块、没有正文（输出预算被服务端思考吃光），**不是**契约问题：加大 `--max-tokens` 重发，不要去核对 CLI schema。
+- `thinking_budget_exhausted` 表示 `stop_reason=max_tokens`、只有思考块、没有正文（输出预算被服务端思考吃光），**不是**契约问题：省略或加大 `--max-tokens` 重发，不要去核对 CLI schema。没有正文、但不是 `max_tokens` 结束的回复记 `schema_mismatch`，回执附 `stop_reason` 与 `content_block_types`。
+- 回执的 `fetch_timeout_guard` 说明 wrapper 有没有取消 Node fetch 等待响应的 300 秒上限：`preloaded` 为已预加载；`proxy_limited`（子进程环境有非空的代理变量，或 mmx 配置的 `proxy` 以 `http` 开头）、`undici_not_found`、`guard_missing` 时没有取消；`custom_launcher` 表示 PATH 上的 `mmx` 不是 mmx-cli 包入口（自定义 batch 或启动脚本），由它自己处理。上限还在时，超过 300 秒的非流式回复会以网络错误失败（CLI 退出码 6），回执附 `hint`。
+- wrapper 只对 CLI 子进程去掉 `MINIMAX_BASE_URL` 末尾的 `/v1`，回执 `base_url_env` 记 `stripped_v1`、`unchanged` 或 `unset`。HTTP 404 时回执附 `http_status` 与 `hint`；设了该变量时另附只含协议和主机的 `base_url_env_value`。
 - `auth_error` 时提示用户交互运行 `mmx auth login` 后重试；`cli_missing` 时提示 `npm install -g mmx-cli`。
 - 用量缺失保留 `null`，下游做算术前先判空。
 
@@ -114,6 +116,8 @@ node <MMX_SKILL_DIR>/scripts/mcode-verify.js --prompt-file <file> [--effort max]
 stdout 恒为单个 JSON，字段与 `mmx-chat.js` 对齐，多出 `effort` 与 `available_efforts`。NEVER 把它当 mmx 的等价替代：两者协议不同（openai-responses vs anthropic-messages）、system prompt 不同、结论应视为**两个独立家族的意见**；且它每次注入约 18k input token 的 agent 系统提示，耗时约为 mmx 的 3–12 倍。NEVER 只因它「思考更久」就采信其结论。
 
 ## 已知限制（如实告知，不掩饰）
+
+- **300 秒响应头上限**（2026-11-19 macOS 实测）：Node 内置 fetch 等响应头最多 300 秒，非流式回复生成完才发响应头。wrapper 能预加载防护时（`fetch_timeout_guard=preloaded`）不受影响；代理（非空的代理环境变量，或 mmx 配置中以 `http` 开头的 `proxy`，回执记 `proxy_limited`）或自定义启动入口下上限仍在，超时表现为 `api_error`、退出码 6，回执附 `hint`。Windows 尚未实测。
 
 - **裸 CLI 截断陷阱**（2026-11-18 实证）：绕过 wrapper 直接 `mmx text chat` 时 CLI 默认 `--max-tokens 4096`，服务端默认思考计入输出预算，6 断言级评审即可吃光预算出现截断或纯思考回执。所有评审调用必须经 `mmx-chat.js` / `mmx-batch.js`；分片预算自愈由 `mmx-batch.js` 承担。
 

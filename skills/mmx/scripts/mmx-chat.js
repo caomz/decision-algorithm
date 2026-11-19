@@ -15,6 +15,7 @@ const { TextDecoder } = require("util");
 const VERSION = "2.7.0";
 const FETCH_GUARD = path.join(__dirname, "fetch-timeout-guard.js");
 const PROXY_VARIABLES = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"];
+const FETCH_LIMIT_MS = 300000;
 const DEFAULT_PROFILE = path.join(__dirname, "..", "profiles", "local.json");
 const LEGACY_MANAGED_ROOT = "/Volumes/WorkSSD/.claude/skills/mmx";
 const RELEASE_MARKER = ".gstack-cross-validation-release.json";
@@ -91,7 +92,7 @@ function validateInstall() {
   if (!isObject(release) || release.format !== 1 || release.state !== "active" ||
       typeof release.release_id !== "string" || !/^[a-f0-9]{64}$/.test(release.release_id) ||
       !isObject(release.files)) throw new Error("release marker is invalid");
-  for (const required of ["mmx/scripts/mmx-chat.js", "mmx/profiles/local.json",
+  for (const required of ["mmx/scripts/mmx-chat.js", "mmx/scripts/fetch-timeout-guard.js", "mmx/profiles/local.json",
                           "cross-validation/scripts/cross_validate.py"]) {
     if (!Object.hasOwn(release.files, required)) throw new Error("release manifest is incomplete");
   }
@@ -374,15 +375,18 @@ function findMmx(platform = process.platform, envPath = process.env.PATH || "", 
 // and a non-streaming reply sends its headers only when it is complete. When
 // the CLI is the mmx-cli package entry, preload a guard that lifts that limit
 // with the undici copy the CLI itself imports. The CLI's --timeout and the
-// wrapper deadline still bound the request. With proxy variables set, the
-// CLI installs its own proxy dispatcher, which keeps the 300 s limit.
-function cliLaunch(mmx, env = process.env) {
+// wrapper deadline still bound the request. With a proxy set (environment or
+// the mmx config `proxy` key), the CLI installs its own proxy dispatcher,
+// which keeps the 300 s limit; both are checked the way the CLI reads them.
+function cliLaunch(mmx, env = process.env, platform = process.platform, guardFile = FETCH_GUARD) {
   const childEnv = { ...env };
+  const baseKey = envKey(childEnv, "MINIMAX_BASE_URL", platform);
+  let baseUrl = typeof childEnv[baseKey] === "string" && childEnv[baseKey] !== "" ? childEnv[baseKey] : null;
   let baseUrlEnv = "unset";
-  if (typeof childEnv.MINIMAX_BASE_URL === "string" && childEnv.MINIMAX_BASE_URL !== "") {
-    const trimmed = childEnv.MINIMAX_BASE_URL.replace(/\/v1\/?$/, "");
-    baseUrlEnv = trimmed === childEnv.MINIMAX_BASE_URL ? "unchanged" : "stripped_v1";
-    childEnv.MINIMAX_BASE_URL = trimmed;
+  if (baseUrl !== null) {
+    const trimmed = baseUrl.replace(/\/v1\/?$/, "");
+    baseUrlEnv = trimmed === baseUrl ? "unchanged" : "stripped_v1";
+    childEnv[baseKey] = baseUrl = trimmed;
   }
   let argsPrefix = mmx.argsPrefix;
   let guard = "custom_launcher";
@@ -390,15 +394,45 @@ function cliLaunch(mmx, env = process.env) {
   if (pkg) {
     let undici = null;
     try { undici = require.resolve("undici", { paths: [pkg.root] }); } catch {}
-    if (undici) {
+    let guardPresent = false;
+    try { guardPresent = fs.statSync(guardFile).isFile(); } catch {}
+    if (!guardPresent) guard = "guard_missing";
+    else if (!undici) guard = "undici_not_found";
+    else {
       childEnv.MMX_CHAT_UNDICI_PATH = undici;
-      argsPrefix = ["--require", FETCH_GUARD, ...mmx.argsPrefix];
-      guard = PROXY_VARIABLES.some(name => childEnv[name]) ? "proxy_limited" : "preloaded";
-    } else {
-      guard = "undici_not_found";
+      argsPrefix = ["--require", guardFile, ...mmx.argsPrefix];
+      const proxied = PROXY_VARIABLES.some(name => childEnv[envKey(childEnv, name, platform)]) || configProxy(childEnv, platform);
+      guard = proxied ? "proxy_limited" : "preloaded";
     }
   }
-  return { argsPrefix, env: childEnv, fetch_timeout_guard: guard, base_url_env: baseUrlEnv };
+  return { argsPrefix, env: childEnv, base_url: baseUrl, fetch_timeout_guard: guard, base_url_env: baseUrlEnv };
+}
+
+// Windows environment names are case-insensitive, but a copied environment
+// keeps the spelling each variable was set with.
+function envKey(env, name, platform) {
+  if (platform !== "win32") return name;
+  return Object.keys(env).find(key => key.toUpperCase() === name) ?? name;
+}
+
+// mmx-cli falls back to the `proxy` key of $MMX_CONFIG_DIR/config.json (else
+// <home>/.mmx/config.json) and accepts only values starting with "http". Same
+// rule here; only that key is read and nothing from the file is echoed.
+function configProxy(env, platform) {
+  const home = env[envKey(env, platform === "win32" ? "USERPROFILE" : "HOME", platform)] || os.homedir();
+  const dir = env[envKey(env, "MMX_CONFIG_DIR", platform)] || path.join(home, ".mmx");
+  try {
+    const config = JSON.parse(fs.readFileSync(path.join(dir, "config.json"), "utf8"));
+    return isObject(config) && typeof config.proxy === "string" && config.proxy.startsWith("http");
+  } catch { return false; }
+}
+
+// mmx-cli exits with code 6 ("Network request failed.") when fetch itself
+// fails, which is also how Node's 300 s header and body limits surface.
+function withFetchLimitHint(result, elapsedMs) {
+  if (result.status !== "api_error" || result.exit_code !== 6 || !(elapsedMs >= FETCH_LIMIT_MS - 5000) || result.hint) return result;
+  return { ...result,
+    hint: "The CLI reported a network failure after about 300 s or more. Node's fetch drops a reply whose headers or body stall for 300 s; fetch_timeout_guard shows whether this wrapper lifted that limit, and a proxy from the environment or the mmx config keeps it." };
 }
 
 // Scheme and host only: never echo credentials, query strings, or path
@@ -621,7 +655,9 @@ async function main() {
   if (mmx.shell && ![mmx.cmd, ...chatArgs].every(safeCmdArgument)) {
     usageError("cmd.exe cannot safely represent the CLI path or arguments.");
   }
+  const requestStarted = Date.now();
   const chat = await runCmd(mmx.cmd, [...launch.argsPrefix, ...chatArgs], wrapperTimeout, mmx.shell, launch.env);
+  const elapsedMs = Date.now() - requestStarted;
   if (chat.kind !== "closed") {
     const status = chat.kind === "spawn_error" ? "api_error" : chat.kind;
     fail({
@@ -642,9 +678,9 @@ async function main() {
     fail({ status: error instanceof TypeError ? "invalid_json" : "capture_error", exit_code: chat.code });
     return;
   }
-  const result = classifyReply(out, err, chat.code);
-  if (result.http_status === 404 && launch.base_url_env !== "unset") {
-    result.base_url_env_value = displayUrl(launch.env.MINIMAX_BASE_URL);
+  const result = withFetchLimitHint(classifyReply(out, err, chat.code), elapsedMs);
+  if (result.http_status === 404 && launch.base_url !== null) {
+    result.base_url_env_value = displayUrl(launch.base_url);
   }
   if (result.status === "ok") emit(result);
   else fail(result);
@@ -655,5 +691,5 @@ if (require.main === module) {
     fail(error.envelope ?? { status: "api_error", exit_code: 1, code: null, error: "MMX wrapper failed locally." });
   }).finally(cleanup);
 } else {
-  module.exports = { safeCmdArgument, npmShimEntry, mmxPackageEntry, linkedEntry, cliLaunch, displayUrl, findMmx, terminateChildTree };
+  module.exports = { safeCmdArgument, npmShimEntry, mmxPackageEntry, linkedEntry, cliLaunch, withFetchLimitHint, displayUrl, findMmx, terminateChildTree };
 }
