@@ -1,7 +1,7 @@
 ---
 name: mmx
 description: Use MiniMax through the MMX CLI for text-only chat, review, challenge, or an explicitly authorized second opinion, and for the full MiniMax CLI surface (images, video, speech, transcription, web search). Applies to asks such as "/mmx", "用 MMX 问一下", "用 MiniMax 交叉验证", "生成图片/视频/语音", "MiniMax 搜索" and approved review workflows that name MMX. Cross-validation runs through the synchronous text wrapper; media and search go through the bundled CLI reference.
-version: 2.6.0
+version: 2.7.0
 ---
 
 # /mmx — MiniMax 文本复核

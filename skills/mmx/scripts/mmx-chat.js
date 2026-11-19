@@ -12,7 +12,9 @@ const path = require("path");
 const { spawn, spawnSync } = require("child_process");
 const { TextDecoder } = require("util");
 
-const VERSION = "2.4.0";
+const VERSION = "2.7.0";
+const FETCH_GUARD = path.join(__dirname, "fetch-timeout-guard.js");
+const PROXY_VARIABLES = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"];
 const DEFAULT_PROFILE = path.join(__dirname, "..", "profiles", "local.json");
 const LEGACY_MANAGED_ROOT = "/Volumes/WorkSSD/.claude/skills/mmx";
 const RELEASE_MARKER = ".gstack-cross-validation-release.json";
@@ -29,10 +31,11 @@ let cliInvoked = false;
 // ---------------------------------------------------------------------------
 
 let finalEmitted = false;
+const telemetry = {};
 function emit(result) {
   if (finalEmitted) return;
   finalEmitted = true;
-  process.stdout.write(JSON.stringify({ requested_model: requestedModel, cli_invoked: cliInvoked, ...result }) + "\n");
+  process.stdout.write(JSON.stringify({ requested_model: requestedModel, cli_invoked: cliInvoked, ...telemetry, ...result }) + "\n");
 }
 
 function fail(result) {
@@ -199,7 +202,7 @@ if (require.main === module) {
 
 // Capture stdout and stderr separately in private files. Buffering each
 // stream in memory while the request runs doubles the cost of a large reply.
-function runCmd(cmd, args, timeoutSecs, useShell) {
+function runCmd(cmd, args, timeoutSecs, useShell, childEnv) {
   const stdoutFd = privateFile("stdout");
   let stderrFd;
   try { stderrFd = privateFile("stderr"); }
@@ -266,7 +269,7 @@ function runCmd(cmd, args, timeoutSecs, useShell) {
     try {
       child = spawn(cmd, args, {
         stdio: ["ignore", "pipe", "pipe"], shell: useShell,
-        detached: grouped, windowsHide: true,
+        detached: grouped, windowsHide: true, env: childEnv,
       });
     } catch { finish("spawn_error"); return; }
     cancelCurrentRequest = code => stop("cancelled", code);
@@ -289,6 +292,30 @@ function runCmd(cmd, args, timeoutSecs, useShell) {
 // batch files use the guarded shell path.
 // ---------------------------------------------------------------------------
 
+// The real entry and package root when `candidate` is the declared `mmx` bin
+// of an installed mmx-cli package; null for anything else.
+function mmxPackageEntry(candidate) {
+  try {
+    if (!/\.(?:cjs|mjs|js)$/i.test(candidate) || !fs.statSync(candidate).isFile()) return null;
+    const entry = fs.realpathSync(candidate);
+    if (!/\.(?:cjs|mjs|js)$/i.test(entry)) return null;
+    for (let directory = path.dirname(candidate); directory !== path.dirname(directory); directory = path.dirname(directory)) {
+      const metadata = path.join(directory, "package.json");
+      if (!fs.existsSync(metadata)) continue;
+      const pkg = JSON.parse(fs.readFileSync(metadata, "utf8"));
+      if (!isObject(pkg) || pkg.name !== "mmx-cli") return null;
+      const bin = typeof pkg.bin === "string" ? pkg.bin : pkg.bin?.mmx;
+      if (typeof bin !== "string" || path.isAbsolute(bin) || path.win32.isAbsolute(bin)) return null;
+      const root = fs.realpathSync(directory);
+      const declared = fs.realpathSync(path.resolve(directory, bin));
+      const relative = path.relative(root, declared);
+      if (!relative || relative.startsWith(".." + path.sep) || path.isAbsolute(relative) || declared !== entry) return null;
+      return { entry, root };
+    }
+  } catch { return null; }
+  return null;
+}
+
 function npmShimEntry(shim) {
   try {
     const body = fs.readFileSync(shim, "utf8");
@@ -303,6 +330,12 @@ function npmShimEntry(shim) {
   } catch { return null; }
 }
 
+// A POSIX `mmx` that is, or links to, the mmx-cli package entry.
+function linkedEntry(file) {
+  try { return mmxPackageEntry(fs.realpathSync(file))?.entry ?? null; }
+  catch { return null; }
+}
+
 // cmd.exe expands % and ! inside quotes; other metacharacters affect parsing.
 function safeCmdArgument(s) {
   return typeof s === "string" && s.length > 0 &&
@@ -310,7 +343,7 @@ function safeCmdArgument(s) {
 }
 
 function findMmx(platform = process.platform, envPath = process.env.PATH || "", fsApi = fs,
-                 shimResolver = npmShimEntry, nodePath = process.execPath) {
+                 shimResolver = npmShimEntry, nodePath = process.execPath, linkResolver = linkedEntry) {
   const isWin = platform === "win32";
   const pathApi = isWin ? path.win32 : path.posix;
   const dirs = envPath.split(pathApi.delimiter).filter(Boolean);
@@ -321,7 +354,10 @@ function findMmx(platform = process.platform, envPath = process.env.PATH || "", 
       try {
         fsApi.accessSync(p, isWin ? fsApi.constants.F_OK : fsApi.constants.X_OK);
         const batch = isWin && (ext === ".cmd" || ext === ".bat");
-        const entry = batch ? shimResolver(p) : null;
+        // The mmx-cli package entry runs under this Node so the wrapper can
+        // preload its fetch guard. Any other executable, such as a user's own
+        // launcher script, runs unchanged.
+        const entry = batch ? shimResolver(p) : isWin ? null : linkResolver(p);
         if (entry) return { cmd: nodePath, argsPrefix: [entry], shell: false };
         if (batch && !safeCmdArgument(p)) return { unsafe: true };
         return { cmd: p, argsPrefix: [], shell: batch };
@@ -329,6 +365,65 @@ function findMmx(platform = process.platform, envPath = process.env.PATH || "", 
     }
   }
   return null;
+}
+
+// Child launch for the CLI. mmx-cli appends /anthropic/v1/messages to its base
+// URL, so an OpenAI-style MINIMAX_BASE_URL ending in /v1 (often exported for
+// other tools) always yields HTTP 404; only the child's copy is normalised.
+// Node's built-in fetch also gives up after 300 s without response headers,
+// and a non-streaming reply sends its headers only when it is complete. When
+// the CLI is the mmx-cli package entry, preload a guard that lifts that limit
+// with the undici copy the CLI itself imports. The CLI's --timeout and the
+// wrapper deadline still bound the request. With proxy variables set, the
+// CLI installs its own proxy dispatcher, which keeps the 300 s limit.
+function cliLaunch(mmx, env = process.env) {
+  const childEnv = { ...env };
+  let baseUrlEnv = "unset";
+  if (typeof childEnv.MINIMAX_BASE_URL === "string" && childEnv.MINIMAX_BASE_URL !== "") {
+    const trimmed = childEnv.MINIMAX_BASE_URL.replace(/\/v1\/?$/, "");
+    baseUrlEnv = trimmed === childEnv.MINIMAX_BASE_URL ? "unchanged" : "stripped_v1";
+    childEnv.MINIMAX_BASE_URL = trimmed;
+  }
+  let argsPrefix = mmx.argsPrefix;
+  let guard = "custom_launcher";
+  const pkg = mmx.argsPrefix.length === 1 ? mmxPackageEntry(mmx.argsPrefix[0]) : null;
+  if (pkg) {
+    let undici = null;
+    try { undici = require.resolve("undici", { paths: [pkg.root] }); } catch {}
+    if (undici) {
+      childEnv.MMX_CHAT_UNDICI_PATH = undici;
+      argsPrefix = ["--require", FETCH_GUARD, ...mmx.argsPrefix];
+      guard = PROXY_VARIABLES.some(name => childEnv[name]) ? "proxy_limited" : "preloaded";
+    } else {
+      guard = "undici_not_found";
+    }
+  }
+  return { argsPrefix, env: childEnv, fetch_timeout_guard: guard, base_url_env: baseUrlEnv };
+}
+
+// Scheme and host only: never echo credentials, query strings, or path
+// segments — gateways can embed tokens in the base URL path.
+function displayUrl(value) {
+  try {
+    const url = new URL(value);
+    return `${url.protocol}//${url.host}`;
+  } catch { return null; }
+}
+
+// mmx-cli reports HTTP failures as "API error: HTTP <status>" in its error envelope.
+function upstreamHttpStatus(...bodies) {
+  for (const body of bodies) {
+    const message = isObject(body) && isObject(body.error) && typeof body.error.message === "string" ? body.error.message : "";
+    const match = /\bHTTP (\d{3})\b/.exec(message);
+    if (match) return Number(match[1]);
+  }
+  return null;
+}
+
+function withHttpHint(result, ...bodies) {
+  if (result.status !== "api_error" || upstreamHttpStatus(...bodies) !== 404) return result;
+  return { ...result, http_status: 404,
+    hint: "HTTP 404 from the MiniMax endpoint. mmx-cli appends /anthropic/v1/messages to its base URL; if this repeats, check that --base-url, MINIMAX_BASE_URL or the mmx config base_url does not already end in /v1." };
 }
 
 // The CLI can emit diagnostic lines before its sole JSON envelope. Avoid
@@ -395,7 +490,7 @@ function classifyReply(out, err, exitCode) {
         (Object.hasOwn(body.error, "code") && !Number.isSafeInteger(body.error.code))) {
       return schemaFailure(exitCode, "Invalid error object or error code.");
     }
-    return apiFailure(exitCode, body.error.code ?? null);
+    return withHttpHint(apiFailure(exitCode, body.error.code ?? null), body);
   }
   if (!out) return { status: "empty_stdout", exit_code: exitCode };
   if (Object.hasOwn(body, "base_resp")) {
@@ -415,22 +510,31 @@ function classifyReply(out, err, exitCode) {
     return schemaFailure(exitCode, "Invalid or unsupported response content blocks.");
   }
   const text = body.content.filter(block => block.type === "text").map(block => block.text).join("\n");
-  if (!text.trim()) {
-    // The server thinks by default and the thinking blocks are not text. A
-    // reply made only of thinking means the output budget was consumed
-    // before any answer was written, not that the contract drifted.
-    const thinking = body.content.some(block => block.type === "thinking" || block.type === "redacted_thinking");
-    if (thinking) {
-      return { status: "thinking_budget_exhausted", exit_code: exitCode,
-        note: "the model produced only thinking blocks and no text: the output budget was fully consumed by server-side thinking. Re-run with a larger --max-tokens." };
-    }
-    return schemaFailure(exitCode, "No response text.");
-  }
   const truncated = body.stop_reason === "max_tokens";
-  const result = {
-    status: "ok", exit_code: exitCode, text, model: body.model, model_identity_source: "response.model",
+  const responseMetadata = {
+    model: body.model, model_identity_source: "response.model",
     stop_reason: body.stop_reason, complete: !truncated, truncated,
     input_tokens: tokenCount(body.usage?.input_tokens), output_tokens: tokenCount(body.usage?.output_tokens),
+  };
+  const contentBlockTypes = body.content.map(block => block.type);
+  if (!text.trim()) {
+    // Server-side thinking counts against the output budget. A max_tokens stop
+    // with thinking blocks and no answer text is a budget problem, not drift;
+    // with any other stop reason the reply is simply malformed.
+    if (truncated && contentBlockTypes.some(type => type === "thinking" || type === "redacted_thinking")) {
+      return {
+        status: "thinking_budget_exhausted", exit_code: exitCode, ...responseMetadata, complete: false,
+        content_block_types: contentBlockTypes,
+        note: "Server-side thinking consumed the output budget before any answer text. Omit --max-tokens to retry with the profile budget.",
+      };
+    }
+    return {
+      ...schemaFailure(exitCode, "No response text."), ...responseMetadata, complete: false,
+      content_block_types: contentBlockTypes,
+    };
+  }
+  const result = {
+    status: "ok", exit_code: exitCode, text, ...responseMetadata,
   };
   if (requestedModel && result.model !== requestedModel) {
     result.warning = "requested model was not used; compare requested_model and model";
@@ -498,6 +602,9 @@ async function main() {
     return;
   }
   if (mmx.unsafe) usageError("Unsafe cmd.exe batch path. Use a resolvable npm shim.");
+  const launch = cliLaunch(mmx);
+  telemetry.fetch_timeout_guard = launch.fetch_timeout_guard;
+  telemetry.base_url_env = launch.base_url_env;
 
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mmx-chat-"));
   const messages = [];
@@ -514,7 +621,7 @@ async function main() {
   if (mmx.shell && ![mmx.cmd, ...chatArgs].every(safeCmdArgument)) {
     usageError("cmd.exe cannot safely represent the CLI path or arguments.");
   }
-  const chat = await runCmd(mmx.cmd, [...mmx.argsPrefix, ...chatArgs], wrapperTimeout, mmx.shell);
+  const chat = await runCmd(mmx.cmd, [...launch.argsPrefix, ...chatArgs], wrapperTimeout, mmx.shell, launch.env);
   if (chat.kind !== "closed") {
     const status = chat.kind === "spawn_error" ? "api_error" : chat.kind;
     fail({
@@ -536,6 +643,9 @@ async function main() {
     return;
   }
   const result = classifyReply(out, err, chat.code);
+  if (result.http_status === 404 && launch.base_url_env !== "unset") {
+    result.base_url_env_value = displayUrl(launch.env.MINIMAX_BASE_URL);
+  }
   if (result.status === "ok") emit(result);
   else fail(result);
 }
@@ -545,5 +655,5 @@ if (require.main === module) {
     fail(error.envelope ?? { status: "api_error", exit_code: 1, code: null, error: "MMX wrapper failed locally." });
   }).finally(cleanup);
 } else {
-  module.exports = { safeCmdArgument, npmShimEntry, findMmx, terminateChildTree };
+  module.exports = { safeCmdArgument, npmShimEntry, mmxPackageEntry, linkedEntry, cliLaunch, displayUrl, findMmx, terminateChildTree };
 }

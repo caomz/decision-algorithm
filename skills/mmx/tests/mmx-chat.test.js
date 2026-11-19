@@ -7,7 +7,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
-const { safeCmdArgument, npmShimEntry, findMmx, terminateChildTree } = require(path.join(__dirname, "..", "scripts", "mmx-chat.js"));
+const { safeCmdArgument, npmShimEntry, mmxPackageEntry, linkedEntry, findMmx, terminateChildTree } = require(path.join(__dirname, "..", "scripts", "mmx-chat.js"));
 
 const skillRoot = path.resolve(__dirname, "..");
 const wrapper = path.join(skillRoot, "scripts", "mmx-chat.js");
@@ -36,6 +36,12 @@ const { spawn } = require("node:child_process");
 const args = process.argv.slice(2);
 if (process.env.FAKE_INVOCATIONS) fs.appendFileSync(process.env.FAKE_INVOCATIONS, args.slice(0, 2).join(" ") + "\\n");
 if (process.env.FAKE_ARGS_DUMP) fs.writeFileSync(process.env.FAKE_ARGS_DUMP, JSON.stringify(args));
+if (process.env.FAKE_ENV_DUMP) fs.writeFileSync(process.env.FAKE_ENV_DUMP, JSON.stringify({
+  argv: args,
+  minmax_base_url: process.env.MINIMAX_BASE_URL || null,
+  undici_path: process.env.MMX_CHAT_UNDICI_PATH || null,
+  https_proxy_set: Boolean(process.env.HTTPS_PROXY),
+}));
 const messageIndex = args.indexOf("--messages-file");
 if (messageIndex >= 0 && process.env.FAKE_MESSAGES_DUMP) {
   fs.writeFileSync(process.env.FAKE_MESSAGES_DUMP, fs.readFileSync(args[messageIndex + 1]));
@@ -53,6 +59,7 @@ switch (process.env.FAKE_MODE || "success") {
   case "truncated": ok.stop_reason = "max_tokens"; process.stdout.write(JSON.stringify(ok)); break;
   case "auth": process.stderr.write(JSON.stringify({ error: { code: 3, message: "No credentials" } })); process.exitCode = 3; break;
   case "api_stdout": process.stdout.write(JSON.stringify({ error: { code: 500, message: "upstream failed", hint: "retry" } })); process.exitCode = 1; break;
+  case "http_404": process.stderr.write(JSON.stringify({ error: { code: 1, message: "API error: HTTP 404 (HTTP 404)" } })); process.exitCode = 1; break;
   case "api_stderr": process.stderr.write(JSON.stringify({ error: { code: 500, message: "Bearer synthetic-authorization-value and private prompt", hint: "sk-synthetic-secret" } })); process.exitCode = 1; break;
   case "quota": process.exitCode = 4; break;
   case "quota_api": process.stderr.write(JSON.stringify({ error: { code: 429 } })); process.exitCode = 1; break;
@@ -161,18 +168,27 @@ after(() => {
 test("version remains a plain-text compatibility exception", () => {
   const run = runWrapper(["--version"]);
   assert.equal(run.status, 0);
-  assert.equal(run.stdout, "mmx-chat 2.4.0\n");
+  assert.equal(run.stdout, "mmx-chat 2.7.0\n");
+});
+
+test("the version constant and the SKILL.md frontmatter stay in sync", () => {
+  const frontmatter = /^version:\s*(\S+)\s*$/m.exec(fs.readFileSync(path.join(skillRoot, "SKILL.md"), "utf8"));
+  const constant = /^const VERSION = "([^"]+)";$/m.exec(fs.readFileSync(wrapper, "utf8"));
+  assert.ok(frontmatter, "SKILL.md has no version frontmatter");
+  assert.ok(constant, "mmx-chat.js has no VERSION constant");
+  assert.equal(frontmatter[1], constant[1]);
 });
 
 test("success preserves the public JSON schema and skips auth status", () => {
   writeInputs("hello");
-  const run = runChat();
+  const run = runChat([], { MINIMAX_BASE_URL: undefined });
   assert.equal(run.status, 0);
   assert.equal(run.stderr, "");
   assert.deepEqual(jsonResult(run), {
     status: "ok", exit_code: 0, requested_model: null, cli_invoked: true, text: "MMX_OK", model: "MiniMax-M3",
     model_identity_source: "response.model", stop_reason: "end_turn", complete: true,
     input_tokens: 12, output_tokens: 3, truncated: false,
+    fetch_timeout_guard: "custom_launcher", base_url_env: "unset",
   });
   const args = JSON.parse(fs.readFileSync(argsDumpPath, "utf8"));
   assert.deepEqual(args.slice(0, 2), ["text", "chat"]);
@@ -276,13 +292,20 @@ test("timeout flags win over the environment, which wins over the profile", () =
   assert.equal(jsonResult(runChat(["--timeout", "100", "--wrap-timeout", "100"])).status, "usage_error");
 });
 
-test("a reply made only of thinking blocks is a budget problem, not a contract problem", () => {
+test("thinking without text is a budget problem only when the model hit max_tokens", () => {
   writeInputs("thinking");
-  const result = jsonResult(runChat([], { FAKE_MODE: "thinking_only" }));
-  assert.equal(result.status, "thinking_budget_exhausted");
-  assert.match(result.note, /--max-tokens/);
-  const truncated = jsonResult(runChat([], { FAKE_MODE: "thinking_only_truncated" }));
-  assert.equal(truncated.status, "thinking_budget_exhausted");
+  const exhausted = jsonResult(runChat([], { FAKE_MODE: "thinking_only_truncated" }));
+  assert.equal(exhausted.status, "thinking_budget_exhausted");
+  assert.equal(exhausted.stop_reason, "max_tokens");
+  assert.equal(exhausted.truncated, true);
+  assert.equal(exhausted.complete, false);
+  assert.deepEqual(exhausted.content_block_types, ["thinking"]);
+  assert.match(exhausted.note, /--max-tokens/);
+  const drifted = jsonResult(runChat([], { FAKE_MODE: "thinking_only" }));
+  assert.equal(drifted.status, "schema_mismatch");
+  assert.equal(drifted.stop_reason, "end_turn");
+  assert.equal(drifted.complete, false);
+  assert.deepEqual(drifted.content_block_types, ["thinking"]);
 });
 
 test("auth and timeout failures carry an actionable instruction", () => {
@@ -611,6 +634,124 @@ test("a plain install without siblings and without a marker is not treated as ma
   for (const name of Object.keys(files)) unlinkKnown(path.join(plain, name));
   for (const name of ["mmx/scripts", "mmx/profiles", "mmx"]) fs.rmdirSync(path.join(plain, name));
   fs.rmdirSync(plain);
+});
+
+// A POSIX `mmx` that is a symlink to the declared bin of a fake mmx-cli
+// package, with an undici stub the fetch guard can import.
+function buildFakePackage() {
+  const pkgRoot = path.join(root, "fake-mmx-cli");
+  const pkgBin = path.join(root, "pkg-bin");
+  fs.mkdirSync(path.join(pkgRoot, "dist"), { recursive: true });
+  fs.mkdirSync(path.join(pkgRoot, "node_modules", "undici"), { recursive: true });
+  fs.mkdirSync(pkgBin);
+  const entry = path.join(pkgRoot, "dist", "mmx.cjs");
+  fs.writeFileSync(path.join(pkgRoot, "package.json"), JSON.stringify({ name: "mmx-cli", bin: { mmx: "dist/mmx.cjs" } }));
+  fs.writeFileSync(entry, `#!${process.execPath}\nrequire(${JSON.stringify(fakeJsPath)});\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(pkgRoot, "node_modules", "undici", "package.json"), JSON.stringify({ name: "undici", main: "index.js" }));
+  fs.writeFileSync(path.join(pkgRoot, "node_modules", "undici", "index.js"), "module.exports = { Agent: function Agent() {}, setGlobalDispatcher() {} };\n");
+  fs.symlinkSync(entry, path.join(pkgBin, "mmx"));
+  return { pkgRoot, pkgBin, entry };
+}
+
+function removeFakePackage(pkgRoot, pkgBin, entry) {
+  unlinkKnown(path.join(pkgBin, "mmx"));
+  unlinkKnown(entry);
+  unlinkKnown(path.join(pkgRoot, "package.json"));
+  unlinkKnown(path.join(pkgRoot, "dist", "mmx.cjs"));
+  unlinkKnown(path.join(pkgRoot, "node_modules", "undici", "package.json"));
+  unlinkKnown(path.join(pkgRoot, "node_modules", "undici", "index.js"));
+  for (const dir of [path.join(pkgRoot, "dist"), path.join(pkgRoot, "node_modules", "undici"),
+                     path.join(pkgRoot, "node_modules"), pkgRoot, pkgBin]) fs.rmdirSync(dir);
+}
+
+test("package entry resolution accepts linked mmx-cli entries and rejects other packages", () => {
+  if (process.platform === "win32") return;
+  const { pkgRoot, pkgBin, entry } = buildFakePackage();
+  try {
+    assert.equal(linkedEntry(path.join(pkgBin, "mmx")), entry);
+    assert.equal(mmxPackageEntry(entry)?.root, fs.realpathSync(pkgRoot));
+    // The default fake is a custom launcher, not an mmx-cli package.
+    assert.equal(linkedEntry(fakeMmxPath), null);
+    fs.writeFileSync(path.join(pkgRoot, "package.json"), JSON.stringify({ name: "other-cli", bin: { mmx: "dist/mmx.cjs" } }));
+    assert.equal(mmxPackageEntry(entry), null);
+    fs.writeFileSync(path.join(pkgRoot, "package.json"), JSON.stringify({ name: "mmx-cli", bin: { mmx: "dist/elsewhere.cjs" } }));
+    assert.equal(mmxPackageEntry(entry), null);
+  } finally {
+    removeFakePackage(pkgRoot, pkgBin, entry);
+  }
+});
+
+test("the mmx-cli package entry launches with the fetch guard preloaded and a normalized base URL", () => {
+  if (process.platform === "win32") return;
+  const { pkgRoot, pkgBin, entry } = buildFakePackage();
+  const envDumpPath = path.join(root, "env-dump.json");
+  const noProxy = Object.fromEntries(["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy",
+                                      "ALL_PROXY", "all_proxy"].map(name => [name, undefined]));
+  try {
+    writeInputs("guard");
+    const result = jsonResult(runChat([], {
+      PATH: `${pkgBin}${path.delimiter}${process.env.PATH || ""}`,
+      MINIMAX_BASE_URL: "https://api.example.com/v1/",
+      FAKE_ENV_DUMP: envDumpPath,
+      ...noProxy,
+    }));
+    assert.equal(result.status, "ok");
+    assert.equal(result.fetch_timeout_guard, "preloaded");
+    assert.equal(result.base_url_env, "stripped_v1");
+    const dumped = JSON.parse(fs.readFileSync(envDumpPath, "utf8"));
+    assert.deepEqual(dumped.argv.slice(0, 2), ["text", "chat"]);
+    assert.equal(dumped.minmax_base_url, "https://api.example.com");
+    assert.equal(dumped.undici_path, path.join(pkgRoot, "node_modules", "undici", "index.js"));
+    assert.equal(dumped.https_proxy_set, false);
+  } finally {
+    removeFakePackage(pkgRoot, pkgBin, entry);
+    unlinkKnown(envDumpPath);
+  }
+});
+
+test("proxy variables downgrade the preloaded guard to proxy_limited", () => {
+  if (process.platform === "win32") return;
+  const { pkgRoot, pkgBin, entry } = buildFakePackage();
+  const envDumpPath = path.join(root, "env-dump.json");
+  try {
+    writeInputs("proxy guard");
+    const result = jsonResult(runChat([], {
+      PATH: `${pkgBin}${path.delimiter}${process.env.PATH || ""}`,
+      HTTPS_PROXY: "http://127.0.0.1:7890",
+      FAKE_ENV_DUMP: envDumpPath,
+    }));
+    assert.equal(result.status, "ok");
+    assert.equal(result.fetch_timeout_guard, "proxy_limited");
+    const dumped = JSON.parse(fs.readFileSync(envDumpPath, "utf8"));
+    assert.equal(dumped.https_proxy_set, true);
+    assert.equal(dumped.undici_path, path.join(pkgRoot, "node_modules", "undici", "index.js"));
+  } finally {
+    removeFakePackage(pkgRoot, pkgBin, entry);
+    unlinkKnown(envDumpPath);
+  }
+});
+
+test("HTTP 404 explains the base URL suffix and reports the normalized origin without secrets", () => {
+  writeInputs("404");
+  const run = runChat([], {
+    FAKE_MODE: "http_404",
+    MINIMAX_BASE_URL: "https://user:secret@api.example.com/v1",
+  });
+  assert.equal(run.status, 1);
+  const result = jsonResult(run);
+  assert.equal(result.status, "api_error");
+  assert.equal(result.http_status, 404);
+  assert.match(result.hint, /\/v1/);
+  assert.equal(result.base_url_env, "stripped_v1");
+  assert.equal(result.base_url_env_value, "https://api.example.com");
+  assert.doesNotMatch(JSON.stringify(result), /secret|token=/);
+  const pathToken = jsonResult(runChat([], {
+    FAKE_MODE: "http_404",
+    MINIMAX_BASE_URL: "https://gw.example.test/synthetic-path-token/v1",
+  }));
+  assert.equal(pathToken.base_url_env, "stripped_v1");
+  assert.equal(pathToken.base_url_env_value, "https://gw.example.test");
+  assert.doesNotMatch(JSON.stringify(pathToken), /synthetic-path-token/);
 });
 
 // Both sides of the cross-validation pair must return the same structure,
