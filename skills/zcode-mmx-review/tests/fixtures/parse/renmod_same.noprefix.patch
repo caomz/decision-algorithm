@@ -1,0 +1,12 @@
+diff --git a/x b/x
+similarity index 88%
+rename from a/x
+rename to b/x
+index 33f4af7..386b87b 100644
+--- a/x
++++ b/x
+@@ -6,3 +6,4 @@ x5
+ x6
+ x7
+ x8
++x9

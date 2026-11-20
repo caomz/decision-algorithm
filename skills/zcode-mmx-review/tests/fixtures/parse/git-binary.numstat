@@ -1,0 +1,6 @@
+-	-	blob.bin
+0	0	doc x.md
+0	0	doc 中.md
+1	2	keep.sql
+0	0	mode 中.sh
+1	0	rename dst.txt

@@ -1,0 +1,210 @@
+diff --git c/ lead.txt i/ lead.txt
+new file mode 100644
+index 0000000..6427443
+--- /dev/null
++++ i/ lead.txt	
+@@ -0,0 +1,4 @@
++file-2-v1
++line two 2
++line three 2
++line four 2
+diff --git "c/\"start.txt" "i/\"start.txt"
+new file mode 100644
+index 0000000..79523c7
+--- /dev/null
++++ "i/\"start.txt"
+@@ -0,0 +1,4 @@
++file-17-v1
++line two 17
++line three 17
++line four 17
+diff --git c/a b/c d.txt i/a b/c d.txt
+new file mode 100644
+index 0000000..0a8e209
+--- /dev/null
++++ i/a b/c d.txt	
+@@ -0,0 +1,4 @@
++file-19-v1
++line two 19
++line three 19
++line four 19
+diff --git c/a/f.txt i/a/f.txt
+new file mode 100644
+index 0000000..857abdc
+--- /dev/null
++++ i/a/f.txt
+@@ -0,0 +1,4 @@
++file-15-v1
++line two 15
++line three 15
++line four 15
+diff --git c/b/f.txt i/b/f.txt
+new file mode 100644
+index 0000000..c6d5071
+--- /dev/null
++++ i/b/f.txt
+@@ -0,0 +1,4 @@
++file-16-v1
++line two 16
++line three 16
++line four 16
+diff --git "c/b\\s.txt" "i/b\\s.txt"
+new file mode 100644
+index 0000000..3aacf38
+--- /dev/null
++++ "i/b\\s.txt"
+@@ -0,0 +1,4 @@
++file-7-v1
++line two 7
++line three 7
++line four 7
+diff --git "c/c\001.txt" "i/c\001.txt"
+new file mode 100644
+index 0000000..06541bf
+--- /dev/null
++++ "i/c\001.txt"
+@@ -0,0 +1,4 @@
++file-8-v1
++line two 8
++line three 8
++line four 8
+diff --git c/dev/null i/dev/null
+new file mode 100644
+index 0000000..8269b14
+--- /dev/null
++++ i/dev/null
+@@ -0,0 +1,4 @@
++file-20-v1
++line two 20
++line three 20
++line four 20
+diff --git "c/d\177.txt" "i/d\177.txt"
+new file mode 100644
+index 0000000..9e4d8cf
+--- /dev/null
++++ "i/d\177.txt"
+@@ -0,0 +1,4 @@
++file-9-v1
++line two 9
++line three 9
++line four 9
+diff --git "c/e\t\360\237\230\200.txt" "i/e\t\360\237\230\200.txt"
+new file mode 100644
+index 0000000..60a37b0
+--- /dev/null
++++ "i/e\t\360\237\230\200.txt"
+@@ -0,0 +1,4 @@
++file-13-v1
++line two 13
++line three 13
++line four 13
+diff --git "c/n\nl.txt" "i/n\nl.txt"
+new file mode 100644
+index 0000000..97258b6
+--- /dev/null
++++ "i/n\nl.txt"
+@@ -0,0 +1,4 @@
++file-5-v1
++line two 5
++line three 5
++line four 5
+diff --git c/plain.txt i/plain.txt
+new file mode 100644
+index 0000000..07027d6
+--- /dev/null
++++ i/plain.txt
+@@ -0,0 +1,4 @@
++file-0-v1
++line two 0
++line three 0
++line four 0
+diff --git "c/q\"t.txt" "i/q\"t.txt"
+new file mode 100644
+index 0000000..55acabe
+--- /dev/null
++++ "i/q\"t.txt"
+@@ -0,0 +1,4 @@
++file-6-v1
++line two 6
++line three 6
++line four 6
+diff --git c/sp ace.txt i/sp ace.txt
+new file mode 100644
+index 0000000..de552eb
+--- /dev/null
++++ i/sp ace.txt	
+@@ -0,0 +1,4 @@
++file-1-v1
++line two 1
++line three 1
++line four 1
+diff --git "c/t\tab.txt" "i/t\tab.txt"
+new file mode 100644
+index 0000000..c7cabcd
+--- /dev/null
++++ "i/t\tab.txt"
+@@ -0,0 +1,4 @@
++file-4-v1
++line two 4
++line three 4
++line four 4
+diff --git c/trail .txt i/trail .txt
+new file mode 100644
+index 0000000..d0282ec
+--- /dev/null
++++ i/trail .txt	
+@@ -0,0 +1,4 @@
++file-3-v1
++line two 3
++line three 3
++line four 3
+diff --git "c/u\037.txt" "i/u\037.txt"
+new file mode 100644
+index 0000000..ad52692
+--- /dev/null
++++ "i/u\037.txt"
+@@ -0,0 +1,4 @@
++file-10-v1
++line two 10
++line three 10
++line four 10
+diff --git c/x and b/f.txt i/x and b/f.txt
+new file mode 100644
+index 0000000..d49e9fb
+--- /dev/null
++++ i/x and b/f.txt	
+@@ -0,0 +1,4 @@
++file-14-v1
++line two 14
++line three 14
++line four 14
+diff --git c/y and b/g h.txt i/y and b/g h.txt
+new file mode 100644
+index 0000000..6b6e0f0
+--- /dev/null
++++ i/y and b/g h.txt	
+@@ -0,0 +1,4 @@
++file-18-v1
++line two 18
++line three 18
++line four 18
+diff --git "c/\344\270\255\346\226\207.txt" "i/\344\270\255\346\226\207.txt"
+new file mode 100644
+index 0000000..c44a049
+--- /dev/null
++++ "i/\344\270\255\346\226\207.txt"
+@@ -0,0 +1,4 @@
++file-11-v1
++line two 11
++line three 11
++line four 11
+diff --git "c/\360\237\230\200.txt" "i/\360\237\230\200.txt"
+new file mode 100644
+index 0000000..cdcb400
+--- /dev/null
++++ "i/\360\237\230\200.txt"
+@@ -0,0 +1,4 @@
++file-12-v1
++line two 12
++line three 12
++line four 12

@@ -1,0 +1,12 @@
+diff --git a/src b/cp
+similarity index 88%
+copy from a/src
+copy to b/cp
+index f5096d1..fb1a3c4 100644
+--- a/src
++++ b/cp
+@@ -6,3 +6,4 @@ s5
+ s6
+ s7
+ s8
++s9

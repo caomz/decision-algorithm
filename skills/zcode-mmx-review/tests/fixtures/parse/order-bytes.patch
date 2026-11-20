@@ -1,0 +1,35 @@
+diff --git a/a.txt b/a.txt
+new file mode 100644
+index 0000000..7898192
+--- /dev/null
++++ b/a.txt
+@@ -0,0 +1 @@
++a
+diff --git "a/b\001.txt" "b/b\001.txt"
+new file mode 100644
+index 0000000..6178079
+--- /dev/null
++++ "b/b\001.txt"
+@@ -0,0 +1 @@
++b
+diff --git "a/us\037.txt" "b/us\037.txt"
+new file mode 100644
+index 0000000..4ae8ef0
+--- /dev/null
++++ "b/us\037.txt"
+@@ -0,0 +1 @@
++u
+diff --git "a/\356\200\200.txt" "b/\356\200\200.txt"
+new file mode 100644
+index 0000000..1a9cc2b
+--- /dev/null
++++ "b/\356\200\200.txt"
+@@ -0,0 +1 @@
++p
+diff --git "a/\360\237\230\200.txt" "b/\360\237\230\200.txt"
+new file mode 100644
+index 0000000..d905d9d
+--- /dev/null
++++ "b/\360\237\230\200.txt"
+@@ -0,0 +1 @@
++e

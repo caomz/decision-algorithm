@@ -1,0 +1,33 @@
+diff --git a/ lead.txt b/ lead.txt
+index 7898192..c964fb6 100644
+--- a/ lead.txt	
++++ b/ lead.txt	
+@@ -1 +1,2 @@
+ a
++A2
+diff --git a/lead-src.txt b/ lead2.txt
+similarity index 100%
+rename from lead-src.txt
+rename to  lead2.txt
+diff --git a/copy-src.txt b/copy dst.txt 
+similarity index 100%
+copy from copy-src.txt
+copy to copy dst.txt 
+diff --git a/new.txt  b/new.txt 
+new file mode 100644
+index 0000000..8ba3a16
+--- /dev/null
++++ b/new.txt 	
+@@ -0,0 +1 @@
++n
+diff --git a/trail.txt  b/trail.txt 
+index 6178079..2c852d3 100644
+--- a/trail.txt 	
++++ b/trail.txt 	
+@@ -1 +1,2 @@
+ b
++B2
+diff --git a/trail-src.txt b/trail2.txt 
+similarity index 100%
+rename from trail-src.txt
+rename to trail2.txt 
