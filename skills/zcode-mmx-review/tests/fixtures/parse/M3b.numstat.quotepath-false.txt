@@ -1,0 +1,5 @@
+1	0	"back\\slash.txt"
+1	0	"dq\"name.txt"
+50	0	"notes.md\t+1\t-0\nmain.js"
+1	0	"tab\there.txt"
+1	0	中 文.txt

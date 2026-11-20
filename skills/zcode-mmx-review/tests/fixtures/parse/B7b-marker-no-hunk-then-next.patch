@@ -1,0 +1,9 @@
+diff --git a/z.bin b/z.bin
+GIT binary patch
+
+diff --git a/y b/y
+--- a/y
++++ b/y
+@@ -1 +1 @@
+-keep
++keep5

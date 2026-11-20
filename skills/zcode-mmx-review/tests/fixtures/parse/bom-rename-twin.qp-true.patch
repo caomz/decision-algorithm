@@ -1,0 +1,11 @@
+diff --git a/x.txt b/x.txt
+index 9e35a1c..9dbcf43 100644
+--- a/x.txt
++++ b/x.txt
+@@ -1 +1,2 @@
+ x1
++x2
+diff --git a/old.txt "b/\357\273\277x.txt"
+similarity index 100%
+rename from old.txt
+rename to "\357\273\277x.txt"

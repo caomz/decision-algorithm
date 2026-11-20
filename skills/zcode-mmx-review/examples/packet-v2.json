@@ -1,0 +1,43 @@
+{
+  "facts": [
+    {"id": "F1", "text": "The entry hands the same logical review packet to both sides and adjudicates both with one validator."},
+    {"id": "F2", "text": "Patches and logs enter the packet only after the host has produced, reviewed and redacted them."}
+  ],
+  "constraints": [
+    "No real model calls in this stage."
+  ],
+  "goal": {
+    "request": "Verify that the unified offline entry produces consistent adjudication for the fixture backend.",
+    "acceptance": [
+      "Both sides receive byte-identical logical packets.",
+      "A P1 finding on either side fails the round.",
+      "Verify replays an archived round without calling any wrapper."
+    ]
+  },
+  "changes": {
+    "kind": "worktree_patch",
+    "base": "5bf74a29fabf4166446bccdd17bfcf65b49b5b31",
+    "patch": "diff --git a/demo.txt b/demo.txt\nindex 1234567..89abcde 100644\n--- a/demo.txt\n+++ b/demo.txt\n@@ -1,2 +1,3 @@\n first\n-second\n+second\n+third\n",
+    "patch_sha256": "0b05c015b93690b265b158a881813b4c176bf22f4eb514f31a0e67e975959b80"
+  },
+  "execution": {
+    "tests": [
+      {
+        "cmd": "node --test --test-reporter=tap tests/review-run.test.js",
+        "exit_code": 0,
+        "source": "host_reported",
+        "log_bytes": 1234,
+        "log_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "tail_only": true,
+        "output_tail": "# tests 70\n# pass 70\n# fail 0\n"
+      }
+    ]
+  },
+  "claims": [
+    "All fixture scenarios replay deterministically."
+  ],
+  "provenance": {
+    "generated_by": "review-run pack",
+    "packet_version": 2
+  }
+}

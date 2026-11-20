@@ -1,0 +1,12 @@
+diff --git a/p q b/r s
+similarity index 88%
+rename from a/p q
+rename to b/r s
+index 0084122..5475a7a 100644
+--- a/p q	
++++ b/r s	
+@@ -6,3 +6,4 @@ p5
+ p6
+ p7
+ p8
++p9

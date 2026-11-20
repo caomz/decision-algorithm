@@ -1,0 +1,210 @@
+diff --git c/ lead.txt i/ lead.txt
+deleted file mode 100644
+index 6427443..0000000
+--- c/ lead.txt	
++++ /dev/null
+@@ -1,4 +0,0 @@
+-file-2-v1
+-line two 2
+-line three 2
+-line four 2
+diff --git "c/\"start.txt" "i/\"start.txt"
+deleted file mode 100644
+index 79523c7..0000000
+--- "c/\"start.txt"
++++ /dev/null
+@@ -1,4 +0,0 @@
+-file-17-v1
+-line two 17
+-line three 17
+-line four 17
+diff --git c/a b/c d.txt i/a b/c d.txt
+deleted file mode 100644
+index 0a8e209..0000000
+--- c/a b/c d.txt	
++++ /dev/null
+@@ -1,4 +0,0 @@
+-file-19-v1
+-line two 19
+-line three 19
+-line four 19
+diff --git c/a/f.txt i/a/f.txt
+deleted file mode 100644
+index 857abdc..0000000
+--- c/a/f.txt
++++ /dev/null
+@@ -1,4 +0,0 @@
+-file-15-v1
+-line two 15
+-line three 15
+-line four 15
+diff --git c/b/f.txt i/b/f.txt
+deleted file mode 100644
+index c6d5071..0000000
+--- c/b/f.txt
++++ /dev/null
+@@ -1,4 +0,0 @@
+-file-16-v1
+-line two 16
+-line three 16
+-line four 16
+diff --git "c/b\\s.txt" "i/b\\s.txt"
+deleted file mode 100644
+index 3aacf38..0000000
+--- "c/b\\s.txt"
++++ /dev/null
+@@ -1,4 +0,0 @@
+-file-7-v1
+-line two 7
+-line three 7
+-line four 7
+diff --git "c/c\001.txt" "i/c\001.txt"
+deleted file mode 100644
+index 06541bf..0000000
+--- "c/c\001.txt"
++++ /dev/null
+@@ -1,4 +0,0 @@
+-file-8-v1
+-line two 8
+-line three 8
+-line four 8
+diff --git c/dev/null i/dev/null
+deleted file mode 100644
+index 8269b14..0000000
+--- c/dev/null
++++ /dev/null
+@@ -1,4 +0,0 @@
+-file-20-v1
+-line two 20
+-line three 20
+-line four 20
+diff --git "c/d\177.txt" "i/d\177.txt"
+deleted file mode 100644
+index 9e4d8cf..0000000
+--- "c/d\177.txt"
++++ /dev/null
+@@ -1,4 +0,0 @@
+-file-9-v1
+-line two 9
+-line three 9
+-line four 9
+diff --git "c/e\t\360\237\230\200.txt" "i/e\t\360\237\230\200.txt"
+deleted file mode 100644
+index 60a37b0..0000000
+--- "c/e\t\360\237\230\200.txt"
++++ /dev/null
+@@ -1,4 +0,0 @@
+-file-13-v1
+-line two 13
+-line three 13
+-line four 13
+diff --git "c/n\nl.txt" "i/n\nl.txt"
+deleted file mode 100644
+index 97258b6..0000000
+--- "c/n\nl.txt"
++++ /dev/null
+@@ -1,4 +0,0 @@
+-file-5-v1
+-line two 5
+-line three 5
+-line four 5
+diff --git c/plain.txt i/plain.txt
+deleted file mode 100644
+index 07027d6..0000000
+--- c/plain.txt
++++ /dev/null
+@@ -1,4 +0,0 @@
+-file-0-v1
+-line two 0
+-line three 0
+-line four 0
+diff --git "c/q\"t.txt" "i/q\"t.txt"
+deleted file mode 100644
+index 55acabe..0000000
+--- "c/q\"t.txt"
++++ /dev/null
+@@ -1,4 +0,0 @@
+-file-6-v1
+-line two 6
+-line three 6
+-line four 6
+diff --git c/sp ace.txt i/sp ace.txt
+deleted file mode 100644
+index de552eb..0000000
+--- c/sp ace.txt	
++++ /dev/null
+@@ -1,4 +0,0 @@
+-file-1-v1
+-line two 1
+-line three 1
+-line four 1
+diff --git "c/t\tab.txt" "i/t\tab.txt"
+deleted file mode 100644
+index c7cabcd..0000000
+--- "c/t\tab.txt"
++++ /dev/null
+@@ -1,4 +0,0 @@
+-file-4-v1
+-line two 4
+-line three 4
+-line four 4
+diff --git c/trail .txt i/trail .txt
+deleted file mode 100644
+index d0282ec..0000000
+--- c/trail .txt	
++++ /dev/null
+@@ -1,4 +0,0 @@
+-file-3-v1
+-line two 3
+-line three 3
+-line four 3
+diff --git "c/u\037.txt" "i/u\037.txt"
+deleted file mode 100644
+index ad52692..0000000
+--- "c/u\037.txt"
++++ /dev/null
+@@ -1,4 +0,0 @@
+-file-10-v1
+-line two 10
+-line three 10
+-line four 10
+diff --git c/x and b/f.txt i/x and b/f.txt
+deleted file mode 100644
+index d49e9fb..0000000
+--- c/x and b/f.txt	
++++ /dev/null
+@@ -1,4 +0,0 @@
+-file-14-v1
+-line two 14
+-line three 14
+-line four 14
+diff --git c/y and b/g h.txt i/y and b/g h.txt
+deleted file mode 100644
+index 6b6e0f0..0000000
+--- c/y and b/g h.txt	
++++ /dev/null
+@@ -1,4 +0,0 @@
+-file-18-v1
+-line two 18
+-line three 18
+-line four 18
+diff --git "c/\344\270\255\346\226\207.txt" "i/\344\270\255\346\226\207.txt"
+deleted file mode 100644
+index c44a049..0000000
+--- "c/\344\270\255\346\226\207.txt"
++++ /dev/null
+@@ -1,4 +0,0 @@
+-file-11-v1
+-line two 11
+-line three 11
+-line four 11
+diff --git "c/\360\237\230\200.txt" "i/\360\237\230\200.txt"
+deleted file mode 100644
+index cdcb400..0000000
+--- "c/\360\237\230\200.txt"
++++ /dev/null
+@@ -1,4 +0,0 @@
+-file-12-v1
+-line two 12
+-line three 12
+-line four 12
