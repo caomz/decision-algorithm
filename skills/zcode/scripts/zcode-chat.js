@@ -8,7 +8,7 @@ const { createHash } = require("node:crypto");
 const { spawn, spawnSync } = require("node:child_process");
 const { buildPrompt, validateReview, validateIds, strictJson } = require("./review.js");
 
-const VERSION = "1.4.1";
+const VERSION = "1.5.0";
 const SUPPORTED_CLI = "0.17.1";
 // The CLI accepts build/edit/plan/yolo/guarded. This wrapper only ever uses the
 // two read-only modes: macOS keeps the plan mode it was accepted with, Windows

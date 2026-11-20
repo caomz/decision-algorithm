@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "version": "1.4.1",
+  "version": "1.5.0",
   "files": {
     "README.md": "c97f7e7afee1ad6ac3325321017a58274064cdd83f8ffca154e5589b9d306536",
     "SKILL.md": "54f2daa2087883bc5bd83e82fd913e31ab9502e1605bed42b129a85eff8865f0",
@@ -8,13 +8,14 @@
     "references/review-v1.schema.json": "f269a080098ecb4ab34ed8fd5aa4e76206ba662a6358be7fbd5451e9392bc546",
     "references/verification.md": "9656289b42976335db8e5a6e366011355bcc17f48501800c0ce095fc630741ef",
     "scripts/repin-release.js": "03b66e58ddc551735a9a8293c20b7f38ce4c239acaf8405b28f260b5f47e7c35",
-    "scripts/review.js": "e75efea752475b5919051c9167dbe27e80d986f3b65062464fb0a36d9391e36b",
+    "scripts/review.js": "f4a6a4522bb5d07d48db6b3ac83bda25a08dff5bbd0cde7b05618d54520c9c83",
     "scripts/zcode-batch.js": "671169b40b7e56730d6379bcf3e84d1c1918260e9630677d86f2827000609553",
-    "scripts/zcode-chat.js": "1285a3ac9c5cd7c06c01a056e0fc75db51f5eae5a5232f550966a7fc66d2421f",
+    "scripts/zcode-chat.js": "d1a30df85b622a8d35342b645e112917e7a16a6355e2b913039024b10d779c08",
     "scripts/zcode-run.js": "23bdc345377e31ccec85a50469edf86c02a4ceced79f01e24edea9d1f94980fe",
     "tests/fixtures/fake-zcode.cjs": "a2e5648cdcf8d1fe270c012625553528366d01d89ff4e430424991b8d9a480df",
+    "tests/review-golden.test.js": "e36ffebea6e6456f6b3c6362eab3429e43fa4beac9cf91e61e9155792ce6d04e",
     "tests/zcode-batch.test.js": "4913198418ffe63d8c346dab11b4c6fc05ba6345aa7e4842bb6672e03741e6a0",
     "tests/zcode-chat.test.js": "f6ba1485408fede2714edec96c09a595c4a99006092c54844b0bd36be6034b9a"
   },
-  "review_sha256": "e75efea752475b5919051c9167dbe27e80d986f3b65062464fb0a36d9391e36b"
+  "review_sha256": "f4a6a4522bb5d07d48db6b3ac83bda25a08dff5bbd0cde7b05618d54520c9c83"
 }
