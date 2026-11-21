@@ -854,6 +854,12 @@ async function runFixtureRound(inputs, { out, scenario, timeoutSeconds, maxToken
     });
     clearTimeout(deadline);
     entry.closeDone = true;
+    // Test-only cross-process synchronization: signal only after ZCode's
+    // close event has been observed. No provider input or archive receipt
+    // is modified, and the flag is absent outside this explicit test mode.
+    if (side === "zcode" && process.env.ZMX_TEST_CLOSE_MARKER === "1") {
+      fs.writeFileSync(path.join(out, "tmp", "zcode-closed.marker"), "closed\n", { flag: "wx", mode: 0o600 });
+    }
     // 单点定态：取消优先于超时，超时优先于正常完成；spawn_error 已是终态，不改写。
     if (entry.state === "running" || entry.state === "terminating") {
       entry.state = entry.cancelRequested ? "cancelled" : entry.state === "terminating" ? "timed_out" : "completed";

@@ -105,6 +105,13 @@ switch (process.env.FAKE_MODE || "success") {
     setInterval(() => {}, 1000);
     break;
   }
+  case "orphan_child": {
+    const child = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { stdio: "ignore" });
+    fs.writeFileSync(process.env.FAKE_CHILD_PID, String(child.pid));
+    child.unref();
+    process.stdout.write(JSON.stringify(ok));
+    break;
+  }
   default: process.stderr.write("unknown fake mode"); process.exitCode = 2;
 }
 `, "utf8");
@@ -545,6 +552,7 @@ test("managed release rejects mixed or interrupted installation before launching
     "agy/scripts/agy_runner.py": Buffer.from("# fixture runner"),
     "mmx/scripts/mmx-chat.js": fs.readFileSync(wrapper),
     "mmx/scripts/fetch-timeout-guard.js": fs.readFileSync(path.join(skillRoot, "scripts", "fetch-timeout-guard.js")),
+    "mmx/scripts/mmx-provider-slot.js": fs.readFileSync(path.join(skillRoot, "scripts", "mmx-provider-slot.js")),
     "mmx/profiles/local.json": fs.readFileSync(profile),
     "cross-validation/scripts/cross_validate.py": Buffer.from("# fixture coordinator"),
   };
@@ -558,17 +566,28 @@ test("managed release rejects mixed or interrupted installation before launching
   }
   const manifest = { format: 1, state: "active", release_id: hash(JSON.stringify(digests)), files: digests };
   const installedWrapper = path.join(managed, "mmx", "scripts", "mmx-chat.js");
-  function run() {
+  function run(extraEnv = {}) {
     fs.writeFileSync(invocationLog, "");
     return jsonResult(spawnSync(process.execPath, [installedWrapper, "--prompt-file", promptPath], {
       env: { ...process.env, PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`, TMPDIR: wrapperTmp,
-        TMP: wrapperTmp, TEMP: wrapperTmp, FAKE_INVOCATIONS: invocationLog },
+        TMP: wrapperTmp, TEMP: wrapperTmp, FAKE_INVOCATIONS: invocationLog, ...extraEnv },
       encoding: "utf8", timeout: 15000,
     }));
   }
   writeInputs("release fixture");
   fs.writeFileSync(marker, JSON.stringify(manifest));
   assert.equal(run().status, "ok");
+  const slotHome = path.join(root, "managed-slot-home");
+  fs.mkdirSync(slotHome, { recursive: true });
+  const slotEnv = { MMX_GLOBAL_SLOT: "1", HOME: slotHome, USERPROFILE: slotHome };
+  assert.equal(run(slotEnv).status, "ok", "pinned slot helper remains usable");
+  fs.writeFileSync(marker, JSON.stringify({ ...manifest,
+    files: { ...digests, "mmx/scripts/mmx-provider-slot.js": undefined } }));
+  const unpinnedSlot = run(slotEnv);
+  assert.equal(unpinnedSlot.status, "install_mismatch", "enabled slot helper must be covered by the managed manifest");
+  assert.equal(unpinnedSlot.cli_invoked, false);
+  assert.equal(fs.readFileSync(invocationLog, "utf8"), "");
+  fs.writeFileSync(marker, JSON.stringify(manifest));
   fs.writeFileSync(path.join(managed, "mmx", "profiles", "local.json"), "{}");
   const mixed = run();
   assert.equal(mixed.status, "install_mismatch");
@@ -646,41 +665,42 @@ test("a plain install without siblings and without a marker is not treated as ma
   fs.rmdirSync(plain);
 });
 
-// A POSIX `mmx` that is a symlink to the declared bin of a fake mmx-cli
-// package, with an undici stub the fetch guard can import.
+// A real npm-style package entry on every platform: POSIX uses its executable
+// link and Windows uses the .cmd shim resolved by the production launcher.
 function buildFakePackage() {
-  const pkgRoot = path.join(root, "fake-mmx-cli");
   const pkgBin = path.join(root, "pkg-bin");
+  const pkgRoot = path.join(pkgBin, "node_modules", "mmx-cli");
   fs.mkdirSync(path.join(pkgRoot, "dist"), { recursive: true });
   fs.mkdirSync(path.join(pkgRoot, "node_modules", "undici"), { recursive: true });
-  fs.mkdirSync(pkgBin);
-  const entry = path.join(pkgRoot, "dist", "mmx.cjs");
-  fs.writeFileSync(path.join(pkgRoot, "package.json"), JSON.stringify({ name: "mmx-cli", bin: { mmx: "dist/mmx.cjs" } }));
-  fs.writeFileSync(entry, `#!${process.execPath}\nrequire(${JSON.stringify(fakeJsPath)});\n`, { mode: 0o755 });
+  const entry = path.join(pkgRoot, "dist", "mmx.mjs");
+  fs.writeFileSync(path.join(pkgRoot, "package.json"), JSON.stringify({ name: "mmx-cli", bin: { mmx: "dist/mmx.mjs" } }));
+  fs.writeFileSync(entry, `#!${process.execPath}\nimport { createRequire } from 'node:module';\ncreateRequire(import.meta.url)(${JSON.stringify(fakeJsPath)});\n`, { mode: 0o755 });
   fs.writeFileSync(path.join(pkgRoot, "node_modules", "undici", "package.json"), JSON.stringify({ name: "undici", main: "index.js" }));
   fs.writeFileSync(path.join(pkgRoot, "node_modules", "undici", "index.js"),
     "class Agent { constructor(options) { this.options = options; } }\n" +
     "module.exports = { Agent, setGlobalDispatcher(dispatcher) { globalThis.__fakeGuard = dispatcher.options; } };\n");
-  fs.symlinkSync(entry, path.join(pkgBin, "mmx"));
+  if (process.platform === "win32") {
+    fs.writeFileSync(path.join(pkgBin, "mmx.cmd"), '@echo off\r\n"%_prog%" "%dp0%\\node_modules\\mmx-cli\\dist\\mmx.mjs" %*\r\n');
+  } else fs.symlinkSync(entry, path.join(pkgBin, "mmx"));
   return { pkgRoot, pkgBin, entry };
 }
 
 function removeFakePackage(pkgRoot, pkgBin, entry) {
   unlinkKnown(path.join(pkgBin, "mmx"));
+  unlinkKnown(path.join(pkgBin, "mmx.cmd"));
   unlinkKnown(entry);
   unlinkKnown(path.join(pkgRoot, "package.json"));
-  unlinkKnown(path.join(pkgRoot, "dist", "mmx.cjs"));
   unlinkKnown(path.join(pkgRoot, "node_modules", "undici", "package.json"));
   unlinkKnown(path.join(pkgRoot, "node_modules", "undici", "index.js"));
   for (const dir of [path.join(pkgRoot, "dist"), path.join(pkgRoot, "node_modules", "undici"),
-                     path.join(pkgRoot, "node_modules"), pkgRoot, pkgBin]) fs.rmdirSync(dir);
+                     path.join(pkgRoot, "node_modules"), pkgRoot, path.join(pkgBin, "node_modules"), pkgBin]) fs.rmdirSync(dir);
 }
 
 test("package entry resolution accepts linked mmx-cli entries and rejects other packages", () => {
-  if (process.platform === "win32") return;
   const { pkgRoot, pkgBin, entry } = buildFakePackage();
   try {
-    assert.equal(linkedEntry(path.join(pkgBin, "mmx")), fs.realpathSync(entry));
+    if (process.platform !== "win32") assert.equal(linkedEntry(path.join(pkgBin, "mmx")), fs.realpathSync(entry));
+    assert.equal(fs.realpathSync(findMmx(process.platform, pkgBin).argsPrefix[0]), fs.realpathSync(entry));
     assert.equal(mmxPackageEntry(entry)?.root, fs.realpathSync(pkgRoot));
     // The default fake is a custom launcher, not an mmx-cli package.
     assert.equal(linkedEntry(fakeMmxPath), null);
@@ -694,7 +714,6 @@ test("package entry resolution accepts linked mmx-cli entries and rejects other 
 });
 
 test("the mmx-cli package entry launches with the fetch guard preloaded and a normalized base URL", () => {
-  if (process.platform === "win32") return;
   const { pkgRoot, pkgBin, entry } = buildFakePackage();
   const envDumpPath = path.join(root, "env-dump.json");
   const noProxy = Object.fromEntries(["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy",
@@ -743,8 +762,64 @@ test("the mmx-cli package entry launches with the fetch guard preloaded and a no
   }
 });
 
+test("a selected fetch guard fails before invoking the CLI if initialization throws", () => {
+  const { pkgRoot, pkgBin, entry } = buildFakePackage();
+  const undiciFile = path.join(pkgRoot, "node_modules", "undici", "index.js");
+  const secret = "synthetic-private-dependency-detail";
+  try {
+    writeInputs("guard initialization must precede request");
+    for (const broken of [
+      `throw new Error(${JSON.stringify(secret)});`,
+      "module.exports = { Agent: class {}, setGlobalDispatcher() { throw new Error('dispatcher rejected'); } };",
+    ]) {
+      fs.writeFileSync(undiciFile, broken);
+      const run = runChat([], { PATH: `${pkgBin}${path.delimiter}${process.env.PATH || ""}` });
+      const receipt = jsonResult(run);
+      assert.equal(run.status, 1);
+      assert.equal(receipt.status, "guard_error");
+      assert.equal(receipt.fetch_timeout_guard, "preload_failed");
+      assert.equal(receipt.exit_code, 78);
+      assert.equal(fs.readFileSync(invocationLog, "utf8"), "", "the CLI entry never runs");
+      assert.doesNotMatch(run.stdout + run.stderr, new RegExp(secret));
+      assert.deepEqual(fs.readdirSync(wrapperTmp), []);
+    }
+  } finally { removeFakePackage(pkgRoot, pkgBin, entry); }
+});
+
+test("fetch guard acknowledgement does not break inherited Worker preloads", () => {
+  const { pkgRoot, pkgBin, entry } = buildFakePackage();
+  try {
+    fs.writeFileSync(entry, "import { Worker } from 'node:worker_threads';\n" +
+      "import { createRequire } from 'node:module';\n" +
+      "const worker = new Worker('0', { eval: true });\n" +
+      "worker.on('exit', code => { if (code) process.exit(code); else createRequire(import.meta.url)(" +
+      JSON.stringify(fakeJsPath) + "); });\n");
+    writeInputs("worker preload");
+    const result = jsonResult(runChat([], { PATH: `${pkgBin}${path.delimiter}${process.env.PATH || ""}` }));
+    assert.equal(result.status, "ok");
+    assert.notEqual(result.fetch_timeout_guard, "preload_failed");
+    assert.deepEqual(fs.readdirSync(wrapperTmp), []);
+  } finally { removeFakePackage(pkgRoot, pkgBin, entry); }
+});
+
+test("a blocked guard import preserves timeout without claiming initialization", () => {
+  const { pkgRoot, pkgBin, entry } = buildFakePackage();
+  try {
+    fs.writeFileSync(path.join(pkgRoot, "node_modules", "undici", "index.js"),
+      "Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30000);\n");
+    writeInputs("blocked preload");
+    const run = runChat(["--timeout", "1", "--wrap-timeout", "2"],
+      { PATH: `${pkgBin}${path.delimiter}${process.env.PATH || ""}` });
+    const result = jsonResult(run);
+    assert.equal(run.status, 1);
+    assert.equal(result.status, "timeout");
+    assert.equal(result.fetch_timeout_guard, "preload_failed");
+    assert.equal(fs.readFileSync(invocationLog, "utf8"), "");
+    assert.deepEqual(fs.readdirSync(wrapperTmp), []);
+  } finally { removeFakePackage(pkgRoot, pkgBin, entry); }
+});
+
 test("the mmx config proxy key downgrades the guard the way mmx-cli reads it", () => {
-  if (process.platform === "win32") return;
   const { pkgRoot, pkgBin, entry } = buildFakePackage();
   const envDumpPath = path.join(root, "env-dump.json");
   const noProxy = Object.fromEntries(["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy",
@@ -786,7 +861,6 @@ test("the mmx config proxy key downgrades the guard the way mmx-cli reads it", (
 });
 
 test("proxy variables downgrade the preloaded guard to proxy_limited", () => {
-  if (process.platform === "win32") return;
   const { pkgRoot, pkgBin, entry } = buildFakePackage();
   const envDumpPath = path.join(root, "env-dump.json");
   try {
@@ -903,4 +977,35 @@ test("opt-in provider slot is acquired and released after the CLI closes", () =>
   assert.equal(result.provider_slot, "acquired");
   assert.equal(typeof result.provider_slot_wait_ms, "number");
   assert.equal(fs.existsSync(path.join(home, ".zmx", "locks", "mmx", "slot-0")), false);
+});
+
+test("opt-in slot cannot report success when the CLI leaves a same-group descendant running", {
+  skip: process.platform === "win32" ? "POSIX process-group contract" : false,
+}, () => {
+  writeInputs("provider slot descendant cleanup");
+  const home = path.join(root, "provider-slot-orphan-home");
+  fs.mkdirSync(home, { recursive: true });
+  unlinkKnown(childPidPath);
+  try {
+    const run = runChat([], { MMX_GLOBAL_SLOT: "1", HOME: home, USERPROFILE: home,
+      FAKE_MODE: "orphan_child", FAKE_CHILD_PID: childPidPath });
+    const result = jsonResult(run);
+    assert.equal(result.status, "cleanup_error", JSON.stringify(result));
+    assert.equal(run.status, 1);
+    const lock = path.join(home, ".zmx", "locks", "mmx", "slot-0");
+    if (result.provider_slot === "held_for_recovery") {
+      assert.equal(fs.existsSync(lock), true, "an unconfirmed process group must retain the slot");
+      assert.match(result.termination_warning, /could not be confirmed/);
+    } else {
+      const pid = Number(fs.readFileSync(childPidPath, "utf8"));
+      assert.throws(() => process.kill(pid, 0), error => error.code === "ESRCH",
+        "release requires the descendant to have disappeared");
+      assert.equal(fs.existsSync(lock), false);
+    }
+  } finally {
+    if (fs.existsSync(childPidPath)) {
+      try { process.kill(Number(fs.readFileSync(childPidPath, "utf8")), "SIGKILL"); } catch {}
+      unlinkKnown(childPidPath);
+    }
+  }
 });

@@ -92,8 +92,10 @@ function validateInstall() {
   if (!isObject(release) || release.format !== 1 || release.state !== "active" ||
       typeof release.release_id !== "string" || !/^[a-f0-9]{64}$/.test(release.release_id) ||
       !isObject(release.files)) throw new Error("release marker is invalid");
-  for (const required of ["mmx/scripts/mmx-chat.js", "mmx/scripts/fetch-timeout-guard.js", "mmx/profiles/local.json",
-                          "cross-validation/scripts/cross_validate.py"]) {
+  const requiredFiles = ["mmx/scripts/mmx-chat.js", "mmx/scripts/fetch-timeout-guard.js", "mmx/profiles/local.json",
+                         "cross-validation/scripts/cross_validate.py"];
+  if (process.env.MMX_GLOBAL_SLOT === "1") requiredFiles.push("mmx/scripts/mmx-provider-slot.js");
+  for (const required of requiredFiles) {
     if (!Object.hasOwn(release.files, required)) throw new Error("release manifest is incomplete");
   }
   for (const [relative, expected] of Object.entries(release.files)) {
@@ -203,7 +205,7 @@ if (require.main === module) {
 
 // Capture stdout and stderr separately in private files. Buffering each
 // stream in memory while the request runs doubles the cost of a large reply.
-function runCmd(cmd, args, timeoutSecs, useShell, childEnv) {
+function runCmd(cmd, args, timeoutSecs, useShell, childEnv, confirmGroup = false) {
   const stdoutFd = privateFile("stdout");
   let stderrFd;
   try { stderrFd = privateFile("stderr"); }
@@ -221,6 +223,13 @@ function runCmd(cmd, args, timeoutSecs, useShell, childEnv) {
     let timeout;
     let grace;
     let deadline;
+    let groupCheck;
+
+    function groupGone() {
+      if (!grouped || !child?.pid) return true;
+      try { process.kill(-child.pid, 0); return false; }
+      catch (error) { return error.code === "ESRCH"; }
+    }
 
     function finish(kind) {
       if (finished) return;
@@ -228,10 +237,19 @@ function runCmd(cmd, args, timeoutSecs, useShell, childEnv) {
       clearTimeout(timeout);
       clearTimeout(grace);
       clearTimeout(deadline);
+      clearTimeout(groupCheck);
       cancelCurrentRequest = null;
       fs.closeSync(stdoutFd);
       fs.closeSync(stderrFd);
       resolve({ kind, code: forcedExitCode ?? childCode, termination_failed: terminationFailed });
+    }
+
+    function finishAfterTree(kind) {
+      if (finished) return;
+      if (!confirmGroup || groupGone()) { finish(kind); return; }
+      // A successful signal only queues termination. Keep the lease while a
+      // member still exists (including an un-reaped process or unknown probe).
+      groupCheck = setTimeout(() => finishAfterTree(kind), 50);
     }
 
     function stop(kind, code = null) {
@@ -244,7 +262,7 @@ function runCmd(cmd, args, timeoutSecs, useShell, childEnv) {
         // still needs escalation even after the close event.
         if ((grouped || !closed) && !terminateChildTree(child, true, grouped)) terminationFailed = true;
         escalated = true;
-        if (closed) finish(stopReason);
+        if (closed) finishAfterTree(stopReason);
       }, 1500);
       deadline = setTimeout(() => {
         child.stdout.destroy();
@@ -277,11 +295,23 @@ function runCmd(cmd, args, timeoutSecs, useShell, childEnv) {
     child.stdout.on("data", bytes => capture(stdoutFd, bytes));
     child.stderr.on("data", bytes => capture(stderrFd, bytes));
     child.on("spawn", () => { cliInvoked = true; });
-    child.on("error", () => finish(stopReason || "spawn_error"));
+    child.on("error", () => {
+      if (confirmGroup && child.pid && !groupGone()) {
+        // An error after spawn is not evidence that the process group exited.
+        terminationFailed = true;
+        stop(stopReason || "spawn_error");
+      } else finish(stopReason || "spawn_error");
+    });
     child.on("close", code => {
       closed = true;
       childCode = code;
-      if (!stopReason || escalated) finish(stopReason || "closed");
+      if (!stopReason) {
+        if (confirmGroup && !groupGone()) {
+          // The CLI root can exit successfully after leaving a live descendant
+          // with detached stdio. Never free its provider slot as an ordinary success.
+          stop("cleanup_error");
+        } else finish("closed");
+      } else if (escalated) finishAfterTree(stopReason);
     });
     timeout = setTimeout(() => stop("timeout", 124), timeoutSecs * 1000);
   });
@@ -641,6 +671,15 @@ async function main() {
   telemetry.base_url_env = launch.base_url_env;
 
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mmx-chat-"));
+  let guardStatusFile = null;
+  if (["preloaded", "proxy_limited"].includes(launch.fetch_timeout_guard)) {
+    guardStatusFile = path.join(tempDir, "fetch-guard-status");
+    tempFiles.add(guardStatusFile);
+    // Remove differently-cased inherited keys on Windows before assigning the
+    // private acknowledgement path owned by this invocation.
+    delete launch.env[envKey(launch.env, "MMX_CHAT_FETCH_GUARD_STATUS", process.platform)];
+    launch.env.MMX_CHAT_FETCH_GUARD_STATUS = guardStatusFile;
+  }
   const messages = [];
   if (system.trim()) messages.push({ role: "system", content: system });
   messages.push({ role: "user", content: prompt });
@@ -692,16 +731,30 @@ async function main() {
   const requestStarted = Date.now();
   let chat;
   try {
-    chat = await runCmd(mmx.cmd, [...launch.argsPrefix, ...chatArgs], wrapperTimeout, mmx.shell, launch.env);
+    chat = await runCmd(mmx.cmd, [...launch.argsPrefix, ...chatArgs], wrapperTimeout, mmx.shell, launch.env, Boolean(providerSlot));
   } finally {
     if (providerSlot) {
       // Do not open the slot for a new paid request when descendant cleanup
       // was not confirmed. The unreleased lock is an explicit recovery gate.
-      if (chat?.termination_failed) telemetry.provider_slot = "held_for_recovery";
+      if (!chat || chat.termination_failed) telemetry.provider_slot = "held_for_recovery";
       else providerSlot.release();
     }
   }
   const elapsedMs = Date.now() - requestStarted;
+  if (guardStatusFile) {
+    let initialized = false;
+    try {
+      initialized = fs.lstatSync(guardStatusFile).isFile() && fs.readFileSync(guardStatusFile, "utf8") === "applied\n";
+    } catch {}
+    if (!initialized) {
+      telemetry.fetch_timeout_guard = "preload_failed";
+      if (chat.kind === "closed") {
+        fail({ status: "guard_error", exit_code: chat.code,
+          error: "MMX fetch timeout guard initialization could not be confirmed." });
+        return;
+      }
+    }
+  }
   if (chat.kind !== "closed") {
     const status = chat.kind === "spawn_error" ? "api_error" : chat.kind;
     fail({

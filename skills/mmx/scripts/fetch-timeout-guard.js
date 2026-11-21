@@ -5,12 +5,24 @@
 // the reply is complete. Replace the global dispatcher with one that has no
 // header or body timeout, using the undici copy the CLI itself imports
 // (MMX_CHAT_UNDICI_PATH, resolved by the wrapper). The CLI's --timeout and the
-// wrapper deadline still bound every request. Stay silent on failure: the CLI's
-// stderr carries its JSON error envelope.
+// wrapper deadline still bound every request. A selected preload must initialize
+// successfully before the CLI is allowed to send a request.
+const fs = require("node:fs");
 const target = process.env.MMX_CHAT_UNDICI_PATH;
-if (target) {
-  try {
-    const { Agent, setGlobalDispatcher } = require(target);
-    setGlobalDispatcher(new Agent({ headersTimeout: 0, bodyTimeout: 0 }));
-  } catch {}
+const statusFile = process.env.MMX_CHAT_FETCH_GUARD_STATUS;
+// Workers and forks inherit --require and the environment. Only the original
+// CLI process acknowledges this wrapper; descendants initialize independently.
+delete process.env.MMX_CHAT_FETCH_GUARD_STATUS;
+try {
+  if (!target) throw new Error("guard target missing");
+  const { Agent, setGlobalDispatcher } = require(target);
+  setGlobalDispatcher(new Agent({ headersTimeout: 0, bodyTimeout: 0 }));
+  if (statusFile) {
+    fs.writeFileSync(statusFile, "applied\n", { flag: "wx", mode: 0o600 });
+  }
+} catch {
+  // No dependency paths, upstream text, configuration or credentials on stderr.
+  // Exiting here stops Node before evaluating the paid CLI entry point.
+  process.stderr.write("MMX fetch timeout guard could not initialize.\n");
+  process.exit(78);
 }
