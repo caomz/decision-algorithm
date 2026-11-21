@@ -352,7 +352,7 @@ describe("cli run smoke", () => {
 // 取消：已完成的单方 FAIL 保留，未完成一侧记 cancelled
 // ---------------------------------------------------------------------------
 
-test("SIGTERM mid-run cancels but preserves the bound FAIL", { timeout: 60000 }, async () => {
+test("SIGTERM mid-run cancels but preserves the bound FAIL", { timeout: 60000, skip: process.platform === "win32" && "POSIX signal semantics; Windows process-tree cancellation requires separate native tests" }, async () => {
   const out = path.join(root, "cli-cancel");
   const child = spawn(process.execPath, [RUNNER, "run", "--backend", "fixture", "--scenario", "zcode-fail-mmx-hang", "--packet", packetFile, "--out", out], {
     stdio: ["ignore", "pipe", "pipe"], env: { ...process.env },
@@ -382,7 +382,7 @@ test("SIGTERM mid-run cancels but preserves the bound FAIL", { timeout: 60000 },
 // 的信号只被接住；spawn 异步失败记 spawn_error、退出码 2。
 // ---------------------------------------------------------------------------
 
-describe("second signals and entry hardening (fix2)", () => {
+describe("second signals and entry hardening (fix2)", { skip: process.platform === "win32" && "POSIX double-signal and pgrep semantics are not available on Windows" }, () => {
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
   const leftoverPids = dir => {
     const found = spawnSync("pgrep", ["-f", dir], { encoding: "utf8" });
