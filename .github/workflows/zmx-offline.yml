@@ -52,6 +52,7 @@ jobs:
           node --check skills/mmx/scripts/mmx-job.js
           node --check skills/mmx/scripts/mmx-provider-slot.js
           node --check skills/zcode-mmx-review/scripts/review-run.js
+          node --check skills/zcode-mmx-review/scripts/shard-coverage.js
       - name: ZCode offline regression
         run: node --test skills/zcode/tests/*.test.js
       - name: MMX offline regression
