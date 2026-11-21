@@ -54,6 +54,28 @@ mmx/
 | 思考块 | `stop_reason=max_tokens` 且只有思考块时归类为 `thinking_budget_exhausted`（预算问题，不是契约漂移）；其他结束原因下没有正文记 `schema_mismatch`，附 `stop_reason` 与块类型（v2.7.0 起） | 一律归类为 `schema_mismatch`（会误导人去核对 CLI 契约） |
 | 错误回执 | 只输出分类、数值码与固定提示，不回显上游原文 | Windows 版的原文回显（需额外脱敏） |
 
+## 长任务持久化 Job（阶段 3，实验性）
+
+新增 `scripts/mmx-job.js`，在独立后台进程中调用现有 `mmx-batch.js`。启动时原子创建任务目录，并复制分片及运行 Profile 到只读用途的输入快照（附 SHA-256）。重复使用同一个目录时 **start 拒绝**，避免主 Agent 等待超时后再次发送付费请求。
+
+```bash
+# 在项目目录外选一个从未存在的 Job 路径；先用离线测试验收
+node skills/mmx/scripts/mmx-job.js start /absolute/path/to/jobs/review-001 --prompt-file /absolute/path/to/shard1.txt --concurrency 1
+node skills/mmx/scripts/mmx-job.js status /absolute/path/to/jobs/review-001
+node skills/mmx/scripts/mmx-job.js resume /absolute/path/to/jobs/review-001
+node skills/mmx/scripts/mmx-job.js verify /absolute/path/to/jobs/review-001
+node skills/mmx/scripts/mmx-job.js cancel /absolute/path/to/jobs/review-001
+```
+
+- `start`：创建持久 Job 和独立监督进程，返回目录与 PID；不等待供应商请求完成。
+- `status`：查询完成记录、最终回执；无完成记录时报告 `unknown`，不得据此再启动。
+- `resume`：**只重新附着到已有记录查询**，不重发请求。自动从中断点重新执行尚未实现。
+- `verify`：验证输入快照 SHA-256 和基本完成记录；不是 API 输出内容的加密签名。
+- `cancel`：写取消标志，由监督进程处理；仅在 `execution.json` 存在后才确认结束。Windows 与 POSIX 取消路径不同，需分别验收。
+- Job 进程崩溃、强杀或监督进程失联时，状态可能保持 `unknown`；**不要自动重试或删除已有 Job**。如已启用 `MMX_GLOBAL_SLOT=1`，仍须核实遗留 Provider 锁与外部请求。
+
+此阶段先实现持久化执行、查询与保守不重放。分片级断点续跑、跨进程完整树退出证明和任务孤儿回收留待进一步验收；云端离线 CI 通过不等于 Mac 真机带凭据验证通过。
+
 ## 跨会话并发槽位（实验性，显式开启）
 
 MMX 2.7.0 后续云端改造新增 `scripts/mmx-provider-slot.js`。当 `MMX_GLOBAL_SLOT=1` 时，`mmx-chat.js` 在发起 CLI 子进程前取得**同一用户、同一台主机**共用的原子文件锁（`~/.zmx/locks/mmx/slot-0/`），直到请求子进程确认结束后释放。独立 Agent 会话或 Batch 只有在都启用了这一开关后才参与排队；它**不是跨机器分布式锁**，也不是云端 API 配额仲裁。
