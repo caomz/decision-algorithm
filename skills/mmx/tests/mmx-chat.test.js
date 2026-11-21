@@ -723,7 +723,7 @@ test("the mmx-cli package entry launches with the fetch guard preloaded and a no
     assert.equal(cliLaunch(found, { Https_Proxy: "http://127.0.0.1:9", MMX_CONFIG_DIR: absentConfigDir }, "linux").fetch_timeout_guard, "preloaded");
     const noGuard = cliLaunch(found, {}, process.platform, path.join(root, "missing-fetch-timeout-guard.js"));
     assert.equal(noGuard.fetch_timeout_guard, "guard_missing");
-    assert.deepEqual(noGuard.argsPrefix, [entry]);
+    assert.deepEqual(noGuard.argsPrefix, [fs.realpathSync(entry)]);
     assert.equal(Object.hasOwn(noGuard.env, "MMX_CHAT_UNDICI_PATH"), false);
     // A fresh wrapper process: this one has cached the undici resolution.
     unlinkKnown(path.join(pkgRoot, "node_modules", "undici", "index.js"));
