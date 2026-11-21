@@ -44,6 +44,20 @@ function fail(result) {
   process.exitCode = 1;
 }
 
+function releaseProviderSlot(slot, exitCode = null) {
+  try {
+    slot.release();
+  } catch (error) {
+    telemetry.provider_slot = "release_unverified";
+    throw Object.assign(error, { envelope: {
+      status: "slot_unavailable",
+      exit_code: exitCode,
+      code: error.code || "MMX_SLOT_IO",
+      error: "MMX provider slot release could not be confirmed. Check the slot and original request before retrying.",
+    } });
+  }
+}
+
 function usageError(message) {
   throw Object.assign(new Error(message), { envelope: { status: "usage_error", error: message } });
 }
@@ -723,7 +737,7 @@ async function main() {
     telemetry.provider_slot = "acquired";
     telemetry.provider_slot_wait_ms = providerSlot.waited_ms;
     if (slotAbort.signal.aborted) {
-      providerSlot.release();
+      releaseProviderSlot(providerSlot);
       fail({ status: "cancelled", code: "MMX_SLOT_CANCELLED" });
       return;
     }
@@ -737,7 +751,7 @@ async function main() {
       // Do not open the slot for a new paid request when descendant cleanup
       // was not confirmed. The unreleased lock is an explicit recovery gate.
       if (!chat || chat.termination_failed) telemetry.provider_slot = "held_for_recovery";
-      else providerSlot.release();
+      else releaseProviderSlot(providerSlot, chat.code);
     }
   }
   const elapsedMs = Date.now() - requestStarted;
