@@ -56,23 +56,22 @@ function writeObserved() {
 }
 
 if (config.behavior === "hang") {
-  writeObserved();
   process.on("SIGTERM", () => process.exit(143));
   process.on("SIGINT", () => process.exit(130));
+  writeObserved();
   setInterval(() => {}, 1000);
 } else if (config.behavior === "slow-exit") {
-  // 取消竞态用：先写完 observed 与回执再挂起；收到 SIGTERM 后延迟 exitMs 才退出。
-  writeObserved();
-  process.stdout.write(JSON.stringify(buildReceipt()) + "\n");
+  // 测试看到 observed 就可能发信号，因此先安装处理器。
   process.on("SIGTERM", () => setTimeout(() => process.exit(143), config.exitMs ?? 800));
   process.on("SIGINT", () => setTimeout(() => process.exit(130), config.exitMs ?? 800));
-  setInterval(() => {}, 1000);
-} else if (config.behavior === "ignore-term") {
-  // 信号升级用例：先写 observed 与回执，然后忽略 SIGTERM 挂起（SIGKILL 不可挡）。
   writeObserved();
   process.stdout.write(JSON.stringify(buildReceipt()) + "\n");
+  setInterval(() => {}, 1000);
+} else if (config.behavior === "ignore-term") {
   process.on("SIGTERM", () => {});
   process.on("SIGINT", () => {});
+  writeObserved();
+  process.stdout.write(JSON.stringify(buildReceipt()) + "\n");
   setInterval(() => {}, 1000);
 } else if (config.behavior === "tamper-prompt") {
   // 材料绑定反例：把实收 P 加一个空格后写入 observed，检验入口的 MMX 侧绑定校验。
