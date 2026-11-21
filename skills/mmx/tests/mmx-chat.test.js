@@ -99,6 +99,10 @@ switch (process.env.FAKE_MODE || "success") {
     process.stdout.write(JSON.stringify(ok)); break;
   }
   case "hang": setInterval(() => {}, 1000); break;
+  case "alter_slot_owner":
+    fs.writeFileSync(process.env.FAKE_SLOT_OWNER, "replacement owner");
+    process.stdout.write(JSON.stringify(ok));
+    break;
   case "tree_hang": {
     const child = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { stdio: "ignore" });
     fs.writeFileSync(process.env.FAKE_CHILD_PID, String(child.pid));
@@ -977,6 +981,24 @@ test("opt-in provider slot is acquired and released after the CLI closes", () =>
   assert.equal(result.provider_slot, "acquired");
   assert.equal(typeof result.provider_slot_wait_ms, "number");
   assert.equal(fs.existsSync(path.join(home, ".zmx", "locks", "mmx", "slot-0")), false);
+});
+
+test("an unverified provider slot release reports a local recovery condition", () => {
+  writeInputs("provider slot owner changed");
+  const home = path.join(root, "provider-slot-changed-home");
+  fs.mkdirSync(home, { recursive: true });
+  const owner = path.join(home, ".zmx", "locks", "mmx", "slot-0", "owner.json");
+  const run = runChat([], { HOME: home, USERPROFILE: home, MMX_GLOBAL_SLOT: "1",
+    FAKE_MODE: "alter_slot_owner", FAKE_SLOT_OWNER: owner });
+  const result = jsonResult(run);
+  assert.equal(run.status, 1);
+  assert.equal(result.status, "slot_unavailable");
+  assert.equal(result.code, "MMX_SLOT_UNSAFE");
+  assert.equal(result.provider_slot, "release_unverified");
+  assert.equal(result.cli_invoked, true);
+  assert.equal(result.exit_code, 0);
+  assert.match(result.error, /before retrying/);
+  assert.equal(fs.readFileSync(owner, "utf8"), "replacement owner");
 });
 
 test("opt-in slot cannot report success when the CLI leaves a same-group descendant running", {
