@@ -4,9 +4,9 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { spawnSync } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
 const { createHash } = require("node:crypto");
-const { resolveLaunch, isolatedEnv, setupMacKeychain, resolveMode, DENIED_TOOLS } = require("../scripts/zcode-chat.js");
+const { resolveLaunch, isolatedEnv, setupMacKeychain, resolveMode, terminateTree, windowsCommandLineLength, findCli, DENIED_TOOLS } = require("../scripts/zcode-chat.js");
 const { validateReview, strictJson } = require("../scripts/review.js");
 
 const wrapper = path.resolve(__dirname, "../scripts/zcode-chat.js");
@@ -34,7 +34,7 @@ function run(scenario = "ok", options = {}) {
   }
   if (options.timeout) args.push("--timeout-seconds", String(options.timeout));
   const result = spawnSync(process.execPath, args, {
-    env: { ...process.env, ZCODE_MODEL: "must-not-reach-child", FAKE_UNTRUSTED: "must-not-reach-child" },
+    env: { ...process.env, ZCODE_MODEL: "must-not-reach-child", FAKE_UNTRUSTED: "must-not-reach-child", ...options.env },
     encoding: "utf8", timeout: 15000, maxBuffer: 8 * 1024 * 1024,
   });
   assert.equal(result.stderr, "");
@@ -51,7 +51,7 @@ test("UTF-8, literal shell syntax and slash commands remain data; isolation is e
   assert.equal(receipt.stop_reason, "stop");
   assert.equal(receipt.text, "中文🌟 `literal` $(do-not-run) /logout\n--model remains data");
   assert.equal(receipt.complete, true);
-  assert.equal(receipt.cleanup_confirmed, true);
+  assert.equal(receipt.cleanup_confirmed, process.platform === "win32" ? null : true);
   assert.deepEqual(receipt.usage, { inputTokens: 12, outputTokens: 4 });
   for (const name of ["stdout.ndjson", "stderr.log", "receipt.json", "prompt.txt", "launch.json", "progress.json"]) {
     assert.ok(fs.existsSync(path.join(output, name)));
@@ -262,6 +262,154 @@ test("npm shims resolve to their JavaScript entry instead of running a shell", (
   fs.writeFileSync(posix, '#!/bin/sh\nbasedir=$(dirname "$0")\nexec node "$basedir/node_modules/zcode-app-cli/bin/zcode.js" "$@"\n');
   assert.equal(resolveLaunch(posix).entry, fs.realpathSync(script));
 });
+test("quoted PATH directories and Chinese npm paths resolve without a shell", () => {
+  const directory = path.join(root, "npm 用户 with spaces");
+  const script = path.join(directory, "node_modules/zcode-app-cli/bin/zcode.js");
+  fs.mkdirSync(path.dirname(script), { recursive: true });
+  fs.writeFileSync(script, `require(${JSON.stringify(fixture)}).run("ok");`);
+  const launcher = path.join(directory, process.platform === "win32" ? "zcode.cmd" : "zcode");
+  fs.writeFileSync(launcher, process.platform === "win32"
+    ? '@ECHO off\r\n"%_prog%" "%dp0%\\node_modules\\zcode-app-cli\\bin\\zcode.js" %*\r\n'
+    : '#!/bin/sh\nexec node "$basedir/node_modules/zcode-app-cli/bin/zcode.js" "$@"\n', { mode: 0o700 });
+  assert.equal(findCli(null, { PATH: `"${directory}"` }), fs.realpathSync(launcher));
+  const prompt = path.join(directory, "输入.txt");
+  fs.writeFileSync(prompt, "Chinese 路径");
+  const response = spawnSync(process.execPath, [driver, "--prompt-file", prompt, "--cli-path", launcher], { encoding: "utf8", timeout: 15000 });
+  assert.equal(response.status, 0, response.stdout + response.stderr);
+  assert.equal(JSON.parse(response.stdout).text, "Chinese 路径");
+});
+test("Windows cleanup never treats a missing root or localized taskkill failure as proof", async () => {
+  let called = false;
+  const exited = { pid: 123, exitCode: 0, signalCode: null };
+  assert.equal(await terminateTree(exited, { platform: "win32", run: () => { called = true; } }), null);
+  assert.equal(called, false);
+  const live = { pid: 123, exitCode: null, signalCode: null, kill: () => {} };
+  assert.equal(await terminateTree(live, { platform: "win32", kill: () => { throw Object.assign(new Error(), { code: "ESRCH" }); }, run: () => { called = true; } }), null);
+  assert.equal(called, false);
+  assert.equal(await terminateTree(live, { platform: "win32", kill: () => {}, run: (command, args, options) => {
+    assert.equal(command, "taskkill.exe");
+    assert.deepEqual(args, ["/PID", "123", "/T", "/F"]);
+    assert.equal(options.shell, false);
+    assert.equal(options.timeout, 2000);
+    return { status: 1, stderr: "错误: 没有找到进程。" };
+  } }), null);
+  assert.equal(await terminateTree(live, { platform: "win32", kill: () => {}, run: () => ({ status: 0 }) }), true);
+});
+test("Windows command-line length includes quoting expansion and UTF-16 units", () => {
+  assert.equal(windowsCommandLineLength("node", ["abc"]), 9);
+  assert.equal(windowsCommandLineLength("node", ['a"b']), 12);
+  assert.equal(windowsCommandLineLength("node", ["a b\\"]), 13);
+  assert.equal(windowsCommandLineLength("node", ["🌟"]), 8);
+  assert.ok(windowsCommandLineLength("node", ['"'.repeat(17000)]) > 32767);
+});
+test("Windows oversized and quote-expanded prompts fail before a model request", { skip: process.platform !== "win32" }, () => {
+  for (const prompt of ["a".repeat(25000), '"'.repeat(11000)]) {
+    const { receipt } = run("ok", { prompt });
+    assert.equal(receipt.status, "input_too_large");
+    assert.equal(receipt.cli_invoked, false);
+    assert.equal(receipt.review_gate, "NOT_EVALUATED");
+  }
+});
+test("a cancellation marker prevents the CLI request", () => {
+  const marker = path.join(root, "pre-cancel.request");
+  fs.writeFileSync(marker, "cancel\n");
+  const { receipt } = run("ok", { env: { ZCODE_CANCEL_REQUEST_FILE: marker } });
+  assert.equal(receipt.status, "cancelled");
+  assert.equal(receipt.cli_invoked, false);
+});
+
+test("capture descriptors close after late cancellation, second-open failure and progress failure", () => {
+  for (const scenario of ["late_cancel", "stderr_open", "running_progress"]) {
+    const directory = path.join(root, `capture-failure-${scenario}`);
+    fs.mkdirSync(directory);
+    const cli = path.join(directory, "fake.cjs"), prompt = path.join(directory, "prompt.txt");
+    const marker = path.join(directory, "cancel.request"), output = path.join(directory, "run");
+    const instrumented = path.join(directory, "capture-driver.cjs");
+    fs.writeFileSync(cli, `require(${JSON.stringify(fixture)}).run("hang");`);
+    fs.writeFileSync(prompt, "capture cleanup check");
+    fs.writeFileSync(instrumented, `
+      const fs=require('node:fs'), path=require('node:path');
+      const wrapper=require(${JSON.stringify(wrapper)});
+      const originalOpen=fs.openSync, originalClose=fs.closeSync, originalRename=fs.renameSync;
+      const openCaptures=new Set();
+      const scenario=${JSON.stringify(scenario)};
+      let progressFailed=false;
+      fs.openSync=function(file,...args){
+        const name=typeof file==='string'?path.basename(file):'';
+        if(scenario==='stderr_open'&&name==='stderr.log') throw Object.assign(new Error('synthetic open failure'),{code:'EACCES'});
+        const fd=originalOpen.call(this,file,...args);
+        if(['stdout.ndjson','stderr.log'].includes(name)) openCaptures.add(fd);
+        if(scenario==='late_cancel'&&name==='stderr.log') fs.writeFileSync(${JSON.stringify(marker)},'cancel\\n');
+        return fd;
+      };
+      fs.closeSync=function(fd){const result=originalClose.call(this,fd);openCaptures.delete(fd);return result;};
+      fs.renameSync=function(from,to){
+        if(scenario==='running_progress'&&!progressFailed&&path.basename(to)==='progress.json'&&JSON.parse(fs.readFileSync(from,'utf8')).phase==='running'){
+          progressFailed=true;throw Object.assign(new Error('synthetic progress failure'),{code:'EACCES'});
+        }
+        return originalRename.call(this,from,to);
+      };
+      wrapper.main(process.argv.slice(2),{setupMacKeychain:()=>null}).then(receipt=>{
+        fs.openSync=originalOpen;fs.closeSync=originalClose;fs.renameSync=originalRename;
+        const leaked=[...openCaptures];
+        for(const fd of leaked){try{originalClose(fd);}catch{}}
+        process.stdout.write(JSON.stringify({receipt,leaked})+'\\n');
+      });
+    `);
+    const response = spawnSync(process.execPath, [instrumented, "--prompt-file", prompt, "--cli-path", cli, "--output-dir", output], {
+      encoding: "utf8", timeout: 15000, env: { ...process.env, ZCODE_CANCEL_REQUEST_FILE: marker },
+    });
+    assert.equal(response.status, 0, response.stdout + response.stderr);
+    const result = JSON.parse(response.stdout);
+    assert.deepEqual(result.leaked, [], scenario);
+    assert.equal(result.receipt.complete, false);
+    if (scenario === "late_cancel") {
+      assert.equal(result.receipt.status, "cancelled");
+      assert.equal(result.receipt.cli_invoked, false);
+    }
+  }
+});
+
+async function waitUntil(predicate, timeout = 10000) {
+  const deadline = Date.now() + timeout;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("timed out waiting for test state");
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+}
+
+test("cooperative marker cancellation stops the real wrapper's CLI tree and retains receipt", { timeout: 20000 }, async () => {
+  const directory = path.join(root, `marker-tree-${counter++}`);
+  fs.mkdirSync(directory);
+  const cli = path.join(directory, "fake.cjs"), prompt = path.join(directory, "prompt.txt");
+  const output = path.join(directory, "run"), marker = path.join(directory, "cancel.request");
+  fs.writeFileSync(cli, `require(${JSON.stringify(fixture)}).run("tree");`);
+  fs.writeFileSync(prompt, "cancel this fake request");
+  const child = spawn(process.execPath, [driver, "--prompt-file", prompt, "--cli-path", cli, "--output-dir", output], {
+    env: { ...process.env, ZCODE_CANCEL_REQUEST_FILE: marker }, stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  child.stdout.on("data", data => { stdout += data; });
+  child.stderr.resume();
+  const ended = new Promise(resolve => child.once("close", (code, signal) => resolve({ code, signal })));
+  let descendant;
+  try {
+    await waitUntil(() => fs.existsSync(path.join(output, "child.pid")));
+    descendant = Number(fs.readFileSync(path.join(output, "child.pid"), "utf8"));
+    fs.writeFileSync(marker, "cancel\n");
+    await waitUntil(() => child.exitCode !== null || child.signalCode !== null);
+    assert.equal((await ended).code, 1);
+    const receipt = JSON.parse(stdout);
+    assert.equal(receipt.status, "cancelled");
+    assert.equal(receipt.complete, false);
+    assert.equal(receipt.cleanup_confirmed, true);
+    assert.throws(() => process.kill(descendant, 0), { code: "ESRCH" });
+    assert.equal(JSON.parse(fs.readFileSync(path.join(output, "receipt.json"), "utf8")).status, "cancelled");
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) { try { child.kill("SIGKILL"); } catch {} }
+    if (descendant) { try { process.kill(descendant, "SIGKILL"); } catch {} }
+  }
+});
 test("environment shares only auth roots and explicit supported transport settings", () => {
   const env = isolatedEnv("/scratch/home", { PATH: "/bin", NODE_OPTIONS: "bad", ZCODE_STORAGE_DIR: "/original", ZCODE_HTTP_PROXY: "http://proxy.example", ZCODE_DATA_BASE_DIR: "/auth" });
   assert.equal(env.HOME, "/scratch/home");
@@ -337,6 +485,115 @@ test("supervisor preserves nonzero timeout and child cleanup evidence", async ()
   assert.equal(result.execution.exit_code, 1);
   assert.equal(result.receipt.status, "timeout");
   assert.equal(result.receipt.cleanup_confirmed, true);
+});
+test("durable cancellation uses a marker and lets the wrapper save its receipt", { timeout: 20000 }, async () => {
+  const directory = path.join(root, `supervised-cancel-${counter++}`);
+  fs.mkdirSync(directory);
+  const cli = path.join(directory, "fake.cjs"), prompt = path.join(directory, "prompt.txt"), job = path.join(directory, "job");
+  fs.writeFileSync(cli, `require(${JSON.stringify(fixture)}).run("hang");`);
+  fs.writeFileSync(prompt, "original prompt");
+  supervisor.start(job, ["--prompt-file", prompt, "--cli-path", cli], { wrapperPath: driver });
+  await waitUntil(() => {
+    try { return JSON.parse(fs.readFileSync(path.join(job, "run/progress.json"), "utf8")).phase === "running"; } catch { return false; }
+  });
+  const cancel = spawnSync(process.execPath, [path.resolve(__dirname, "../scripts/zcode-run.js"), "cancel", job], { encoding: "utf8" });
+  assert.equal(cancel.status, 0, cancel.stderr);
+  assert.equal(JSON.parse(cancel.stdout).cancel_requested, true);
+  await waitUntil(() => supervisor.status(job).status === "finished");
+  const result = supervisor.status(job);
+  assert.equal(result.execution.reason, "cancelled");
+  assert.equal(result.execution.exit_code, 1);
+  assert.equal(result.receipt.status, "cancelled");
+  assert.equal(result.receipt.cleanup_confirmed, true);
+  assert.equal(supervisor.cancel(job).cancel_requested, false);
+});
+test("cancel during version preflight preserves a no-model receipt even when the probe fails", { timeout: 20000 }, async () => {
+  for (const versionExit of [0, 1]) {
+    const directory = path.join(root, `preflight-cancel-${counter++}`);
+    fs.mkdirSync(directory);
+    const cli = path.join(directory, "fake.cjs"), prompt = path.join(directory, "prompt.txt"), job = path.join(directory, "job");
+    const ready = path.join(directory, "version-ready"), release = path.join(directory, "version-release");
+    const finished = path.join(directory, "version-finished"), invoked = path.join(directory, "model-invoked");
+    fs.writeFileSync(cli, `
+      const fs=require('node:fs');
+      if(process.argv.includes('--version')){
+        fs.writeFileSync(${JSON.stringify(ready)},'ready');
+        const poll=setInterval(()=>{
+          if(fs.existsSync(${JSON.stringify(release)})){
+            clearInterval(poll);fs.writeFileSync(${JSON.stringify(finished)},'finished');
+            process.stdout.write('0.17.1\\n');process.exitCode=${versionExit};
+          }
+        },20);
+      }else{fs.writeFileSync(${JSON.stringify(invoked)},'unexpected model request');process.exitCode=9;}
+    `);
+    fs.writeFileSync(prompt, "cancel while preparation is blocked");
+    supervisor.start(job, ["--prompt-file", prompt, "--cli-path", cli], { wrapperPath: driver });
+    await waitUntil(() => fs.existsSync(ready));
+    supervisor.cancel(job);
+    // Keep the version probe in flight while the worker observes the marker.
+    // The old immediate process-group SIGTERM killed this probe and wrapper.
+    await new Promise(resolve => setTimeout(resolve, 250));
+    fs.writeFileSync(release, "finish preflight");
+    await waitUntil(() => supervisor.status(job).status === "finished");
+    const result = supervisor.status(job);
+    assert.equal(result.execution.exit_code, 1);
+    assert.equal(result.execution.reason, "cancelled");
+    assert.equal(result.execution.receipt_exists, true);
+    assert.equal(result.receipt.status, "cancelled");
+    assert.equal(result.receipt.cli_invoked, false);
+    assert.equal(result.receipt.complete, false);
+    assert.equal(fs.existsSync(finished), true, "version probe gets its cooperative grace");
+    assert.equal(fs.existsSync(invoked), false, "cancellation must never launch the model");
+  }
+});
+test("failed worker launch stays unknown and preserves explicit launch evidence", async () => {
+  const { EventEmitter } = require("node:events");
+  for (const synchronous of [false, true]) {
+    const directory = path.join(root, `launch-failure-${counter++}`);
+    fs.mkdirSync(directory);
+    const prompt = path.join(directory, "prompt.txt"), job = path.join(directory, "job");
+    fs.writeFileSync(prompt, "must never start");
+    const spawnWorker = (command, args, options) => {
+      assert.equal(options.windowsHide, true);
+      const error = Object.assign(new Error("synthetic launch failure"), { code: "EAGAIN" });
+      if (synchronous) throw error;
+      const child = new EventEmitter();
+      child.unref = () => {};
+      queueMicrotask(() => child.emit("error", error));
+      return child;
+    };
+    const launched = supervisor.start(job, ["--prompt-file", prompt], { spawnWorker });
+    assert.equal(launched.status, "unknown");
+    assert.equal(launched.supervisor_pid, null);
+    await new Promise(resolve => setImmediate(resolve));
+    const result = supervisor.status(job);
+    assert.equal(result.status, "unknown");
+    assert.equal(result.launch_error.code, "EAGAIN");
+    assert.equal(result.launch_error.cli_invoked, false);
+    assert.equal(fs.existsSync(path.join(job, "started.json")), false);
+  }
+});
+test("durable jobs snapshot inputs and a second worker cannot replay the request", async () => {
+  const directory = path.join(root, `supervised-inputs-${counter++}`);
+  fs.mkdirSync(directory);
+  const cli = path.join(directory, "fake.cjs"), prompt = path.join(directory, "prompt.txt"), job = path.join(directory, "job");
+  fs.writeFileSync(cli, `require(${JSON.stringify(fixture)}).run("ok");`);
+  fs.writeFileSync(prompt, "accepted content");
+  supervisor.start(job, ["--prompt-file", prompt, "--cli-path", cli], { wrapperPath: driver });
+  fs.writeFileSync(prompt, "edited after launch");
+  await waitUntil(() => supervisor.status(job).status === "finished");
+  const result = supervisor.status(job);
+  assert.equal(result.receipt.text, "accepted content");
+  const execution = fs.readFileSync(path.join(job, "execution.json"), "utf8");
+  const replay = spawnSync(process.execPath, [path.resolve(__dirname, "../scripts/zcode-run.js"), "worker", job], { encoding: "utf8" });
+  assert.equal(replay.status, 1);
+  assert.equal(fs.readFileSync(path.join(job, "execution.json"), "utf8"), execution);
+});
+test("Windows PID reuse alone cannot establish that a durable job is running", { skip: process.platform !== "win32" }, () => {
+  const job = path.join(root, `reused-pid-${counter++}`);
+  fs.mkdirSync(job);
+  fs.writeFileSync(path.join(job, "launch.json"), JSON.stringify({ supervisor_pid: process.pid }));
+  assert.equal(supervisor.status(job).status, "unknown");
 });
 test("abrupt wrapper death leaves startup state and independently captured signal", { skip: process.platform === "win32" }, async () => {
   const { result, job } = await runSupervised("kill_wrapper");

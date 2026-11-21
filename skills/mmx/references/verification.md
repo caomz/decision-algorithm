@@ -2,6 +2,8 @@
 
 只读取当前平台章节。从本次加载的 `SKILL.md` 绝对路径取得 skill 根目录，替换示例中的占位路径。执行 wrapper 会发起一次真实请求并可能产生费用；测试命令只用假 CLI。
 
+`windows-zmx-validation-20261121` 的当前 Windows 10 / PowerShell 5.1 操作入口与分层验收见 [Windows 10 指南](../../../docs/windows10-zmx.md)。本文历史平台结果不等于当前提交已在目标电脑验收。
+
 ## macOS zsh / bash
 
 ```bash

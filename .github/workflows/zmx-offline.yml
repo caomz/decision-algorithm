@@ -7,6 +7,9 @@ on:
       - "skills/zcode/**"
       - "skills/mmx/**"
       - "skills/zcode-mmx-review/**"
+      - "scripts/windows-zmx-check.*"
+      - "tests/windows-zmx-check.test.cjs"
+      - "docs/windows10-zmx.md"
   push:
     branches:
       - "cloud/**"
@@ -16,6 +19,9 @@ on:
       - "skills/zcode/**"
       - "skills/mmx/**"
       - "skills/zcode-mmx-review/**"
+      - "scripts/windows-zmx-check.*"
+      - "tests/windows-zmx-check.test.cjs"
+      - "docs/windows10-zmx.md"
   workflow_dispatch:
 
 permissions:
@@ -55,18 +61,38 @@ jobs:
           node --check skills/mmx/scripts/mmx-provider-slot.js
           node --check skills/zcode-mmx-review/scripts/review-run.js
           node --check skills/zcode-mmx-review/scripts/shard-coverage.js
-      - name: Windows native PowerShell smoke
+      - name: Windows operations helper regression
+        run: node --test tests/windows-zmx-check.test.cjs
+      - name: Windows PowerShell 5.1 acceptance in a space and Unicode path
         if: runner.os == 'Windows'
-        shell: pwsh
+        shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           Write-Host "PowerShell: $($PSVersionTable.PSVersion)"
-          node --version
-          if ($LASTEXITCODE -ne 0) { throw 'Node version probe failed' }
-          node --check skills/mmx/scripts/mmx-job.js
-          if ($LASTEXITCODE -ne 0) { throw 'Windows durable worker syntax failed' }
-          node --check skills/mmx/scripts/mmx-chat.js
-          if ($LASTEXITCODE -ne 0) { throw 'Windows MMX wrapper syntax failed' }
+          if ($PSVersionTable.PSVersion.Major -ne 5) { throw 'This step must run Windows PowerShell 5.1' }
+          $unicode = [string][char]0x4e2d + [char]0x6587
+          $copyRoot = Join-Path $env:RUNNER_TEMP ('zmx ' + $unicode + ' ' + [Guid]::NewGuid().ToString('N'))
+          $skillsRoot = Join-Path $copyRoot 'skills'
+          New-Item -ItemType Directory -Path $skillsRoot | Out-Null
+          New-Item -ItemType Directory -Path (Join-Path $copyRoot 'scripts') | Out-Null
+          foreach ($skill in @('zcode', 'mmx', 'zcode-mmx-review')) {
+            Copy-Item -LiteralPath (Join-Path 'skills' $skill) -Destination $skillsRoot -Recurse -Force
+          }
+          Copy-Item -LiteralPath 'scripts/windows-zmx-check.ps1', 'scripts/windows-zmx-check.cjs' -Destination (Join-Path $copyRoot 'scripts')
+          $reportPath = Join-Path $env:RUNNER_TEMP 'windows-zmx-check.json'
+          & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $copyRoot 'scripts/windows-zmx-check.ps1') -Offline -JobsRoot (Join-Path $copyRoot 'job data') -ReportPath $reportPath
+          if ($LASTEXITCODE -ne 0) { throw 'PowerShell 5.1 offline acceptance failed; inspect the uploaded report and logs' }
+          $report = Get-Content -LiteralPath $reportPath -Raw -Encoding UTF8 | ConvertFrom-Json
+          if ($report.readiness -ne 'offline_pass' -or $report.real_provider_requests -ne 0) { throw 'Unexpected acceptance scope' }
+          if ($report.environment.powershell.version -notlike '5.1.*') { throw 'PowerShell 5.1 evidence is missing' }
+          Write-Host "Observed host: $($report.environment.host_class); this does not constitute Windows 10 native acceptance."
+      - name: Windows acceptance evidence
+        if: always() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-powershell51-offline-evidence
+          path: ${{ runner.temp }}/windows-zmx-check.json*
+          if-no-files-found: warn
       - name: ZCode offline regression
         run: node --test skills/zcode/tests/*.test.js
       - name: MMX offline regression

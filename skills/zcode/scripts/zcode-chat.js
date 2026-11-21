@@ -77,7 +77,8 @@ function checkInstall() {
 
 function findCli(explicit, env = process.env) {
   if (explicit) return fs.realpathSync(explicit);
-  for (const directory of (env.PATH || "").split(path.delimiter)) {
+  for (const part of (env.PATH || "").split(path.delimiter)) {
+    const directory = part.startsWith('"') && part.endsWith('"') ? part.slice(1, -1) : part;
     if (!directory) continue;
     for (const name of process.platform === "win32" ? ["zcode.exe", "zcode.cmd", "zcode"] : ["zcode"]) {
       const file = path.resolve(directory, name);
@@ -238,24 +239,29 @@ class EventParser {
   }
 }
 
-async function terminateTree(child) {
+async function terminateTree(child, { platform = process.platform, kill = process.kill.bind(process), run = spawnSync } = {}) {
   if (!child.pid) return true;
-  if (process.platform === "win32") {
-    // A process that already exited cannot be killed and taskkill reports it as
-    // not found. Probe first so a normally finished request is recorded as
-    // confirmed cleanup rather than an unresolved cleanup gap.
-    try { process.kill(child.pid, 0); } catch (error) { if (error.code === "ESRCH") return true; }
-    const result = spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { encoding: "utf8", shell: false, stdio: ["ignore", "pipe", "pipe"] });
+  if (platform === "win32") {
+    // An exited root does not prove its descendants exited. Do not send a
+    // command to its possibly reused PID or interpret localized "not found"
+    // text as tree-cleanup evidence.
+    if (child.exitCode !== null && child.exitCode !== undefined || child.signalCode) return null;
+    try { kill(child.pid, 0); } catch { return null; }
+    const result = run("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], {
+      encoding: "utf8", shell: false, windowsHide: true, timeout: 2000,
+      maxBuffer: 8192, stdio: ["ignore", "pipe", "pipe"],
+    });
     if (result.status === 0) return true;
-    const output = `${result.stdout || ""}${result.stderr || ""}`;
-    if (/could not be found|not found/i.test(output)) return true;
+    // The ChildProcess object belongs to this invocation. A handle-based
+    // fallback can stop the root, but cannot confirm its descendants.
+    try { child.kill("SIGKILL"); } catch {}
     return null;
   }
-  try { process.kill(-child.pid, "SIGTERM"); } catch (error) { return error.code === "ESRCH"; }
+  try { kill(-child.pid, "SIGTERM"); } catch (error) { return error.code === "ESRCH"; }
   await new Promise(resolve => setTimeout(resolve, 200));
-  try { process.kill(-child.pid, "SIGKILL"); } catch (error) { if (error.code !== "ESRCH") return false; }
+  try { kill(-child.pid, "SIGKILL"); } catch (error) { if (error.code !== "ESRCH") return false; }
   await new Promise(resolve => setTimeout(resolve, 50));
-  try { process.kill(-child.pid, 0); return false; } catch (error) { return error.code === "ESRCH"; }
+  try { kill(-child.pid, 0); return false; } catch (error) { return error.code === "ESRCH"; }
 }
 
 // Resolve the CLI permission mode. ZCODE_CLI_MODE wins when set and must name
@@ -285,28 +291,43 @@ function parseArgs(argv) {
   return args;
 }
 
+function windowsCommandLineLength(command, args) {
+  // libuv quotes argv for CreateProcessW. Count UTF-16 code units after
+  // doubling backslashes before quotes/trailing quotes, plus the final NUL.
+  const quote = value => {
+    if (value && !/[\s"]/.test(value)) return value;
+    return '"' + value.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, '$1$1') + '"';
+  };
+  return [command, ...args].map(quote).join(" ").length + 1;
+}
+
 async function main(argv, deps = {}) {
   if (argv.length === 1 && argv[0] === "--version") return { status: "version", version: VERSION };
   if (!argv.length || (argv.length === 1 && argv[0] === "--help")) return { status: "usage", usage: "node zcode-chat.js --prompt-file FILE [--mode chat|review|challenge --evidence-ids-file FILE] [--output-dir NEW_DIR] [--timeout-seconds 1200] [--cli-path EXECUTABLE]" };
   const receipt = { status: "input_error", cli_invoked: false, exit_code: null, signal: null, complete: false, model: null, stop_reason: null, truncated: null, usage: null, review_gate: "NOT_EVALUATED" };
   let child;
   let directory;
+  const captureFds = [];
+  let captureClosed = false;
+  let signalCancelled = false;
+  const onEarlySignal = () => { signalCancelled = true; };
+  // Keep cancellation handled throughout preflight and receipt publication,
+  // including while the synchronous version probe is finishing.
+  process.on("SIGINT", onEarlySignal); process.on("SIGTERM", onEarlySignal);
   try {
     try { checkInstall(); } catch { fail("install_mismatch"); }
     const args = parseArgs(argv);
     const material = readUtf8(args.prompt);
     const ids = args.ids ? validateIds(strictJson(readUtf8(args.ids))) : null;
     const prompt = buildPrompt(material, args.mode, ids);
+    const cancelMarker = process.env.ZCODE_CANCEL_REQUEST_FILE;
+    const cancellationRequested = () => signalCancelled || Boolean(cancelMarker && fs.existsSync(cancelMarker));
+    if (cancellationRequested()) fail("cancelled");
     const cli = findCli(args.cli);
     const launch = resolveLaunch(cli);
     const mode = (deps.resolveMode || resolveMode)();
-    const version = spawnSync(launch.command, [...launch.prefix, "--version"], { encoding: "utf8", timeout: 10000, maxBuffer: 4096, shell: false });
-    receipt.cli_version = version.stdout?.trim().replace(/^zcode\s+/, "") || null;
-    // zcode-app-cli 3.x prints two lines ("zcode-app-cli <n>\nzcode-runtime <n>");
-    // the supported contract is the runtime version, which may be on the second line.
-    const runtimeVersion = typeof receipt.cli_version === "string" ? receipt.cli_version.match(/(?:^|\n)zcode-runtime\s+(\S+)/)?.[1] : null;
-    if (runtimeVersion) receipt.cli_version = runtimeVersion;
-    if (version.status !== 0 || receipt.cli_version !== SUPPORTED_CLI) fail("unsupported_cli");
+    // Own an artifact directory before version preflight so a cancellation
+    // during preparation still leaves a durable no-model-invocation receipt.
     if (args.output) {
       const candidate = path.resolve(args.output);
       fs.mkdirSync(candidate, { mode: 0o700 });
@@ -314,6 +335,16 @@ async function main(argv, deps = {}) {
     } else directory = fs.mkdtempSync(path.join(os.tmpdir(), "zcode-text-"));
     fs.chmodSync(directory, 0o700);
     receipt.artifacts_dir = directory;
+    const version = spawnSync(launch.command, [...launch.prefix, "--version"], { encoding: "utf8", timeout: 10000, maxBuffer: 4096, shell: false });
+    receipt.cli_version = version.stdout?.trim().replace(/^zcode\s+/, "") || null;
+    // zcode-app-cli 3.x prints two lines ("zcode-app-cli <n>\nzcode-runtime <n>");
+    // the supported contract is the runtime version, which may be on the second line.
+    const runtimeVersion = typeof receipt.cli_version === "string" ? receipt.cli_version.match(/(?:^|\n)zcode-runtime\s+(\S+)/)?.[1] : null;
+    if (runtimeVersion) receipt.cli_version = runtimeVersion;
+    // Deliver queued console signals before deciding to launch a request.
+    await new Promise(resolve => setImmediate(resolve));
+    if (cancellationRequested()) fail("cancelled");
+    if (version.status !== 0 || receipt.cli_version !== SUPPORTED_CLI) fail("unsupported_cli");
     const progress = phase => atomicJson(path.join(directory, "progress.json"), {
       phase, wrapper_pid: process.pid, cli_pid: child?.pid ?? null,
       updated_at: new Date().toISOString(), model: receipt.model,
@@ -331,7 +362,9 @@ async function main(argv, deps = {}) {
     const attachedFile = path.join(work, "attached-material.txt");
     privateWrite(attachedFile, prompt);
     const stdoutFd = fs.openSync(path.join(directory, "stdout.ndjson"), "wx", 0o600);
+    captureFds.push(stdoutFd);
     const stderrFd = fs.openSync(path.join(directory, "stderr.log"), "wx", 0o600);
+    captureFds.push(stderrFd);
     const parser = new EventParser();
     const decoder = new TextDecoder("utf-8", { fatal: true });
     let pending = "", bytes = 0, problem = null, termination;
@@ -343,12 +376,37 @@ async function main(argv, deps = {}) {
     const cliArgs = promptBytes > ARGV_PROMPT_LIMIT
       ? [...launch.prefix, "--prompt", ATTACHED_PROMPT, "--attach", attachedFile, "--cwd", work, "--mode", mode, "--output-format", "stream-json", "--workflow-mode", "disabled", "--toolsearch-mode", "off", "--disallowed-tools", DENIED_TOOLS.join(","), "--no-color"]
       : [...launch.prefix, "--prompt", prompt, "--cwd", work, "--mode", mode, "--output-format", "stream-json", "--workflow-mode", "disabled", "--toolsearch-mode", "off", "--disallowed-tools", DENIED_TOOLS.join(","), "--no-color"];
-    child = spawn(launch.command, cliArgs, { cwd: work, env: isolatedEnv(home), shell: false, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });    receipt.cli_invoked = Boolean(child.pid);
+    if (process.platform === "win32" && (promptBytes > ARGV_PROMPT_LIMIT || windowsCommandLineLength(launch.command, cliArgs) > 32767)) {
+      receipt.error = "Request exceeds the verified Windows inline prompt limit. Split it into smaller complete evidence packets; zero-tool attachment delivery is not verified.";
+      fail("input_too_large");
+    }
+    if (cancellationRequested()) fail("cancelled");
+    child = spawn(launch.command, cliArgs, { cwd: work, env: isolatedEnv(home), shell: false, detached: process.platform !== "win32", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });    receipt.cli_invoked = Boolean(child.pid);
     progress("running");
-    const stop = status => { if (!problem) { problem = status; termination = terminateTree(child); } };
+    let cleanupDeadline;
+    let finishClose;
+    const closed = new Promise(resolve => {
+      finishClose = resolve;
+      child.once("close", (code, signal) => resolve({ code, signal }));
+    });
+    const stop = status => {
+      if (problem) return;
+      problem = status;
+      termination = terminateTree(child);
+      // Descendants may hold inherited pipes after the root exits. Never let
+      // an unprovable Windows cleanup keep a timed-out wrapper alive forever.
+      termination.then(() => {
+        cleanupDeadline = setTimeout(() => {
+          child.stdout.destroy(); child.stderr.destroy(); child.unref();
+          finishClose({ code: child.exitCode, signal: child.signalCode, cleanup_deadline: true });
+        }, 2000);
+      });
+    };
     const timeout = setTimeout(() => stop("timeout"), args.timeout * 1000);
     const onSignal = () => stop("cancelled");
     process.once("SIGINT", onSignal); process.once("SIGTERM", onSignal);
+    const cancelPoll = cancelMarker ? setInterval(() => { if (cancellationRequested()) onSignal(); }, 75) : null;
+    if (cancellationRequested()) onSignal();
     child.stdout.on("data", data => {
       try {
         fs.writeSync(stdoutFd, data); bytes += data.length;
@@ -367,15 +425,18 @@ async function main(argv, deps = {}) {
       try { fs.writeSync(stderrFd, data); bytes += data.length; if (bytes > MAX_BYTES) stop("output_limit"); }
       catch { stop("io_error"); }
     });
-    const result = await new Promise(resolve => {
-      child.once("error", () => { stop("cli_error"); });
-      child.once("close", (code, signal) => resolve({ code, signal }));
-    });
+    child.once("error", () => { stop("cli_error"); });
+    const result = await closed;
+    captureClosed = true;
     clearTimeout(timeout);
+    if (cancelPoll) clearInterval(cancelPoll);
+    if (cancellationRequested() && !problem) problem = "cancelled";
     process.removeListener("SIGINT", onSignal); process.removeListener("SIGTERM", onSignal);
-    fs.closeSync(stdoutFd); fs.closeSync(stderrFd);
     receipt.exit_code = result.code; receipt.signal = result.signal;
     receipt.cleanup_confirmed = await (termination || terminateTree(child));
+    if (cleanupDeadline) clearTimeout(cleanupDeadline);
+    if (result.cleanup_deadline) receipt.cleanup_confirmed = null;
+    if (process.platform === "win32") receipt.cleanup_scope = receipt.cleanup_confirmed === true ? "taskkill_live_tree" : "descendants_unverified";
     const identities = [...new Set(parser.models.map(model => JSON.stringify(model)))];
     if (identities.length === 1) Object.assign(receipt, JSON.parse(identities[0]), { model_identity_source: "runtime.model_request" });
     else { receipt.model = null; receipt.model_identity_source = null; }
@@ -406,6 +467,18 @@ async function main(argv, deps = {}) {
     receipt.complete = false;
     receipt.review_gate = "NOT_EVALUATED";
     if (child?.pid && child.exitCode === null && child.signalCode === null) receipt.cleanup_confirmed = await terminateTree(child);
+  } finally {
+    process.removeListener("SIGINT", onEarlySignal); process.removeListener("SIGTERM", onEarlySignal);
+    // Each descriptor is owned from the instant open succeeds. In particular,
+    // a second-open failure, late cancellation, or failed progress write must
+    // not leak the first descriptor or leave an inherited pipe keeping us up.
+    if (child && !captureClosed) {
+      child.stdout?.destroy(); child.stderr?.destroy(); child.unref();
+    }
+    for (const fd of captureFds) {
+      try { fs.closeSync(fd); }
+      catch { receipt.status = "io_error"; receipt.complete = false; receipt.review_gate = "NOT_EVALUATED"; }
+    }
   }
   if (directory) {
     try {
@@ -422,4 +495,4 @@ if (require.main === module) main(process.argv.slice(2)).then(result => {
   process.exitCode = ["ok", "usage", "version"].includes(result.status) ? 0 : 1;
 }).catch(() => { process.stdout.write('{"status":"internal_error","complete":false}\n'); process.exitCode = 1; });
 
-module.exports = { EventParser, resolveLaunch, isolatedEnv, setupMacKeychain, DENIED_TOOLS, RUNTIME_CONFIG, CLI_MODES, checkInstall, parseArgs, resolveMode, main };
+module.exports = { EventParser, findCli, resolveLaunch, isolatedEnv, setupMacKeychain, terminateTree, readUtf8, windowsCommandLineLength, DENIED_TOOLS, RUNTIME_CONFIG, CLI_MODES, checkInstall, parseArgs, resolveMode, main };

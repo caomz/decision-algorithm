@@ -164,15 +164,64 @@ test("changed batch arguments cannot substitute an unsnapshotted prompt",()=>{
   assert.equal(invocationCount(),count);
 });
 
-test("input directory symlinks cannot bypass snapshot containment",{skip:process.platform==="win32"},()=>{
+test("input directory symlinks or Windows junctions cannot bypass snapshot containment",()=>{
   const job=preparedJob("symlink-input");
   const outside=path.join(root,"outside-input");
   fs.renameSync(path.join(job,"input"),outside);
-  fs.symlinkSync(outside,path.join(job,"input"),"dir");
+  fs.symlinkSync(outside,path.join(job,"input"),process.platform==="win32" ? "junction" : "dir");
   assert.equal(verify(job).integrity,"corrupt");
   const count=invocationCount();
   assert.equal(runWorker(job).status,2);
   assert.equal(invocationCount(),count);
+});
+
+test("read-only completed job inspection survives a runtime code update",async()=>{
+  const localBatch=path.join(root,"versioned-batch.cjs");
+  fs.copyFileSync(fakeBatch,localBatch);
+  const job=start(path.join(root,"中文 completed job"),["--prompt-file",prompt,"--concurrency","1"],{batchPath:localBatch}).job_dir;
+  await until(()=>status(job).status==="finished");
+  assert.equal(status(job).runtime_code,"match");
+  fs.appendFileSync(localBatch,"\n// Later git update.\n");
+  const inspected=status(job);
+  assert.equal(inspected.status,"finished");
+  assert.equal(inspected.runtime_code,"changed_or_missing");
+  assert.equal(inspected.receipt.gate,"PASS");
+  assert.equal(verify(job).integrity,"match");
+  assert.equal(verify(job).runtime_code,"changed_or_missing");
+  fs.unlinkSync(localBatch);
+  assert.equal(status(job).status,"finished");
+  assert.equal(verify(job).integrity,"match");
+});
+
+test("runtime drift still blocks an unstarted worker without a provider invocation",()=>{
+  const job=preparedJob("runtime-drift");
+  const localBatch=path.join(root,"unstarted-versioned-batch.cjs");
+  fs.copyFileSync(fakeBatch,localBatch);
+  const requestFile=path.join(job,"request.json");
+  const request=JSON.parse(fs.readFileSync(requestFile,"utf8"));
+  request.batch_script=fs.realpathSync(localBatch);
+  request.batch_script_digest=fileDigest(localBatch);
+  fs.writeFileSync(requestFile,JSON.stringify(request));
+  fs.writeFileSync(path.join(job,"request-digest.json"),JSON.stringify(fileDigest(requestFile)));
+  fs.appendFileSync(localBatch,"\n// Changed after request pinning.\n");
+  const before=invocationCount();
+  assert.equal(runWorker(job).status,2);
+  assert.equal(invocationCount(),before);
+  assert.equal(status(job).status,"unknown");
+  assert.equal(status(job).runtime_code,"changed_or_missing");
+  assert.equal(verify(job).integrity,"incomplete");
+});
+
+test("unsupported atomic publication fails before supervisor launch with an actionable code",()=>{
+  const job=path.join(root,"unsupported-volume");
+  // Invoke start directly because requiring the CLI does not run it.
+  const code=`const fs=require("node:fs");fs.linkSync=()=>{throw Object.assign(new Error("unsupported"),{code:"ENOTSUP"});};try {require(${JSON.stringify(script)}).start(${JSON.stringify(job)},["--prompt-file",${JSON.stringify(prompt)}]);process.exitCode=9;}catch(error){process.stdout.write(JSON.stringify({code:error.code,message:error.message}));}`;
+  const run=spawnSync(process.execPath,["-e",code],{encoding:"utf8"});
+  assert.equal(run.status,0,run.stderr);
+  const failure=JSON.parse(run.stdout);
+  assert.equal(failure.code,"MMX_JOB_PUBLICATION_UNAVAILABLE");
+  assert.match(failure.message,/local NTFS/);
+  assert.equal(fs.existsSync(path.join(job,"launch.json")),false);
 });
 
 test("completion hashes detect changed receipt, output, and exit status",async()=>{

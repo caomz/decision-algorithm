@@ -568,7 +568,10 @@ function materialWarnings(packet) {
 }
 
 function buildRunPacket(rawPacketBytes) {
-  const packet = packetFrom(rawPacketBytes.toString("utf8"));
+  let packetText;
+  try { packetText = new TextDecoder("utf-8", { fatal: true }).decode(rawPacketBytes); }
+  catch { fail("packet must be valid UTF-8 (UTF-8 BOM is accepted)"); }
+  const packet = packetFrom(packetText);
   const isV2 = V2_KEYS.some(key => packet[key] !== undefined);
   if (isV2 && packet.changes !== undefined) verifyChanges(packet.changes);
   const material = materialFrom(packet);
@@ -1242,7 +1245,7 @@ function tailUtf8(bytes, limit = LIMITS.logTailBytes) {
 
 function readJsonArgument(file, what) {
   let parsed;
-  try { parsed = strictJson(fs.readFileSync(file, "utf8")); }
+  try { parsed = strictJson(readUtf8Argument(file, what)); }
   catch (error) { fail(`${what} (${file}) is unreadable or not strict JSON: ${String(error?.message ?? error).slice(0, 80)}`); }
   return parsed;
 }

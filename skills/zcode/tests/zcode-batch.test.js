@@ -9,7 +9,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { spawnSync } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
 
 const skillRoot = path.resolve(__dirname, "..");
 const batch = path.join(skillRoot, "scripts", "zcode-batch.js");
@@ -55,13 +55,23 @@ if (prompt.includes("CONC_PROBE")) {
   return;
 }
 if (prompt.includes("CHILD_ERR")) { process.stdout.write("definitely not json"); process.exitCode = 1; return; }
+if (prompt.includes("OK_NONZERO")) { emit(ok({ review_gate: "PASS" })); process.exitCode = 2; return; }
 if (prompt.includes("REVIEW_PASS")) { emit(ok({ review_gate: "PASS" })); return; }
 if (prompt.includes("REVIEW_FAIL")) { emit(ok({ review_gate: "FAIL" })); return; }
 if (prompt.includes("AUTH_ERR")) { emit({ status: "auth_error", cli_invoked: false, complete: false, review_gate: "NOT_EVALUATED", error: "auth failed" }); return; }
 if (prompt.includes("POLICY_ERR")) { emit({ status: "policy_violation", cli_invoked: true, complete: false, review_gate: "NOT_EVALUATED", error: "tool used" }); return; }
 if (prompt.includes("TRUNC")) { emit(ok({ truncated: true, complete: false, stop_reason: "max_tokens", review_gate: "PASS" })); return; }
 if (prompt.includes("QUOTA_ONCE") && invocations === 0) { emit({ status: "quota_error", cli_invoked: true, complete: false, review_gate: "NOT_EVALUATED", error: "rate limited" }); return; }
-if (prompt.includes("TIMEOUT_ONCE") && invocations === 0) { emit({ status: "timeout", cli_invoked: true, complete: false, review_gate: "NOT_EVALUATED", error: "timed out" }); return; }
+if (prompt.includes("TIMEOUT_ONCE") && invocations === 0) { emit({ status: "timeout", cli_invoked: true, complete: false, cleanup_confirmed: true, review_gate: "NOT_EVALUATED", error: "timed out" }); return; }
+if (prompt.includes("TIMEOUT_UNKNOWN")) { emit({ status: "timeout", cli_invoked: true, complete: false, cleanup_confirmed: null, review_gate: "NOT_EVALUATED", error: "timed out" }); return; }
+if (prompt.includes("CANCEL_WAIT")) {
+  const poll = setInterval(() => {
+    if (fs.existsSync(process.env.ZCODE_CANCEL_REQUEST_FILE)) {
+      clearInterval(poll); emit({ status: "cancelled", complete: false }); process.exitCode = 1;
+    }
+  }, 20);
+  return;
+}
 if (prompt.includes("QUOTA_ALWAYS")) { emit({ status: "quota_error", cli_invoked: true, complete: false, review_gate: "NOT_EVALUATED", error: "rate limited" }); return; }
 emit(ok());
 `);
@@ -102,6 +112,17 @@ test("usage: rejects unknown flags entirely", () => {
 test("usage: rejects duplicate prompt files", () => {
   const file = shardFile("dup.txt", "hi");
   assert.equal(receiptOf(runBatch(["--prompt-file", file, "--prompt-file", file])).status, "usage_error");
+});
+
+test("hardlink aliases are one input and directories are not prompt files", () => {
+  const file = shardFile("hardlink-input.txt", "REVIEW_PASS");
+  const alias = path.join(root, "hardlink-alias.txt");
+  fs.linkSync(file, alias);
+  const receipt = receiptOf(runBatch(["--prompt-file", file, "--prompt-file", alias]));
+  assert.equal(receipt.status, "usage_error");
+  assert.equal(fs.existsSync(path.join(stateDir, path.basename(file))), false);
+  assert.equal(fs.existsSync(path.join(stateDir, path.basename(alias))), false);
+  assert.equal(receiptOf(runBatch(["--prompt-file", root])).status, "usage_error");
 });
 
 test("usage: rejects a missing prompt file", () => {
@@ -244,6 +265,89 @@ test("timeout retry: one backoff retry then ok", () => {
   assert.equal(receipt.shards[0].status, "ok");
 });
 
+test("timeout without confirmed local cleanup is never retried", () => {
+  const file = shardFile("timeout-unknown.txt", "TIMEOUT_UNKNOWN shard");
+  const receipt = receiptOf(runBatch(["--prompt-file", file]));
+  assert.equal(receipt.status, "failed");
+  assert.equal(receipt.shards[0].retried, false);
+  assert.equal(fs.readFileSync(path.join(stateDir, path.basename(file)), "utf8"), "1");
+});
+
+test("nonzero process exit invalidates an otherwise successful review receipt", () => {
+  const receipt = receiptOf(runBatch(["--prompt-file", shardFile("ok-nonzero.txt", "OK_NONZERO"), "--mode", "review", "--evidence-ids-file", idsFile]));
+  assert.equal(receipt.status, "failed");
+  assert.equal(receipt.transport_gate, "NOT_EVALUATED");
+  assert.equal(receipt.gate, "NOT_EVALUATED");
+  assert.equal(receipt.shards[0].status, "child_error");
+  assert.equal(receipt.shards[0].wrapper_exit_code, 2);
+  assert.equal(receipt.shards[0].complete, false);
+});
+
+test("PowerShell UTF-8 BOM evidence IDs follow the same decoder as the wrapper", () => {
+  const ids = path.join(root, "bom-ids.json");
+  fs.writeFileSync(ids, '\ufeff["E1", "E2"]\r\n');
+  const receipt = receiptOf(runBatch(["--prompt-file", shardFile("bom-review.txt", "REVIEW_PASS"), "--mode", "review", "--evidence-ids-file", ids]));
+  assert.equal(receipt.gate, "PASS");
+});
+
+test("a pre-cancelled batch never starts a wrapper", () => {
+  const marker = path.join(root, "pre-cancel.request");
+  fs.writeFileSync(marker, "cancel\n");
+  const file = shardFile("never-invoked.txt", "REVIEW_PASS");
+  const receipt = receiptOf(runBatch(["--prompt-file", file], { ZCODE_CANCEL_REQUEST_FILE: marker }));
+  assert.equal(receipt.status, "cancelled");
+  assert.equal(receipt.transport_gate, "NOT_EVALUATED");
+  assert.equal(fs.existsSync(path.join(stateDir, path.basename(file))), false);
+});
+
+test("marker cancellation interrupts retry backoff and preserves the first receipt", { timeout: 15000 }, async () => {
+  const file = shardFile("cancel-backoff.txt", "QUOTA_ALWAYS");
+  const marker = path.join(root, "backoff-cancel.request");
+  const child = spawn(process.execPath, [batch, "--prompt-file", file], {
+    env: { ...process.env, ZCODE_BATCH_WRAPPER: fakeWrapper, FAKE_STATE_DIR: stateDir,
+      ZCODE_BATCH_RETRY_MS: "30000", ZCODE_CANCEL_REQUEST_FILE: marker },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  child.stdout.on("data", chunk => { stdout += chunk; });
+  child.stderr.resume();
+  const ended = new Promise(resolve => child.once("close", code => resolve(code)));
+  try {
+    const deadline = Date.now() + 10000;
+    while (!fs.existsSync(path.join(stateDir, path.basename(file)))) {
+      assert.ok(Date.now() < deadline, "wrapper should have started");
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    // Wait until the failed wrapper has delivered its first receipt, so this
+    // exercises the backoff rather than cancellation of the first attempt.
+    await new Promise(resolve => setTimeout(resolve, 300));
+    fs.writeFileSync(marker, "cancel\n");
+    assert.equal(await ended, 1);
+    const receipt = JSON.parse(stdout);
+    assert.equal(receipt.status, "cancelled");
+    assert.equal(receipt.transport_gate, "NOT_EVALUATED");
+    assert.equal(receipt.shards[0].first_attempt.status, "quota_error");
+    assert.ok(receipt.shards[0].retry_backoff_seconds < 30, "receipt must record the interrupted wait, not the nominal 30 seconds");
+    assert.equal(receipt.shards[0].retried, false);
+    assert.equal(fs.readFileSync(path.join(stateDir, path.basename(file)), "utf8"), "1");
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+  }
+});
+
+test("cancelled aggregation never publishes a PASS from completed shards", () => {
+  const { aggregate } = require("../scripts/zcode-batch.js");
+  const result = aggregate([{ status: "ok", complete: true, review_gate: "PASS" }], [{ label: "one" }], { mode: "review" }, Date.now(), { cancelled: true });
+  assert.equal(result.status, "cancelled");
+  assert.equal(result.gate, "NOT_EVALUATED");
+  assert.equal(result.transport_gate, "NOT_EVALUATED");
+});
+
+test("importing the batch module does not install process signal handlers", () => {
+  const run = spawnSync(process.execPath, ["-e", `const before=process.listenerCount('SIGTERM');require(${JSON.stringify(batch)});if(process.listenerCount('SIGTERM')!==before)process.exit(1);`], { encoding: "utf8" });
+  assert.equal(run.status, 0, run.stderr);
+});
+
 test("persistent quota failure: exactly two attempts, no third", () => {
   const file = shardFile("qa.txt", "QUOTA_ALWAYS shard");
   const run = runBatch(["--prompt-file", file]);
@@ -289,6 +393,53 @@ test("--prompts-dir: .txt only, natural order, receipt file mirrors stdout", () 
   const onDisk = JSON.parse(fs.readFileSync(receiptPath, "utf8"));
   assert.equal(onDisk.receipt_file, receiptPath);
   assert.deepEqual(onDisk.shards.map(s => s.shard), ["p1", "p2", "p10"]);
+});
+
+test("receipt destination is fresh and writable before any wrapper starts", () => {
+  const prompt = shardFile("receipt-collision.txt", "KEEP ORIGINAL INPUT");
+  const prior = path.join(root, "prior-receipt.json");
+  fs.writeFileSync(prior, "KEEP PRIOR RECEIPT");
+  for (const destination of [prompt, prior, path.join(root, "no-receipt-parent", "receipt.json")]) {
+    const response = runBatch(["--prompt-file", prompt, "--receipt-file", destination]);
+    assert.equal(response.status, 1);
+    assert.equal(receiptOf(response).status, "usage_error");
+    assert.equal(fs.existsSync(path.join(stateDir, path.basename(prompt))), false);
+  }
+  assert.equal(fs.readFileSync(prompt, "utf8"), "KEEP ORIGINAL INPUT");
+  assert.equal(fs.readFileSync(prior, "utf8"), "KEEP PRIOR RECEIPT");
+});
+
+test("receipt write failure keeps shard evidence but cannot publish PASS or exit zero", () => {
+  const prompt = shardFile("receipt-write-failure.txt", "REVIEW_PASS");
+  const destination = path.join(root, "failed-receipt.json");
+  const preload = path.join(root, "fail-receipt-write.cjs");
+  fs.writeFileSync(preload, `
+    const fs = require('node:fs');
+    const open = fs.openSync, write = fs.writeFileSync;
+    let owned;
+    fs.openSync = function(file, ...args) {
+      const fd = open.call(this, file, ...args);
+      if (file === ${JSON.stringify(destination)}) owned = fd;
+      return fd;
+    };
+    fs.writeFileSync = function(file, ...args) {
+      if (typeof file === 'number' && file === owned) throw Object.assign(new Error('synthetic disk full'), { code: 'ENOSPC' });
+      return write.call(this, file, ...args);
+    };
+  `);
+  const response = spawnSync(process.execPath, ["--require", preload, batch, "--prompt-file", prompt,
+    "--mode", "review", "--evidence-ids-file", idsFile, "--receipt-file", destination], {
+    encoding: "utf8", timeout: 15000,
+    env: { ...process.env, ZCODE_BATCH_WRAPPER: fakeWrapper, FAKE_STATE_DIR: stateDir },
+  });
+  const receipt = receiptOf(response);
+  assert.equal(response.status, 1);
+  assert.equal(receipt.status, "receipt_error");
+  assert.equal(receipt.gate, "NOT_EVALUATED");
+  assert.equal(receipt.transport_gate, "NOT_EVALUATED");
+  assert.equal(receipt.shards[0].status, "ok");
+  assert.equal(receipt.shards[0].review_gate, "PASS");
+  assert.match(receipt.receipt_file_write_error, /ENOSPC/);
 });
 
 test("actual parallelism never exceeds --concurrency", () => {

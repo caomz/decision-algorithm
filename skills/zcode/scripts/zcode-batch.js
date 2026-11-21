@@ -15,8 +15,9 @@
 "use strict";
 
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
-const { spawn } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 
 const VERSION = "1.0.0";
 const DEFAULT_WRAPPER = path.join(__dirname, "zcode-chat.js");
@@ -132,7 +133,7 @@ function collectShardFiles(args) {
     try { entries = fs.readdirSync(args.promptsDir); }
     catch { usageError("--prompts-dir is not readable."); }
     files = entries
-      .filter(name => name.endsWith(".txt"))
+      .filter(name => /\.txt$/i.test(name))
       .map(name => path.join(args.promptsDir, name))
       .filter(file => { try { return fs.statSync(file).isFile(); } catch { return false; } })
       .sort((a, b) => path.basename(a).localeCompare(path.basename(b), undefined, { numeric: true }));
@@ -145,11 +146,17 @@ function collectShardFiles(args) {
   const seen = new Set();
   const labeled = [];
   for (const file of files) {
-    let real;
-    try { real = fs.realpathSync(file); }
+    let real, stat;
+    try {
+      real = fs.realpathSync(file);
+      stat = fs.statSync(real, { bigint: true });
+      if (!stat.isFile()) throw new Error("not a regular file");
+    }
     catch { usageError(`Prompt file not found: ${file}`); }
-    if (seen.has(real)) usageError(`Duplicate prompt file: ${file}`);
-    seen.add(real);
+    const identity = stat.ino !== 0n ? `inode:${stat.dev}:${stat.ino}`
+      : `path:${process.platform === "win32" ? real.toLowerCase() : real}`;
+    if (seen.has(identity)) usageError(`Duplicate prompt file: ${file}`);
+    seen.add(identity);
     let label = path.basename(file).replace(/\.txt$/i, "").replace(/[^A-Za-z0-9._-]/g, "_") || "shard";
     let unique = label;
     for (let n = 2; labeled.some(s => s.label === unique); n++) unique = `${label}-${n}`;
@@ -167,15 +174,35 @@ function collectShardFiles(args) {
 
 const liveChildren = new Set();
 let cancelled = false;
+let cancelMarker = process.env.ZCODE_CANCEL_REQUEST_FILE;
+let cancelDirectory;
+let escalation;
+let cancellationSent = false;
+let receiptFd = null;
+
+function cancellationRequested() {
+  if (cancelMarker && fs.existsSync(cancelMarker)) cancelled = true;
+  return cancelled;
+}
+
+function waitForRetry() {
+  return new Promise(resolve => {
+    const finish = () => { clearTimeout(deadline); clearInterval(poll); resolve(); };
+    const deadline = setTimeout(finish, RETRY_DELAY_MS);
+    const poll = setInterval(() => { if (cancellationRequested()) finish(); }, 75);
+  });
+}
 
 function runWrapperOnce(promptFile, fixedArgs) {
   return new Promise(resolve => {
+    if (cancellationRequested()) { resolve({ receipt: { status: "cancelled", complete: false }, duration: 0 }); return; }
     const wrapperPath = process.env.ZCODE_BATCH_WRAPPER || DEFAULT_WRAPPER;
     const args = [wrapperPath, "--prompt-file", promptFile, ...fixedArgs];
     let child;
     try {
       child = spawn(process.execPath, args, {
         stdio: ["ignore", "pipe", "pipe"], shell: false, windowsHide: true,
+        env: { ...process.env, ZCODE_CANCEL_REQUEST_FILE: cancelMarker },
       });
     } catch (err) {
       resolve({ receipt: { status: "child_error", error: `could not spawn wrapper: ${err.code || err.message}` }, duration: 0 });
@@ -189,6 +216,7 @@ function runWrapperOnce(promptFile, fixedArgs) {
     child.stdout.on("data", chunk => {
       if (stdoutBytes >= STDOUT_CAP_BYTES) { overflow = true; return; }
       const take = Math.min(chunk.length, STDOUT_CAP_BYTES - stdoutBytes);
+      if (take !== chunk.length) overflow = true;
       stdout.push(take === chunk.length ? chunk : chunk.subarray(0, take));
       stdoutBytes += take;
     });
@@ -199,11 +227,11 @@ function runWrapperOnce(promptFile, fixedArgs) {
       liveChildren.delete(child);
       resolve({ receipt: { status: "child_error", error: `wrapper spawn failed: ${err.code || err.message}` }, duration: 0 });
     });
-    child.on("close", code => {
+    child.on("close", (code, signal) => {
       liveChildren.delete(child);
       const duration = (Date.now() - started) / 1000;
-      if (cancelled) {
-        resolve({ receipt: { status: "cancelled", exit_code: code }, duration });
+      if (cancellationRequested()) {
+        resolve({ receipt: { status: "cancelled", complete: false, exit_code: code, signal }, duration });
         return;
       }
       const outText = Buffer.concat(stdout).toString("utf8").trim();
@@ -226,6 +254,14 @@ function runWrapperOnce(promptFile, fixedArgs) {
         resolve({ receipt: { status: "child_error", exit_code: code, error: "wrapper envelope is not a JSON object with a status" }, duration });
         return;
       }
+      // The process outcome is independent evidence. A valid-looking success
+      // envelope must not hide a crash, signal, or nonzero wrapper exit.
+      if (signal || code === null || code !== 0 && (code !== 1 || receipt.status === "ok" || receipt.complete === true)) {
+        receipt = { ...receipt, status: "child_error", complete: false, review_gate: "NOT_EVALUATED",
+          error: "wrapper exit did not match its receipt" };
+      }
+      receipt.wrapper_exit_code = code;
+      receipt.wrapper_signal = signal;
       resolve({ receipt, duration });
     });
   });
@@ -239,24 +275,27 @@ function runWrapperOnce(promptFile, fixedArgs) {
 
 async function runShardWithRetries(shard, fixedArgs) {
   const first = await runWrapperOnce(shard.file, fixedArgs);
-  if (!RETRYABLE.has(first.receipt.status) || cancelled) {
+  const retrySafe = first.receipt.status !== "timeout" || first.receipt.cleanup_confirmed === true;
+  if (!RETRYABLE.has(first.receipt.status) || !retrySafe || cancellationRequested()) {
     return { shard: shard.label, prompt_file: shard.file, retried: false, retry_reason: null,
       duration_seconds: first.duration, ...first.receipt };
   }
   const retryReason = first.receipt.status;
-  await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
+  const backoffStarted = Date.now();
+  await waitForRetry();
+  const backoffSeconds = (Date.now() - backoffStarted) / 1000;
   // A cancellation during the backoff must not spawn a new child.
-  if (cancelled) {
+  if (cancellationRequested()) {
     return { shard: shard.label, prompt_file: shard.file, retried: false, retry_reason: retryReason,
-      retry_backoff_seconds: RETRY_DELAY_MS / 1000,
-      duration_seconds: first.duration + RETRY_DELAY_MS / 1000,
+      retry_backoff_seconds: backoffSeconds,
+      duration_seconds: first.duration + backoffSeconds,
       first_attempt: first.receipt, status: "cancelled", complete: false };
   }
   const second = await runWrapperOnce(shard.file, fixedArgs);
   return {
     shard: shard.label, prompt_file: shard.file, retried: true, retry_reason: retryReason,
-    retry_backoff_seconds: RETRY_DELAY_MS / 1000,
-    duration_seconds: first.duration + second.duration + RETRY_DELAY_MS / 1000,
+    retry_backoff_seconds: backoffSeconds,
+    duration_seconds: first.duration + second.duration + backoffSeconds,
     first_attempt: first.receipt,
     ...second.receipt,
   };
@@ -266,7 +305,7 @@ async function runShardWithRetries(shard, fixedArgs) {
 // Gates — transport usability and content review_gate are separate verdicts.
 // ---------------------------------------------------------------------------
 
-function aggregate(results, shards, args, started) {
+function aggregate(results, shards, args, started, { cancelled: interrupted = false } = {}) {
   let okCount = 0;
   let transportOkCount = 0;
   let truncatedCount = 0;
@@ -289,13 +328,13 @@ function aggregate(results, shards, args, started) {
     }
     if (result.retried) retriedCount++;
   }
-  const transportGate = transportOkCount === shards.length ? "PASS" : "NOT_EVALUATED";
+  const transportGate = !interrupted && transportOkCount === shards.length ? "PASS" : "NOT_EVALUATED";
   let gate;
-  if (args.mode === "chat") gate = "NOT_EVALUATED";
+  if (interrupted || args.mode === "chat") gate = "NOT_EVALUATED";
   else if (reviewFail > 0) gate = "FAIL"; // A confirmed finding outranks transport noise.
   else if (reviewPass === shards.length) gate = "PASS";
   else gate = "NOT_EVALUATED";
-  const batchStatus = transportOkCount === shards.length ? "ok" : (transportOkCount > 0 ? "partial" : "failed");
+  const batchStatus = interrupted ? "cancelled" : transportOkCount === shards.length ? "ok" : (transportOkCount > 0 ? "partial" : "failed");
   return {
     status: batchStatus,
     gate,
@@ -331,10 +370,12 @@ async function main() {
     // Fail fast at the batch level instead of letting every shard spawn a
     // wrapper that dies with input_error on the same malformed ids file.
     let raw;
-    try { raw = fs.readFileSync(args.evidenceIdsFile); }
+    const { readUtf8 } = require("./zcode-chat.js");
+    try { raw = readUtf8(args.evidenceIdsFile); }
     catch { usageError(`--evidence-ids-file is not readable: ${args.evidenceIdsFile}`); }
     let parsed;
-    try { parsed = JSON.parse(raw.toString("utf8")); }
+    const { strictJson } = require("./review.js");
+    try { parsed = strictJson(raw); }
     catch { usageError("--evidence-ids-file is not valid JSON."); }
     // The upstream validator owns the exact id rules; reuse it so the batch
     // gate cannot drift from the single-shot contract.
@@ -343,6 +384,16 @@ async function main() {
     catch { usageError("--evidence-ids-file must be a nonempty unique array of plain id strings."); }
   }
   const shards = collectShardFiles(args);
+  if (args.receiptFile !== null) {
+    // Reserve a new writable receipt before starting any model request, and
+    // never replace an input file or a previously completed receipt.
+    try { receiptFd = fs.openSync(args.receiptFile, "wx", 0o600); }
+    catch { usageError("--receipt-file must be a new file in an existing writable directory."); }
+  }
+  if (!cancelMarker) {
+    cancelDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "zcode-batch-cancel-"));
+    cancelMarker = path.join(cancelDirectory, "cancel.request");
+  }
   const timeout = args.timeout ?? DEFAULT_TIMEOUT_SECONDS;
 
   const fixedArgs = ["--mode", args.mode, "--timeout-seconds", String(timeout)];
@@ -355,21 +406,33 @@ async function main() {
   let nextIndex = 0;
 
   async function worker() {
-    while (!cancelled) {
+    while (!cancellationRequested()) {
       const index = nextIndex++;
       if (index >= shards.length) return;
       results[index] = await runShardWithRetries(shards[index], fixedArgs);
     }
   }
-  await Promise.all(Array.from({ length: Math.min(concurrency, shards.length) }, worker));
+  const poll = setInterval(() => { if (cancellationRequested()) onSignal(); }, 75);
+  try { await Promise.all(Array.from({ length: Math.min(concurrency, shards.length) }, worker)); }
+  finally {
+    clearInterval(poll);
+    if (escalation) clearTimeout(escalation);
+    cancellationRequested();
+    if (cancelDirectory) { try { fs.rmSync(cancelDirectory, { recursive: true, force: true }); } catch {} }
+  }
 
-  const envelope = { ...aggregate(results, shards, args, started), shards: results };
+  const envelope = { ...aggregate(results, shards, args, started, { cancelled: cancellationRequested() }), shards: results };
   if (args.receiptFile !== null) {
     envelope.receipt_file = args.receiptFile;
     try {
-      fs.writeFileSync(args.receiptFile, JSON.stringify(envelope, null, 2) + "\n", { mode: 0o600 });
+      fs.writeFileSync(receiptFd, JSON.stringify(envelope, null, 2) + "\n");
+      fs.closeSync(receiptFd);
+      receiptFd = null;
     } catch (err) {
       delete envelope.receipt_file;
+      envelope.status = "receipt_error";
+      envelope.gate = "NOT_EVALUATED";
+      envelope.transport_gate = "NOT_EVALUATED";
       envelope.receipt_file_write_error = `could not write receipt file: ${err.code || err.message}`;
     }
   }
@@ -378,20 +441,34 @@ async function main() {
 }
 
 function onSignal(code) {
-  if (emitted) process.exit(code);
+  if (emitted || cancellationSent) return;
+  cancellationSent = true;
   cancelled = true;
-  // Ask each wrapper to stop; the wrapper owns CLI cleanup and receipt writes.
-  for (const child of liveChildren) { try { child.kill("SIGTERM"); } catch {} }
-  fail({ status: "cancelled", transport_gate: "NOT_EVALUATED", gate: "NOT_EVALUATED",
-    note: "batch interrupted; shard receipts up to this point are lost" });
+  if (cancelMarker) {
+    try { fs.writeFileSync(cancelMarker, "cancel\n", { flag: "wx", mode: 0o600 }); }
+    catch (error) { if (error.code !== "EEXIST") process.exitCode = 1; }
+  }
+  // Owned wrappers read this marker on every platform. Avoid racing their
+  // preflight/receipt handlers with SIGTERM, and cover the 10s version probe.
+  if (!escalation) escalation = setTimeout(() => {
+    for (const child of liveChildren) {
+      if (process.platform === "win32") {
+        spawnSync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { shell: false, windowsHide: true, timeout: 2000, stdio: "ignore" });
+      }
+      try { child.kill("SIGKILL"); } catch {}
+    }
+  }, 15000);
 }
-process.on("SIGTERM", () => onSignal(143));
-process.on("SIGINT", () => onSignal(130));
-process.on("SIGHUP", () => onSignal(129));
 
 if (require.main === module) {
+  process.on("SIGTERM", () => onSignal(143));
+  process.on("SIGINT", () => onSignal(130));
+  process.on("SIGHUP", () => onSignal(129));
   main().catch(error => {
     fail(error.envelope ?? { status: "batch_error", error: "zcode-batch failed locally." });
+  }).finally(() => {
+    if (receiptFd !== null) { try { fs.closeSync(receiptFd); } catch {} receiptFd = null; }
+    if (cancelDirectory) { try { fs.rmSync(cancelDirectory, { recursive: true, force: true }); } catch {} }
   });
 } else {
   module.exports = { parseArgs, collectShardFiles, aggregate, MODES, RETRYABLE };

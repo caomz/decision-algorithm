@@ -28,6 +28,17 @@ const shebang = sourceText.split("\n")[0];
 const localShebang = `#!${process.execPath}`;
 const installed = path.join(binDir, "mmx");
 fs.writeFileSync(installed, shebang === localShebang ? sourceText : sourceText.replace(/^#![^\n]*/, localShebang), { mode: 0o755 });
+if (process.platform === "win32") {
+  // Exercise the actual npm entry resolver on Windows as well. No shell or
+  // executable-bit emulation, and no installed/paid provider can be selected.
+  const pkg = path.join(binDir, "node_modules", "mmx-cli");
+  fs.mkdirSync(path.join(pkg, "dist"), { recursive: true });
+  const fake = path.join(pkg, "dist", "fixture.cjs");
+  fs.writeFileSync(fake, sourceText);
+  fs.writeFileSync(path.join(pkg, "package.json"), JSON.stringify({ name: "mmx-cli", bin: { mmx: "dist/mmx.mjs" } }));
+  fs.writeFileSync(path.join(pkg, "dist", "mmx.mjs"), 'import "./fixture.cjs";\n');
+  fs.writeFileSync(path.join(binDir, "mmx.cmd"), '@echo off\r\n"%_prog%" "%dp0%\\node_modules\\mmx-cli\\dist\\mmx.mjs" %*\r\n');
+}
 
 const wrapperTmp = path.join(root, "wrapper-tmp");
 fs.mkdirSync(wrapperTmp, { mode: 0o700 });
@@ -64,7 +75,7 @@ function runDelivery(material, name) {
   return { receipt, dump, directory };
 }
 
-test("the single user message equals P byte for byte (small P)", { skip: process.platform === "win32" && "POSIX fake CLI fixture is not an npm .cmd shim; Windows npm-shim behavior is exercised in mmx-chat.test.js" }, () => {
+test("the single user message equals P byte for byte (small P)", () => {
   const { buildPrompt } = require("../../zcode/scripts/review.js");
   const material = runner.materialFrom({ facts: [{ id: "F1", text: "small mmx delivery check 中文 🌟" }] });
   const P = buildPrompt(material, "review", ["F1"]);
@@ -76,7 +87,7 @@ test("the single user message equals P byte for byte (small P)", { skip: process
   assert.equal(dump.user_content, P);
 });
 
-test("the single user message equals P byte for byte (P of 24577 bytes)", { skip: process.platform === "win32" && "POSIX fake CLI fixture is not an npm .cmd shim; Windows npm-shim behavior is exercised in mmx-chat.test.js" }, () => {
+test("the single user message equals P byte for byte (P of 24577 bytes)", () => {
   const { buildPrompt } = require("../../zcode/scripts/review.js");
   const material = materialReaching(24577);
   const P = buildPrompt(material, "review", ["F1"]);
@@ -87,7 +98,7 @@ test("the single user message equals P byte for byte (P of 24577 bytes)", { skip
   assert.equal(dump.user_content, P);
 });
 
-test("the wrapper keeps prompt content out of argv", { skip: process.platform === "win32" && "POSIX fake CLI fixture is not an npm .cmd shim; Windows npm-shim behavior is exercised in mmx-chat.test.js" }, () => {
+test("the wrapper keeps prompt content out of argv", () => {
   const material = runner.materialFrom({ facts: [{ id: "F1", text: "argv must stay clean" }] });
   const { dump } = runDelivery(require("../../zcode/scripts/review.js").buildPrompt(material, "review", ["F1"]), "argv-clean");
   assert.equal(dump.argv.some(item => item.includes("argv must stay clean")), false);

@@ -18,6 +18,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const os = require("node:os");
 const { spawn } = require("child_process");
 const { randomInt } = require("node:crypto");
 const { terminateChildTree } = require("./mmx-chat.js");
@@ -78,7 +79,9 @@ function readProfileBudget(file) {
   let profile;
   try {
     if (!fs.statSync(file).isFile()) throw new Error();
-    profile = JSON.parse(fs.readFileSync(file, "utf8"));
+    // Windows PowerShell 5.1 writes a BOM with -Encoding UTF8. Preserve the
+    // original snapshot bytes but accept that encoding marker when parsing.
+    profile = JSON.parse(fs.readFileSync(file, "utf8").replace(/^\uFEFF/, ""));
   } catch {
     usageError("MMX runtime profile is unreadable or is not JSON.");
   }
@@ -169,7 +172,7 @@ function collectShardFiles(args) {
     try { entries = fs.readdirSync(args.promptsDir); }
     catch { usageError("--prompts-dir is not readable."); }
     files = entries
-      .filter(name => name.endsWith(".txt"))
+      .filter(name => /\.txt$/i.test(name))
       .map(name => path.join(args.promptsDir, name))
       .filter(file => { try { return fs.statSync(file).isFile(); } catch { return false; } })
       .sort((a, b) => path.basename(a).localeCompare(path.basename(b), undefined, { numeric: true }));
@@ -182,11 +185,20 @@ function collectShardFiles(args) {
   const seen = new Set();
   const labeled = [];
   for (const file of files) {
-    let real;
-    try { real = fs.realpathSync(file); }
+    let real, stat;
+    try {
+      real = fs.realpathSync(file);
+      stat = fs.statSync(real, { bigint: true });
+      if (!stat.isFile()) throw new Error("not a regular file");
+    }
     catch { usageError(`Prompt file not found: ${file}`); }
-    if (seen.has(real)) usageError(`Duplicate prompt file: ${file}`);
-    seen.add(real);
+    // Native Windows aliases can differ in spelling/case, and realpath does
+    // not collapse hard links. The underlying file identity prevents duplicate
+    // paid work without conflating distinct files in case-sensitive NTFS dirs.
+    const identity = stat.ino !== 0n ? `inode:${stat.dev}:${stat.ino}`
+      : `path:${process.platform === "win32" ? real.toLowerCase() : real}`;
+    if (seen.has(identity)) usageError(`Duplicate prompt file: ${file}`);
+    seen.add(identity);
     let label = path.basename(file).replace(/\.txt$/i, "").replace(/[^A-Za-z0-9._-]/g, "_") || "shard";
     let unique = label;
     for (let n = 2; labeled.some(s => s.label === unique); n++) unique = `${label}-${n}`;
@@ -202,12 +214,71 @@ function collectShardFiles(args) {
 
 const liveChildren = new Set();
 let cancelled = false;
-const cancelMarker = process.env.MMX_CANCEL_REQUEST_FILE;
+let cancelMarker = process.env.MMX_CANCEL_REQUEST_FILE;
+let ownedCancelDir = null;
+let cancellationStarted = false;
+let cancelPolling = null;
+let receiptFd = null;
+
+function prepareCancellation() {
+  // Foreground Windows batches need the same cooperative path as durable
+  // jobs: SIGTERM/taskkill cannot give a wrapper a cleanup grace period.
+  if (!cancelMarker) {
+    ownedCancelDir = fs.mkdtempSync(path.join(os.tmpdir(), "mmx-batch-cancel-"));
+    cancelMarker = path.join(ownedCancelDir, "cancel.request");
+  }
+  cancelPolling = setInterval(() => {
+    if (cancellationRequested()) requestCancellation();
+  }, 75);
+  cancelPolling.unref();
+}
+
+function cleanupCancellation() {
+  clearInterval(cancelPolling);
+  if (receiptFd !== null) {
+    try { fs.closeSync(receiptFd); } catch {}
+    receiptFd = null;
+  }
+  // Never remove a supervisor-owned marker or any files outside our private
+  // directory. Its presence is durable evidence for job inspection.
+  if (ownedCancelDir) {
+    try { fs.unlinkSync(cancelMarker); } catch {}
+    try { fs.rmdirSync(ownedCancelDir); } catch {}
+  }
+}
+
 function cancellationRequested() {
   // The durable supervisor owns the marker. Do not spawn additional paid
   // requests after it appears; a wrapper already running polls it as well.
   if (cancelMarker && fs.existsSync(cancelMarker)) cancelled = true;
   return cancelled;
+}
+
+function requestCancellation() {
+  cancelled = true;
+  if (cancellationStarted) return;
+  cancellationStarted = true;
+  if (cancelMarker) {
+    try { fs.writeFileSync(cancelMarker, "cancel\n", { flag: "wx", mode: 0o600 }); }
+    catch {} // Escalation below still bounds a failed marker publication.
+  }
+  for (const child of liveChildren) {
+    // POSIX wrappers can handle TERM. Native Windows wrappers instead poll
+    // the marker; killing the wrapper first would strand its CLI descendants.
+    if (process.platform !== "win32") terminateChildTree(child, false, false);
+    const escalation = setTimeout(() => terminateChildTree(child, true, false), 4500);
+    escalation.unref();
+    child.once("close", () => clearTimeout(escalation));
+  }
+}
+
+async function waitBackoff(delayMs) {
+  const started = Date.now();
+  const end = started + delayMs;
+  while (!cancellationRequested() && Date.now() < end) {
+    await new Promise(resolve => setTimeout(resolve, Math.min(75, end - Date.now())));
+  }
+  return (Date.now() - started) / 1000;
 }
 
 function runWrapperOnce(promptFile, fixedArgs) {
@@ -222,6 +293,7 @@ function runWrapperOnce(promptFile, fixedArgs) {
     try {
       child = spawn(process.execPath, [wrapperPath, ...args], {
         stdio: ["ignore", "pipe", "pipe"], shell: false, windowsHide: true,
+        env: cancelMarker ? { ...process.env, MMX_CANCEL_REQUEST_FILE: cancelMarker } : process.env,
       });
     } catch (err) {
       resolve({ receipt: { status: "child_error", error: `could not spawn wrapper: ${err.code || err.message}` }, duration: 0 });
@@ -319,8 +391,7 @@ async function runShardWithRetries(shard, fixedArgs, effectiveBudget, retryBudge
   if (retryReason === "quota_error") {
     const jitterMs = process.env.MMX_BATCH_QUOTA_RETRY_MS === undefined ? randomInt(0, 5001) : 0;
     const delayMs = QUOTA_RETRY_DELAY_MS + jitterMs;
-    await new Promise(resolve => setTimeout(resolve, delayMs));
-    backoffSeconds = delayMs / 1000;
+    backoffSeconds = await waitBackoff(delayMs);
     // A cancellation during the backoff must not spawn a new child.
     if (cancellationRequested()) {
       return { shard: shard.label, prompt_file: shard.file, retried: false, retry_reason: retryReason,
@@ -370,6 +441,13 @@ async function main() {
   const profileFile = args.profileFile || DEFAULT_PROFILE;
   const retryBudget = readProfileBudget(profileFile);
   const effectiveBudget = args.maxTokens !== null ? args.maxTokens : retryBudget;
+  if (args.receiptFile !== null) {
+    // Claim a fresh writable destination before any provider can be invoked.
+    // In particular, never overwrite the prompt/profile or an earlier receipt.
+    try { receiptFd = fs.openSync(args.receiptFile, "wx", 0o600); }
+    catch { usageError("--receipt-file must be a new file in an existing writable directory."); }
+  }
+  prepareCancellation();
 
   const fixedArgs = [];
   if (args.profileFile !== null) fixedArgs.push("--profile-file", args.profileFile);
@@ -424,28 +502,25 @@ async function main() {
   if (args.receiptFile !== null) {
     envelope.receipt_file = args.receiptFile;
     try {
-      fs.writeFileSync(args.receiptFile, JSON.stringify(envelope, null, 2) + "\n", { mode: 0o600 });
+      fs.writeFileSync(receiptFd, JSON.stringify(envelope, null, 2) + "\n");
+      fs.closeSync(receiptFd);
+      receiptFd = null;
     } catch (err) {
       delete envelope.receipt_file;
+      envelope.status = "receipt_error";
+      envelope.gate = "NOT_EVALUATED";
       envelope.receipt_file_write_error = `could not write receipt file: ${err.code || err.message}`;
     }
   }
-  if (gate === "PASS") emit(envelope);
+  if (envelope.gate === "PASS") emit(envelope);
   else fail(envelope);
 }
 
 function onSignal(code) {
   if (emitted) process.exit(code);
-  cancelled = true;
-  for (const child of liveChildren) {
-    // The wrapper owns a detached CLI group. Let its signal handler clean that
-    // group before escalating: killing the wrapper first strands the CLI.
-    terminateChildTree(child, false, false);
-    const escalation = setTimeout(() => terminateChildTree(child, true, false), 4500);
-    escalation.unref();
-    child.once("close", () => clearTimeout(escalation));
-  }
-  fail({ status: "cancelled", exit_code: code, note: "batch interrupted; shard receipts up to this point are lost" });
+  requestCancellation();
+  // Let the bounded pool finish its cancellation path and publish the same
+  // complete receipt to stdout and --receipt-file, including completed shards.
 }
 if (require.main === module) {
   // Importing the parser in the durable supervisor must not also install a
@@ -455,7 +530,7 @@ if (require.main === module) {
   process.on("SIGHUP", () => onSignal(129));
   main().catch(error => {
     fail(error.envelope ?? { status: "batch_error", error: "mmx-batch failed locally." });
-  });
+  }).finally(cleanupCancellation);
 } else {
   module.exports = { parseArgs, collectShardFiles, readProfileBudget };
 }

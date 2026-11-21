@@ -133,8 +133,10 @@ function readProfile(file) {
   let profile;
   try {
     if (!fs.statSync(file).isFile()) throw new Error();
-    profile = JSON.parse(fs.readFileSync(file, "utf8"));
-  } catch { usageError("MMX runtime profile is unreadable or is not JSON."); }
+    // Windows PowerShell 5.1 Set-Content -Encoding UTF8 emits a BOM.
+    // Decode strictly, removing only that BOM, without repairing invalid bytes.
+    profile = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(fs.readFileSync(file)));
+  } catch { usageError("MMX runtime profile must be a readable UTF-8 JSON file."); }
   if (!isObject(profile) || profile.format !== 1 ||
       Object.keys(profile).some(key => !["format", "model", "max_tokens", "request_timeout_seconds", "wrapper_timeout_seconds"].includes(key)) ||
       !(profile.model === null || validModel(profile.model)) ||
@@ -272,7 +274,8 @@ function runCmd(cmd, args, timeoutSecs, useShell, childEnv, confirmGroup = false
       if (stopReason) return;
       stopReason = kind;
       forcedExitCode = code;
-      if (!terminateChildTree(child, false, grouped)) terminationFailed = true;
+      // Install the cleanup bounds before synchronous Windows taskkill, which
+      // can itself take up to two seconds. Supervisors need a bounded receipt.
       grace = setTimeout(() => {
         // The main child may exit before a descendant. On POSIX the group
         // still needs escalation even after the close event.
@@ -287,6 +290,7 @@ function runCmd(cmd, args, timeoutSecs, useShell, childEnv, confirmGroup = false
         terminationFailed = true;
         finish(stopReason);
       }, 4000);
+      if (!terminateChildTree(child, false, grouped)) terminationFailed = true;
     }
 
     function capture(fd, bytes) {
@@ -302,7 +306,11 @@ function runCmd(cmd, args, timeoutSecs, useShell, childEnv, confirmGroup = false
     }
 
     try {
-      child = spawn(cmd, args, {
+      // Node joins shell arguments without quoting. Quote each already checked
+      // cmd.exe token so a username/TEMP/npm directory containing spaces works.
+      // Resolved npm entries bypass the shell and keep ordinary argv handling.
+      const shellCommand = useShell ? [cmd, ...args].map(arg => `"${arg}"`).join(" ") : cmd;
+      child = spawn(shellCommand, useShell ? [] : args, {
         stdio: ["ignore", "pipe", "pipe"], shell: useShell,
         detached: grouped, windowsHide: true, env: childEnv,
       });
@@ -403,13 +411,15 @@ function findMmx(platform = process.platform, envPath = process.env.PATH || "", 
                  shimResolver = npmShimEntry, nodePath = process.execPath, linkResolver = linkedEntry) {
   const isWin = platform === "win32";
   const pathApi = isWin ? path.win32 : path.posix;
-  const dirs = envPath.split(pathApi.delimiter).filter(Boolean);
+  const dirs = envPath.split(pathApi.delimiter)
+    .map(dir => isWin && /^".*"$/.test(dir) ? dir.slice(1, -1) : dir).filter(Boolean);
   const exts = isWin ? [".exe", ".cmd", ".bat"] : [""];
   for (const dir of dirs) {
     for (const ext of exts) {
       const p = pathApi.join(dir, "mmx" + ext);
       try {
         fsApi.accessSync(p, isWin ? fsApi.constants.F_OK : fsApi.constants.X_OK);
+        if (!fsApi.statSync(p).isFile()) continue;
         const batch = isWin && (ext === ".cmd" || ext === ".bat");
         // The mmx-cli package entry runs under this Node so the wrapper can
         // preload its fetch guard. Any other executable, such as a user's own
@@ -738,6 +748,10 @@ async function main() {
     return;
   }
   const slotAbort = new AbortController();
+  const cancelMarker = process.env.MMX_CANCEL_REQUEST_FILE;
+  const checkSlotCancellation = () => {
+    if (cancelMarker && fs.existsSync(cancelMarker)) slotAbort.abort();
+  };
   let providerSlot = null;
   if (slotEnabled) {
     // The optional extension is not required for legacy managed-install
@@ -750,6 +764,8 @@ async function main() {
       return;
     }
     cancelCurrentRequest = () => slotAbort.abort();
+    const slotCancelPoll = cancelMarker ? setInterval(checkSlotCancellation, 75) : null;
+    checkSlotCancellation();
     try {
       providerSlot = await acquireMmxSlot({ signal: slotAbort.signal });
     } catch (error) {
@@ -757,10 +773,13 @@ async function main() {
       const status = error.code === "MMX_SLOT_CANCELLED" ? "cancelled" : "slot_unavailable";
       fail({ status, code: error.code || "MMX_SLOT_IO", error: "MMX provider slot unavailable; no upstream request was made." });
       return;
+    } finally {
+      clearInterval(slotCancelPoll);
     }
     cancelCurrentRequest = null;
     telemetry.provider_slot = "acquired";
     telemetry.provider_slot_wait_ms = providerSlot.waited_ms;
+    checkSlotCancellation();
     if (slotAbort.signal.aborted) {
       releaseProviderSlot(providerSlot);
       fail({ status: "cancelled", code: "MMX_SLOT_CANCELLED" });

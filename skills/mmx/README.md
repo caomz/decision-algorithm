@@ -2,8 +2,10 @@
 
 MMX 一方的文本复核 skill：`/mmx <问题>`、`/mmx review <文件>`、`/mmx challenge <问题>`，与 `zcode` skill 组成默认的 ZCode/MMX 双模型交叉验证。同时收编官方 `mmx-cli` skill 的全量 CLI 参考，图片、视频、语音、网页搜索等非文本能力走同一入口。
 
+当前 Windows 10 专用分支的操作与验收，以 [Windows 10 指南](../../docs/windows10-zmx.md) 为准。下文旧版本的 Windows 实测记录不能替当前提交、目标电脑或实际 CLI 版本作保证。
+
 > 本目录是**跨平台合并后的本体**。两台机器的安装形态不同：
-> - **Windows**：各 harness 的 `skills/mmx/` 都是指向本仓库的 junction（`~/.zcode`、`~/.agents`、`~/.claude`、`~/.codex`、`~/.minimax`、`~/.openclaw` 等），改本目录即两端生效，无需重钉清单。
+> - **Windows**：历史安装采用指向本仓库的 junction；目标电脑的实际安装位需单独检查。直接从仓库调用无需创建链接，也不需要修改其他平台安装位。
 > - **macOS**：受管发布，安装在 `~/.claude/skills` 等位置，同级有 `agy/` 与 `cross-validation/`，并带 `.gstack-cross-validation-release.json` 清单。更新本目录后需同步到正本并重钉清单（见「跨平台要点」）。
 >
 > **2026-11-17 三方合并**：macOS 侧 `skills/mmx`（加固 wrapper，受管发布 + review-v1 协议）、Windows 侧 `~/.claude/skills/mmx`（实战版：auth 指引、thinking 分类、mcode 通道、Windows 运维）、官方 `mmx-cli` skill（全模态 CLI 指南）合并为本 skill v2.4.0。
@@ -56,11 +58,11 @@ mmx/
 
 ## Windows 原生回归与取消边界（专用验证分支）
 
-Windows 上 `mmx-job.js` 不再在用户请求取消时立即以 `taskkill /F` 终止整个 batch。监督进程先创建 `cancel.request`，通过私有环境变量 `MMX_CANCEL_REQUEST_FILE` 传给 batch 与 wrapper；batch 禁止开始新分片/重试，wrapper 在 75ms 内轮询标记并终止自己管理的 CLI。超过约 5 秒宽限期，才升级到 `taskkill.exe /PID ... /T /F`，并记录实际 batch 退出证据。强制终止不能证明代理端已停止处理请求，因此保留 `termination_confirmed=false`，不自动重放。
+Windows 上 `mmx-job.js` 不再在用户请求取消时立即以 `taskkill /F` 终止整个 batch。监督进程先创建 `cancel.request`，通过私有环境变量 `MMX_CANCEL_REQUEST_FILE` 传给 batch 与 wrapper；batch 禁止开始新分片/重试，wrapper 以 75ms 定时轮询标记并终止自己管理的 CLI（事件循环调度不是严格的 75ms 响应上限）。Windows 监督进程保留约 7 秒宽限期，才升级到 `taskkill.exe /PID ... /T /F`，并记录实际 batch 退出证据。强制终止不能证明代理端已停止处理请求，因此保留 `termination_confirmed=false`，不自动重放。
 
 Windows 上 `MMX_GLOBAL_SLOT=1` 暂时明确拒绝调用并返回 `MMX_SLOT_WINDOWS_TREE_UNVERIFIED`。当前标准 Node.js 子进程 API 无法在父进程自然退出后证明其所有后代均已清理；这是有意的安全保护，**不是 Windows 全局并发槽已实现**。在 Windows Job Object 或等效原生追踪方案通过真机验收前保持默认关闭。正常的单次 MMX 请求不受此限制。
 
-本分支使用 `windows-zmx-*` push CI 触发器及 Windows PowerShell 冒烟检查。GitHub CI 通过不代替本机 ZCode/MMX 桌面端与 CLI 的独立验证。真机验收须核对 `zcode --version` 的运行时版本、代理/启动器路径、`taskkill` 与 Windows Job 回执；不得向报告写入真实凭据。
+本分支使用 `windows-zmx-*` push CI 触发器及 Windows PowerShell 5.1 离线验收入口。CI 会记录宿主系统，Server runner 通过不代替 Windows 10 本机 ZCode/MMX 桌面端与 CLI 的独立验证。真机验收须核对实际运行时版本、代理/启动器路径、取消与 Job 回执；不得向报告写入真实凭据。
 
 ## 长任务持久化 Job（阶段 3，实验性）
 
@@ -76,7 +78,7 @@ node skills/mmx/scripts/mmx-job.js cancel /absolute/path/to/jobs/review-001
 ```
 
 - `start`：创建持久 Job 和独立监督进程，返回目录与 PID；不等待供应商请求完成。
-- `status`：核验完成记录、最终回执；只有原子发布的 `completion.json` 与各记录摘要一致，且观察到批进程退出（或启动前取消）时才报告 `finished`。旧版、缺失、变动或未完成的记录保持 `unknown`，不得据此再启动。
+- `status`：核验完成记录、最终回执；只有原子发布的 `completion.json` 与各记录摘要一致，且观察到批进程退出（或启动前取消）时才报告 `finished`。旧格式、缺失、档案内容变动或未完成的记录保持 `unknown`，不得据此再启动。仅当前脚本升级时，可继续只读检查完整档案，并另报 `runtime_code=changed_or_missing`。
 - `resume`：**只重新附着到已有记录查询**，不重发请求。自动从中断点重新执行尚未实现。
 - `verify`：核对输入快照、实际参数与快照绑定、请求与批处理脚本摘要，以及输出/回执/退出记录的一致性；只有 `integrity=match` 时退出 0，损坏或未完成时退出 2。这是本地记录自洽校验，不是供应商响应的真实性证明。
 - `cancel`：写取消标志；启动前已取消则不创建批进程。运行中先请求协作清理，POSIX 下 5 秒宽限后升级强制结束，再最多等待 2 秒。记录分别报告 `batch_exit_observed`、`batch_group_gone`；它们不证明独立进程组内的 CLI 或服务端请求已结束。`termination_confirmed=true` 仅用于从未启动批进程的取消；已启动任务正常退出记 `null`、取消后记 `false`。Windows 原生取消仍需独立验收。
@@ -88,9 +90,9 @@ node skills/mmx/scripts/mmx-job.js cancel /absolute/path/to/jobs/review-001
 
 ## 跨会话并发槽位（实验性，显式开启）
 
-MMX 2.7.0 后续云端改造新增 `scripts/mmx-provider-slot.js`。当 `MMX_GLOBAL_SLOT=1` 时，`mmx-chat.js` 在发起 CLI 子进程前取得**同一用户、同一台主机**共用的原子文件锁（`~/.zmx/locks/mmx/slot-0/`），直到请求子进程确认结束后释放。独立 Agent 会话或 Batch 只有在都启用了这一开关后才参与排队；它**不是跨机器分布式锁**，也不是云端 API 配额仲裁。
+MMX 2.7.0 后续云端改造新增 `scripts/mmx-provider-slot.js`。在 POSIX 平台，当 `MMX_GLOBAL_SLOT=1` 时，`mmx-chat.js` 在发起 CLI 子进程前取得**同一用户、同一台主机**共用的原子文件锁（`~/.zmx/locks/mmx/slot-0/`），直到请求子进程确认结束后释放。Windows 当前在发起 CLI 前明确拒绝这一开关。独立 Agent 会话或 Batch 只有在支持的平台上都启用了这一开关后才参与排队；它**不是跨机器分布式锁**，也不是云端 API 配额仲裁。
 
-未明确启用时，沿用原来的并发行为；在 Mac/Windows 真机验收前不默认开启。此锁采用 **fail closed**：进程遭强制杀死或无法确认其子进程树清理完成时，锁可能保留，不会自动判定上游请求结束并抢锁重发。应先确认原请求已经停止，再人工处理遗留的 `slot-0`；不得在未知请求状态下直接删除锁。等待超过 120 秒会返回 `slot_unavailable`，不会静默绕过保护或发起新请求。
+未明确启用时，沿用原来的并发行为。POSIX 支持路径在真机验收前不默认开启；Windows 保持不可用，直到原生进程树追踪得到实现和验证。此锁采用 **fail closed**：进程遭强制杀死或无法确认其子进程树清理完成时，锁可能保留，不会自动判定上游请求结束并抢锁重发。应先确认原请求已经停止，再人工处理遗留的 `slot-0`；不得在未知请求状态下直接删除锁。等待超过 120 秒会返回 `slot_unavailable`，不会静默绕过保护或发起新请求。
 
 POSIX 下，CLI 主进程退出后仍存在同一进程组的后代时，wrapper 返回 `cleanup_error` 并尝试有时限的清理；只有确认该进程组不存在才释放槽位，否则回执标记 `provider_slot: held_for_recovery`。发送终止信号成功不等于清理完成。槽位被替换或目录变成符号链接时也拒绝释放，避免删除其他请求的记录。Windows 原生子进程树清理仍须单独验收；本地进程退出也不能证明服务端已经撤销断线或超时请求。
 
@@ -101,7 +103,7 @@ POSIX 下，CLI 主进程退出后仍存在同一进程组的后代时，wrapper
 ## 跨平台要点
 
 - wrapper 的受管根按**结构**判定（同级 `agy/` 与 `cross-validation/` 目录 + 发布清单），不再依赖某一台机器的绝对路径。
-- Windows 分支已在真机验证：`.cmd` shim 解析、`taskkill` 树终止、MSYS 路径转换、`node --check` 与 36 个离线测试（PowerShell 与 Git Bash 各一遍）。
+- 历史 Windows 测试包含 `.cmd` shim、`taskkill`、MSYS 路径转换与旧版离线用例。当前提交的 Windows 10 验收须运行本分支新增入口并保留报告，不能复用旧版测试数量或旧电脑结果。
 - Windows 上 `%TEMP%` 不会自动回收，`mmx` 形态的外层目录（含 `mmxP1.*`、`mmxA.*`、`mmxrun.*`、`mmxdbg3.*` 等手工暂存）会持续积累，用 `node scripts/mmx-clean-temp.js` 清理（默认 dry-run，`--apply` 才删；`mmx-chat-*` 与 `mcv.*` 显式豁免）。
 - 受管安装更新 wrapper 后清单哈希必然失配，需重钉：
 

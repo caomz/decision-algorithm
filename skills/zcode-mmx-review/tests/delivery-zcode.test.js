@@ -96,9 +96,17 @@ test("P of exactly 24576 bytes stays on argv", () => {
   assertDelivery(chatLines[0], P);
 });
 
-test("P of exactly 24577 bytes travels as the single attachment", () => {
+test("P of 24577 bytes is refused on Windows and uses one attachment on POSIX", () => {
   const material = materialReaching(24577);
   const { receipt, chatLines } = runDelivery(material, "exact-24577");
+  if (process.platform === "win32") {
+    assert.equal(receipt.status, "input_too_large");
+    assert.equal(receipt.cli_invoked, false);
+    assert.equal(receipt.complete, false);
+    assert.equal(receipt.review_gate, "NOT_EVALUATED");
+    assert.equal(chatLines.length, 0, "unverified attachment delivery must not send a provider request");
+    return;
+  }
   assert.equal(receipt.status, "ok", JSON.stringify(receipt));
   assert.equal(chatLines.length, 1);
   const P = require("../../zcode/scripts/review.js").buildPrompt(material, "review", ["F1"]);

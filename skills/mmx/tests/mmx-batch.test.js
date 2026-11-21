@@ -97,9 +97,46 @@ test("usage: rejects duplicate prompt files", () => {
   assert.equal(receiptOf(run).status, "usage_error");
 });
 
+test("hard-link aliases cannot schedule the same prompt twice", () => {
+  const file = shardFile("hardlink-source.txt", "SYNTHETIC ONCE");
+  const alias = path.join(root, "hardlink-alias.txt");
+  fs.linkSync(file, alias);
+  const run = runBatch(["--prompt-file", file, "--prompt-file", alias]);
+  assert.equal(receiptOf(run).status, "usage_error");
+  assert.equal(fs.existsSync(path.join(stateDir, path.basename(file))), false);
+  assert.equal(fs.existsSync(path.join(stateDir, path.basename(alias))), false);
+});
+
+test("Windows case aliases cannot schedule the same prompt twice", { skip: process.platform !== "win32" }, () => {
+  const file = shardFile("mixed-case-source.txt", "SYNTHETIC ONCE");
+  const run = runBatch(["--prompt-file", file, "--prompt-file", file.toUpperCase()]);
+  assert.equal(receiptOf(run).status, "usage_error");
+  assert.equal(fs.existsSync(path.join(stateDir, path.basename(file))), false);
+});
+
 test("usage: rejects a missing prompt file", () => {
   const run = runBatch(["--prompt-file", path.join(root, "nope.txt")]);
   assert.equal(receiptOf(run).status, "usage_error");
+});
+
+test("usage: rejects a directory supplied as a prompt before spawning a wrapper", () => {
+  const run = runBatch(["--prompt-file", root]);
+  assert.equal(receiptOf(run).status, "usage_error");
+});
+
+test("PowerShell UTF-8 BOM profiles and uppercase TXT paths are accepted", () => {
+  const profile = path.join(root, "powershell profile.json");
+  const original = fs.readFileSync(path.join(skillRoot, "profiles", "local.json"), "utf8");
+  fs.writeFileSync(profile, "\uFEFF" + original.replace(/\r?\n/g, "\r\n"));
+  const dir = path.join(root, "中文 shards");
+  fs.mkdirSync(dir);
+  fs.writeFileSync(path.join(dir, "任务 one.TXT"), "SYNTHETIC UTF8 中文\r\n");
+  const run = runBatch(["--prompts-dir", dir, "--profile-file", profile]);
+  const receipt = receiptOf(run);
+  assert.equal(run.status, 0, run.stdout + run.stderr);
+  assert.equal(receipt.gate, "PASS");
+  assert.equal(receipt.batch.shards, 1);
+  assert.equal(receipt.batch.retry_max_tokens, 524288);
 });
 
 test("usage: concurrency outside 1..8 is refused", () => {
@@ -281,6 +318,17 @@ test("--prompts-dir: .txt files only, natural order, receipts written to disk", 
   const onDisk = JSON.parse(fs.readFileSync(receiptPath, "utf8"));
   assert.deepEqual(onDisk.shards.map(s => s.shard), ["p1", "p2", "p10"]);
   assert.equal(onDisk.receipt_file, receiptPath, "on-disk receipt carries the same receipt_file field as stdout");
+});
+
+test("receipt destination is validated before any wrapper and never overwrites inputs", () => {
+  const prompt = shardFile("receipt-collision.txt", "PRESERVE THIS INPUT");
+  for (const destination of [prompt, path.join(root, "missing-receipt-parent", "out.json")]) {
+    const run = runBatch(["--prompt-file", prompt, "--receipt-file", destination]);
+    assert.equal(run.status, 1);
+    assert.equal(receiptOf(run).status, "usage_error");
+    assert.equal(fs.existsSync(path.join(stateDir, path.basename(prompt))), false);
+  }
+  assert.equal(fs.readFileSync(prompt, "utf8"), "PRESERVE THIS INPUT");
 });
 
 test("module exports: parseArgs / collectShardFiles contracts", () => {

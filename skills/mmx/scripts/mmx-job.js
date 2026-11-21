@@ -12,7 +12,9 @@ const { parseArgs, collectShardFiles, readProfileBudget } = require("./mmx-batch
 const BATCH = path.join(__dirname, "mmx-batch.js");
 const EXIT_UNKNOWN = 2;
 const FORMAT = 2;
-const CANCEL_GRACE_MS = 5000;
+// On Windows allow the batch's 4.5 s wrapper grace plus a bounded 2 s
+// taskkill attempt and receipt publication before killing the batch itself.
+const CANCEL_GRACE_MS = process.platform === "win32" ? 7000 : 5000;
 const CANCEL_KILL_WAIT_MS = 2000;
 const HASH = /^[a-f0-9]{64}$/;
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -25,7 +27,14 @@ function writeOnce(file, value) {
     fs.writeFileSync(temp, data, { flag: "wx", mode: 0o600 });
     // link, unlike rename, atomically refuses an existing destination. This
     // publishes complete JSON without an exists/rename overwrite race.
-    fs.linkSync(temp, file);
+    try { fs.linkSync(temp, file); }
+    catch (error) {
+      if (["EPERM", "EACCES", "ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EXDEV", "EINVAL"].includes(error.code)) {
+        throw Object.assign(new Error("Job directory must allow atomic hard-link publication; use a writable local NTFS directory on Windows."),
+          { code: "MMX_JOB_PUBLICATION_UNAVAILABLE" });
+      }
+      throw error;
+    }
   } finally { try { fs.unlinkSync(temp); } catch {} }
 }
 function regularBytes(file) {
@@ -46,10 +55,13 @@ function fingerprint(file) {
   const bytes = regularBytes(file);
   return { bytes: bytes.length, sha256: digest(bytes) };
 }
-function matchesFingerprint(file, expected) {
+function validateFingerprint(expected) {
   if (!expected || !Number.isSafeInteger(expected.bytes) || expected.bytes < 0 || !HASH.test(expected.sha256)) {
     throw new Error("invalid digest record");
   }
+}
+function matchesFingerprint(file, expected) {
+  validateFingerprint(expected);
   const actual = fingerprint(file);
   if (actual.bytes !== expected.bytes || actual.sha256 !== expected.sha256) throw new Error("record digest mismatch");
 }
@@ -76,7 +88,7 @@ function makeBatchArgs(parsed, prompts, profileFile, receiptFile) {
   args.push("--profile-file", profileFile, "--receipt-file", receiptFile);
   return args;
 }
-function readRequest(job) {
+function readRequest(job, { requireRuntime = true } = {}) {
   const recorded = readJson(path.join(job, "request-digest.json"));
   matchesFingerprint(path.join(job, "request.json"), recorded);
   const request = readJson(path.join(job, "request.json"));
@@ -96,8 +108,14 @@ function readRequest(job) {
   const canonical = makeBatchArgs(parsed, request.prompts, request.profile.file, path.join(job, "receipt.json"));
   if (JSON.stringify(canonical) !== JSON.stringify(request.batch_args)) throw new Error("arguments do not bind snapshots");
   readProfileBudget(request.profile.file);
-  matchesFingerprint(request.batch_script, request.batch_script_digest);
-  return { request, requestDigest: recorded.sha256 };
+  validateFingerprint(request.batch_script_digest);
+  let runtimeCode = "match";
+  try { matchesFingerprint(request.batch_script, request.batch_script_digest); }
+  catch {
+    runtimeCode = "changed_or_missing";
+    if (requireRuntime) throw new Error("batch runtime changed; do not replay");
+  }
+  return { request, requestDigest: recorded.sha256, runtimeCode };
 }
 function start(jobPath, argv, overrides = {}) {
   const { parsed, shards } = resolveArgs(argv);
@@ -164,9 +182,12 @@ function status(jobPath) {
   let job = path.resolve(jobPath);
   try {
     job = canonicalJob(job);
-    const { request, requestDigest } = readRequest(job);
+    // A git update must not hide a completed receipt. Runtime pinning remains
+    // mandatory before a worker starts; read-only inspection reports drift.
+    const { request, requestDigest, runtimeCode } = readRequest(job, { requireRuntime: false });
     const launchPath = path.join(job, "launch.json");
     const result = { status: "unknown", job_dir: job, prompt_count: request.prompts.length,
+      runtime_code: runtimeCode,
       supervisor_pid: fs.existsSync(launchPath) ? readJson(launchPath).supervisor_pid : null };
     if (fs.existsSync(path.join(job, "completion.json"))) {
       result.execution = readExecution(job, requestDigest);
@@ -183,11 +204,11 @@ function verify(jobPath) {
   let job = path.resolve(jobPath);
   try {
     job = canonicalJob(job);
-    const { requestDigest } = readRequest(job);
-    if (!fs.existsSync(path.join(job, "completion.json"))) return { integrity: "incomplete", job_dir: job };
+    const { requestDigest, runtimeCode } = readRequest(job, { requireRuntime: false });
+    if (!fs.existsSync(path.join(job, "completion.json"))) return { integrity: "incomplete", job_dir: job, runtime_code: runtimeCode };
     const execution = readExecution(job, requestDigest);
     if (execution.batch_started && !execution.batch_exit_observed) return { integrity: "incomplete", job_dir: job };
-    return { integrity: "match", job_dir: job, state: execution.reason,
+    return { integrity: "match", job_dir: job, state: execution.reason, runtime_code: runtimeCode,
       termination_confirmed: execution.termination_confirmed,
       note: "Local record consistency only; detached descendants and provider completion are not independently proven." };
   } catch {
@@ -347,9 +368,11 @@ async function cli(argv) {
 if (require.main === module) {
   cli(process.argv.slice(2)).then(value => {
     if (value) process.stdout.write(JSON.stringify(value) + "\n");
-  }).catch(() => {
+  }).catch(error => {
     process.stdout.write(JSON.stringify({ status: "supervisor_error",
-      note: "Could not perform operation; inspect the existing job and do not automatically resubmit." }) + "\n");
+      ...(error.code === "MMX_JOB_PUBLICATION_UNAVAILABLE" ? { code: error.code,
+        note: "Job records require atomic hard links. Use a writable local NTFS directory on Windows; inspect the existing job before starting any new request." }
+        : { note: "Could not perform operation; inspect the existing job and do not automatically resubmit." }) }) + "\n");
     process.exitCode = EXIT_UNKNOWN;
   });
 }

@@ -128,6 +128,8 @@ ln -s /path/to/decision-algorithm/skills/decision-algorithm ~/.openclaw/workspac
 
 ### Windows
 
+仅使用本分支的 ZCode + MMX 时，先按 [Windows 10 操作与验收](docs/windows10-zmx.md) 从仓库直接运行；无需安装下面列出的其他 skills 或改动已有宿主安装位。
+
 Windows 默认不开符号链接权限（需要开发者模式 + 重新登录），所以安装器会**自动改用 NTFS 目录联接（junction）**：免特权、可跨盘符，仓库仍是唯一正本。已开开发者模式的机器照常用符号链接。
 
 ```powershell

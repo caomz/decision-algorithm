@@ -358,6 +358,22 @@ test("profile and explicit overrides determine effective request args", () => {
   }
 });
 
+test("PowerShell UTF-8 BOM profiles work and UTF-16 profiles fail before the CLI", () => {
+  writeInputs("profile encoding 中文");
+  const config = JSON.stringify({ format: 1, model: null, max_tokens: 1234,
+    request_timeout_seconds: 10, wrapper_timeout_seconds: 15 });
+  fs.writeFileSync(overrideProfilePath, "\ufeff" + config, "utf8");
+  const good = runChat(["--profile-file", overrideProfilePath]);
+  assert.equal(good.status, 0, good.stdout);
+  const args = JSON.parse(fs.readFileSync(argsDumpPath, "utf8"));
+  assert.equal(args[args.indexOf("--max-tokens") + 1], "1234");
+  fs.writeFileSync(overrideProfilePath, "\ufeff" + config, "utf16le");
+  const bad = jsonResult(runChat(["--profile-file", overrideProfilePath]));
+  assert.equal(bad.status, "usage_error");
+  assert.equal(bad.cli_invoked, false);
+  assert.equal(fs.readFileSync(invocationLog, "utf8"), "");
+});
+
 test("timeout ordering is validated and a hung process is terminated", () => {
   writeInputs("hang");
   const bad = jsonResult(runChat([], { MMX_CHAT_REQ_TIMEOUT: "2", MMX_CHAT_WRAP_TIMEOUT: "1" }));
@@ -432,7 +448,8 @@ test("Windows path and command branch mock covers exe, npm shim, batch, and unsa
   assert.equal(safeCmdArgument("C:\\Program Files\\中文\\mmx.cmd"), true);
   for (const bad of ["&", "%", "!", "(", ")", "^", "\""]) assert.equal(safeCmdArgument("C:\\bad" + bad + "\\mmx.cmd"), false);
   const found = new Set(["C:\\Program Files\\MMX\\mmx.exe", "D:\\npm\\mmx.cmd"]);
-  const fakeFs = { constants: { F_OK: 0, X_OK: 1 }, accessSync(p) { if (!found.has(p)) throw Error("missing"); } };
+  const fakeFs = { constants: { F_OK: 0, X_OK: 1 }, accessSync(p) { if (!found.has(p)) throw Error("missing"); },
+    statSync(p) { if (!found.has(p)) throw Error("missing"); return { isFile: () => true }; } };
   const lookup = resolver => findMmx("win32", "C:\\Program Files\\MMX;D:\\npm", fakeFs, resolver, "C:\\Node\\node.exe");
   assert.deepEqual(lookup(() => null), { cmd: "C:\\Program Files\\MMX\\mmx.exe", argsPrefix: [], shell: false });
   found.delete("C:\\Program Files\\MMX\\mmx.exe");
@@ -442,6 +459,42 @@ test("Windows path and command branch mock covers exe, npm shim, batch, and unsa
   assert.deepEqual(lookup(() => null), { cmd: "D:\\npm\\mmx.cmd", argsPrefix: [], shell: true });
   found.add("E:\\unsafe&name\\mmx.bat");
   assert.deepEqual(findMmx("win32", "E:\\unsafe&name", fakeFs, () => null), { unsafe: true });
+});
+
+test("Windows PATH lookup handles quoted directories and ignores a directory named mmx.exe", () => {
+  const exeDirectory = "C:\\Program Files\\MMX\\mmx.exe";
+  const executable = "D:\\npm 中文\\mmx.cmd";
+  const fakeFs = { constants: { F_OK: 0, X_OK: 1 },
+    accessSync(p) { if (![exeDirectory, executable].includes(p)) throw Error("missing"); },
+    statSync(p) {
+      if (![exeDirectory, executable].includes(p)) throw Error("missing");
+      return { isFile: () => p === executable };
+    } };
+  const found = findMmx("win32", '"C:\\Program Files\\MMX";"D:\\npm 中文"', fakeFs, () => null);
+  assert.deepEqual(found, { cmd: executable, argsPrefix: [], shell: true });
+});
+
+test("Windows custom cmd launch preserves spaces and Chinese in launcher and TEMP paths", {
+  skip: process.platform !== "win32" ? "Native cmd.exe quoting regression" : false,
+}, () => {
+  const specialBin = path.join(root, "custom bin 中文");
+  const specialTemp = path.join(root, "temp directory 中文");
+  fs.mkdirSync(specialBin); fs.mkdirSync(specialTemp);
+  const cli = path.join(specialBin, "mmx.cmd");
+  fs.writeFileSync(cli, `@echo off\r\n"${process.execPath}" "${fakeJsPath}" %*\r\n`);
+  try {
+    writeInputs("中文 request without shell interpolation");
+    const run = runChat([], { PATH: `${specialBin}${path.delimiter}${process.env.PATH || ""}`,
+      TMPDIR: specialTemp, TMP: specialTemp, TEMP: specialTemp });
+    assert.equal(run.status, 0, run.stdout + run.stderr);
+    assert.equal(jsonResult(run).text, "MMX_OK");
+    const messages = JSON.parse(fs.readFileSync(messagesDumpPath, "utf8"));
+    assert.equal(messages[0].content, "中文 request without shell interpolation");
+    assert.deepEqual(fs.readdirSync(specialTemp), []);
+  } finally {
+    fs.rmSync(specialBin, { recursive: true, force: true });
+    fs.rmSync(specialTemp, { recursive: true, force: true });
+  }
 });
 
 test("npm shim resolution requires package metadata and exact entry", () => {
@@ -679,8 +732,8 @@ test("a plain install without siblings and without a marker is not treated as ma
 
 // A real npm-style package entry on every platform: POSIX uses its executable
 // link and Windows uses the .cmd shim resolved by the production launcher.
-function buildFakePackage() {
-  const pkgBin = path.join(root, "pkg-bin");
+function buildFakePackage(directoryName = "pkg-bin") {
+  const pkgBin = path.join(root, directoryName);
   const pkgRoot = path.join(pkgBin, "node_modules", "mmx-cli");
   fs.mkdirSync(path.join(pkgRoot, "dist"), { recursive: true });
   fs.mkdirSync(path.join(pkgRoot, "node_modules", "undici"), { recursive: true });
@@ -707,6 +760,20 @@ function removeFakePackage(pkgRoot, pkgBin, entry) {
   for (const dir of [path.join(pkgRoot, "dist"), path.join(pkgRoot, "node_modules", "undici"),
                      path.join(pkgRoot, "node_modules"), pkgRoot, path.join(pkgBin, "node_modules"), pkgBin]) fs.rmdirSync(dir);
 }
+
+test("npm package launch is shell-free with spaces, Chinese and ampersands in its install path", () => {
+  const { pkgRoot, pkgBin, entry } = buildFakePackage("npm 中文 & space");
+  try {
+    writeInputs("中文完整材料 'quote' & literal");
+    const found = findMmx(process.platform, pkgBin);
+    assert.equal(found.shell, false);
+    assert.equal(found.cmd, process.execPath);
+    const run = runChat([], { PATH: `${pkgBin}${path.delimiter}${process.env.PATH || ""}` });
+    assert.equal(run.status, 0, run.stdout + run.stderr);
+    const messages = JSON.parse(fs.readFileSync(messagesDumpPath, "utf8"));
+    assert.equal(messages[0].content, "中文完整材料 'quote' & literal");
+  } finally { removeFakePackage(pkgRoot, pkgBin, entry); }
+});
 
 test("package entry resolution accepts linked mmx-cli entries and rejects other packages", () => {
   const { pkgRoot, pkgBin, entry } = buildFakePackage();
@@ -1057,13 +1124,61 @@ test("opt-in slot cannot report success when the CLI leaves a same-group descend
 test("a pre-existing durable job cancellation marker stops before invoking MMX", () => {
   writeInputs("cancelled before CLI launch");
   const marker = path.join(root, "preexisting-job-cancel.marker");
-  fs.writeFileSync(marker, "cancel\\n");
+  fs.writeFileSync(marker, "cancel\n");
   const run = runChat([], { MMX_CANCEL_REQUEST_FILE: marker });
   const result = jsonResult(run);
   assert.equal(run.status, 1);
   assert.equal(result.status, "cancelled");
   assert.equal(result.code, "MMX_JOB_CANCEL_REQUESTED");
   assert.equal(result.cli_invoked, false);
+  unlinkKnown(marker);
+});
+
+test("cancellation while queued for a provider slot prevents the pending CLI launch", {
+  skip: process.platform === "win32" ? "Windows slots intentionally fail closed" : false,
+  timeout: 8000,
+}, async () => {
+  const home = path.join(root, "queued-cancel-home");
+  const marker = path.join(root, "queued-cancel.request");
+  const lockRoot = path.join(home, ".zmx", "locks");
+  const lease = await require("../scripts/mmx-provider-slot.js").acquireMmxSlot({ root: lockRoot });
+  writeInputs("must never start after queued cancellation");
+  fs.writeFileSync(invocationLog, "");
+  const previousTemps = new Set(fs.readdirSync(wrapperTmp));
+  const child = spawn(process.execPath, [wrapper, "--prompt-file", promptPath], {
+    env: { ...process.env, PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`,
+      HOME: home, USERPROFILE: home, MMX_GLOBAL_SLOT: "1", MMX_CANCEL_REQUEST_FILE: marker,
+      MMX_CONFIG_DIR: absentConfigDir, FAKE_INVOCATIONS: invocationLog,
+      TMPDIR: wrapperTmp, TMP: wrapperTmp, TEMP: wrapperTmp },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let output = "";
+  child.stdout.setEncoding("utf8"); child.stdout.on("data", part => { output += part; });
+  const exited = new Promise((resolve, reject) => {
+    child.once("error", reject); child.once("close", code => resolve(code));
+  });
+  try {
+    const limit = Date.now() + 3000;
+    const newWorkspace = () => fs.readdirSync(wrapperTmp).some(name => !previousTemps.has(name) &&
+      fs.existsSync(path.join(wrapperTmp, name, "messages.json")));
+    while (!newWorkspace() && Date.now() < limit) {
+      await new Promise(resolve => setTimeout(resolve, 15));
+    }
+    assert.ok(newWorkspace(), "wrapper must finish preparing input before we cancel its slot wait");
+    await new Promise(resolve => setTimeout(resolve, 150));
+    fs.writeFileSync(marker, "cancel\n");
+    const timer = setTimeout(() => child.kill("SIGKILL"), 3000);
+    try { assert.equal(await exited, 1, output); } finally { clearTimeout(timer); }
+    const result = JSON.parse(output);
+    assert.equal(result.status, "cancelled");
+    assert.equal(result.cli_invoked, false);
+    assert.equal(fs.readFileSync(invocationLog, "utf8"), "");
+    assert.ok(fs.existsSync(lease.path), "a queued cancellation must preserve the other owner's lease");
+  } finally {
+    if (child.exitCode === null) child.kill("SIGKILL");
+    lease.release(); unlinkKnown(marker);
+    fs.rmSync(home, { recursive: true, force: true });
+  }
 });
 
 test("Windows opt-in global slot fails closed before MMX without verified process trees", {
