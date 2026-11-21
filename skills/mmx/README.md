@@ -86,6 +86,8 @@ MMX 2.7.0 后续云端改造新增 `scripts/mmx-provider-slot.js`。当 `MMX_GLO
 
 POSIX 下，CLI 主进程退出后仍存在同一进程组的后代时，wrapper 返回 `cleanup_error` 并尝试有时限的清理；只有确认该进程组不存在才释放槽位，否则回执标记 `provider_slot: held_for_recovery`。发送终止信号成功不等于清理完成。槽位被替换或目录变成符号链接时也拒绝释放，避免删除其他请求的记录。Windows 原生子进程树清理仍须单独验收；本地进程退出也不能证明服务端已经撤销断线或超时请求。
 
+锁释放无法确认时，回执返回 `slot_unavailable` 和 `provider_slot=release_unverified`，并保留已观察到的 CLI 退出码。若 `cli_invoked=true`，先核对原请求状态和锁归属，再决定是否重试。
+
 受管 Mac 发布时，要把 `mmx-provider-slot.js` 与 wrapper 一同发布，再按原有发布流程重钉清单。显式开启槽位时，该 helper 必须在发布清单中且哈希匹配，否则在启动 CLI 前返回 `install_mismatch`。文件还未同步到受管安装目录时，不得仅更新 `mmx-chat.js`。
 
 ## 跨平台要点
