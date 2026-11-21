@@ -841,7 +841,7 @@ describe("assembleInputs argument domains", () => {  test("zcode and mmx argv st
 // 时序确定性不依赖墙钟竞速（slow-exit 的退出永远晚于信号与截止时间）。
 // ---------------------------------------------------------------------------
 
-describe("cancellation state machine", () => {
+describe("cancellation state machine", { skip: process.platform === "win32" && "POSIX self-signal semantics; Windows cancellation requires native tests" }, () => {
   const waitFor = async (predicate, label, budgetMs = 10000) => {
     for (let i = 0; i < budgetMs / 50 && !predicate(); i++) await new Promise(resolve => setTimeout(resolve, 50));
     assert.ok(predicate(), `${label} timed out`);
