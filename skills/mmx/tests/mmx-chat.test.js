@@ -892,3 +892,15 @@ test("the review schema matches the ZCode copy byte for byte", {
   const local = fs.readFileSync(path.join(skillRoot, "references", "review-v1.schema.json"));
   assert.deepEqual(local, fs.readFileSync(siblingSchema));
 });
+
+test("opt-in provider slot is acquired and released after the CLI closes", () => {
+  writeInputs("provider slot successful request");
+  const home = path.join(root, "provider-slot-home");
+  fs.mkdirSync(home, { recursive: true });
+  const run = runChat([], { MMX_GLOBAL_SLOT: "1", HOME: home, USERPROFILE: home });
+  const result = jsonResult(run);
+  assert.equal(result.status, "ok", JSON.stringify(result));
+  assert.equal(result.provider_slot, "acquired");
+  assert.equal(typeof result.provider_slot_wait_ms, "number");
+  assert.equal(fs.existsSync(path.join(home, ".zmx", "locks", "mmx", "slot-0")), false);
+});
