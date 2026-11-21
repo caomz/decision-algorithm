@@ -19,6 +19,7 @@
 const fs = require("fs");
 const path = require("path");
 const { spawn } = require("child_process");
+const { randomInt } = require("node:crypto");
 const { terminateChildTree } = require("./mmx-chat.js");
 
 const VERSION = "1.0.0";
@@ -295,8 +296,10 @@ async function runShardWithRetries(shard, fixedArgs, effectiveBudget, retryBudge
 
   let second = first;
   if (retryReason === "quota_error") {
-    await new Promise(resolve => setTimeout(resolve, QUOTA_RETRY_DELAY_MS));
-    backoffSeconds = QUOTA_RETRY_DELAY_MS / 1000;
+    const jitterMs = process.env.MMX_BATCH_QUOTA_RETRY_MS === undefined ? randomInt(0, 5001) : 0;
+    const delayMs = QUOTA_RETRY_DELAY_MS + jitterMs;
+    await new Promise(resolve => setTimeout(resolve, delayMs));
+    backoffSeconds = delayMs / 1000;
     // A cancellation during the backoff must not spawn a new child.
     if (cancelled) {
       return { shard: shard.label, prompt_file: shard.file, retried: false, retry_reason: retryReason,

@@ -99,10 +99,21 @@ switch (process.env.FAKE_MODE || "success") {
     process.stdout.write(JSON.stringify(ok)); break;
   }
   case "hang": setInterval(() => {}, 1000); break;
+  case "alter_slot_owner":
+    fs.writeFileSync(process.env.FAKE_SLOT_OWNER, "replacement owner");
+    process.stdout.write(JSON.stringify(ok));
+    break;
   case "tree_hang": {
     const child = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { stdio: "ignore" });
     fs.writeFileSync(process.env.FAKE_CHILD_PID, String(child.pid));
     setInterval(() => {}, 1000);
+    break;
+  }
+  case "orphan_child": {
+    const child = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { stdio: "ignore" });
+    fs.writeFileSync(process.env.FAKE_CHILD_PID, String(child.pid));
+    child.unref();
+    process.stdout.write(JSON.stringify(ok));
     break;
   }
   default: process.stderr.write("unknown fake mode"); process.exitCode = 2;
@@ -545,6 +556,7 @@ test("managed release rejects mixed or interrupted installation before launching
     "agy/scripts/agy_runner.py": Buffer.from("# fixture runner"),
     "mmx/scripts/mmx-chat.js": fs.readFileSync(wrapper),
     "mmx/scripts/fetch-timeout-guard.js": fs.readFileSync(path.join(skillRoot, "scripts", "fetch-timeout-guard.js")),
+    "mmx/scripts/mmx-provider-slot.js": fs.readFileSync(path.join(skillRoot, "scripts", "mmx-provider-slot.js")),
     "mmx/profiles/local.json": fs.readFileSync(profile),
     "cross-validation/scripts/cross_validate.py": Buffer.from("# fixture coordinator"),
   };
@@ -558,17 +570,28 @@ test("managed release rejects mixed or interrupted installation before launching
   }
   const manifest = { format: 1, state: "active", release_id: hash(JSON.stringify(digests)), files: digests };
   const installedWrapper = path.join(managed, "mmx", "scripts", "mmx-chat.js");
-  function run() {
+  function run(extraEnv = {}) {
     fs.writeFileSync(invocationLog, "");
     return jsonResult(spawnSync(process.execPath, [installedWrapper, "--prompt-file", promptPath], {
       env: { ...process.env, PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`, TMPDIR: wrapperTmp,
-        TMP: wrapperTmp, TEMP: wrapperTmp, FAKE_INVOCATIONS: invocationLog },
+        TMP: wrapperTmp, TEMP: wrapperTmp, FAKE_INVOCATIONS: invocationLog, ...extraEnv },
       encoding: "utf8", timeout: 15000,
     }));
   }
   writeInputs("release fixture");
   fs.writeFileSync(marker, JSON.stringify(manifest));
   assert.equal(run().status, "ok");
+  const slotHome = path.join(root, "managed-slot-home");
+  fs.mkdirSync(slotHome, { recursive: true });
+  const slotEnv = { MMX_GLOBAL_SLOT: "1", HOME: slotHome, USERPROFILE: slotHome };
+  assert.equal(run(slotEnv).status, "ok", "pinned slot helper remains usable");
+  fs.writeFileSync(marker, JSON.stringify({ ...manifest,
+    files: { ...digests, "mmx/scripts/mmx-provider-slot.js": undefined } }));
+  const unpinnedSlot = run(slotEnv);
+  assert.equal(unpinnedSlot.status, "install_mismatch", "enabled slot helper must be covered by the managed manifest");
+  assert.equal(unpinnedSlot.cli_invoked, false);
+  assert.equal(fs.readFileSync(invocationLog, "utf8"), "");
+  fs.writeFileSync(marker, JSON.stringify(manifest));
   fs.writeFileSync(path.join(managed, "mmx", "profiles", "local.json"), "{}");
   const mixed = run();
   assert.equal(mixed.status, "install_mismatch");
@@ -946,4 +969,65 @@ test("the review schema matches the ZCode copy byte for byte", {
 }, () => {
   const local = fs.readFileSync(path.join(skillRoot, "references", "review-v1.schema.json"));
   assert.deepEqual(local, fs.readFileSync(siblingSchema));
+});
+
+test("opt-in provider slot is acquired and released after the CLI closes", () => {
+  writeInputs("provider slot successful request");
+  const home = path.join(root, "provider-slot-home");
+  fs.mkdirSync(home, { recursive: true });
+  const run = runChat([], { MMX_GLOBAL_SLOT: "1", HOME: home, USERPROFILE: home });
+  const result = jsonResult(run);
+  assert.equal(result.status, "ok", JSON.stringify(result));
+  assert.equal(result.provider_slot, "acquired");
+  assert.equal(typeof result.provider_slot_wait_ms, "number");
+  assert.equal(fs.existsSync(path.join(home, ".zmx", "locks", "mmx", "slot-0")), false);
+});
+
+test("an unverified provider slot release reports a local recovery condition", () => {
+  writeInputs("provider slot owner changed");
+  const home = path.join(root, "provider-slot-changed-home");
+  fs.mkdirSync(home, { recursive: true });
+  const owner = path.join(home, ".zmx", "locks", "mmx", "slot-0", "owner.json");
+  const run = runChat([], { HOME: home, USERPROFILE: home, MMX_GLOBAL_SLOT: "1",
+    FAKE_MODE: "alter_slot_owner", FAKE_SLOT_OWNER: owner });
+  const result = jsonResult(run);
+  assert.equal(run.status, 1);
+  assert.equal(result.status, "slot_unavailable");
+  assert.equal(result.code, "MMX_SLOT_UNSAFE");
+  assert.equal(result.provider_slot, "release_unverified");
+  assert.equal(result.cli_invoked, true);
+  assert.equal(result.exit_code, 0);
+  assert.match(result.error, /before retrying/);
+  assert.equal(fs.readFileSync(owner, "utf8"), "replacement owner");
+});
+
+test("opt-in slot cannot report success when the CLI leaves a same-group descendant running", {
+  skip: process.platform === "win32" ? "POSIX process-group contract" : false,
+}, () => {
+  writeInputs("provider slot descendant cleanup");
+  const home = path.join(root, "provider-slot-orphan-home");
+  fs.mkdirSync(home, { recursive: true });
+  unlinkKnown(childPidPath);
+  try {
+    const run = runChat([], { MMX_GLOBAL_SLOT: "1", HOME: home, USERPROFILE: home,
+      FAKE_MODE: "orphan_child", FAKE_CHILD_PID: childPidPath });
+    const result = jsonResult(run);
+    assert.equal(result.status, "cleanup_error", JSON.stringify(result));
+    assert.equal(run.status, 1);
+    const lock = path.join(home, ".zmx", "locks", "mmx", "slot-0");
+    if (result.provider_slot === "held_for_recovery") {
+      assert.equal(fs.existsSync(lock), true, "an unconfirmed process group must retain the slot");
+      assert.match(result.termination_warning, /could not be confirmed/);
+    } else {
+      const pid = Number(fs.readFileSync(childPidPath, "utf8"));
+      assert.throws(() => process.kill(pid, 0), error => error.code === "ESRCH",
+        "release requires the descendant to have disappeared");
+      assert.equal(fs.existsSync(lock), false);
+    }
+  } finally {
+    if (fs.existsSync(childPidPath)) {
+      try { process.kill(Number(fs.readFileSync(childPidPath, "utf8")), "SIGKILL"); } catch {}
+      unlinkKnown(childPidPath);
+    }
+  }
 });

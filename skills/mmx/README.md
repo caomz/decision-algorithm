@@ -54,6 +54,18 @@ mmx/
 | 思考块 | `stop_reason=max_tokens` 且只有思考块时归类为 `thinking_budget_exhausted`（预算问题，不是契约漂移）；其他结束原因下没有正文记 `schema_mismatch`，附 `stop_reason` 与块类型（v2.7.0 起） | 一律归类为 `schema_mismatch`（会误导人去核对 CLI 契约） |
 | 错误回执 | 只输出分类、数值码与固定提示，不回显上游原文 | Windows 版的原文回显（需额外脱敏） |
 
+## 跨会话并发槽位（实验性，显式开启）
+
+MMX 2.7.0 后续云端改造新增 `scripts/mmx-provider-slot.js`。当 `MMX_GLOBAL_SLOT=1` 时，`mmx-chat.js` 在发起 CLI 子进程前取得**同一用户、同一台主机**共用的原子文件锁（`~/.zmx/locks/mmx/slot-0/`），直到请求子进程确认结束后释放。独立 Agent 会话或 Batch 只有在都启用了这一开关后才参与排队；它**不是跨机器分布式锁**，也不是云端 API 配额仲裁。
+
+未明确启用时，沿用原来的并发行为；在 Mac/Windows 真机验收前不默认开启。此锁采用 **fail closed**：进程遭强制杀死或无法确认其子进程树清理完成时，锁可能保留，不会自动判定上游请求结束并抢锁重发。应先确认原请求已经停止，再人工处理遗留的 `slot-0`；不得在未知请求状态下直接删除锁。等待超过 120 秒会返回 `slot_unavailable`，不会静默绕过保护或发起新请求。
+
+POSIX 下，CLI 主进程退出后仍存在同一进程组的后代时，wrapper 返回 `cleanup_error` 并尝试有时限的清理；只有确认该进程组不存在才释放槽位，否则回执标记 `provider_slot: held_for_recovery`。发送终止信号成功不等于清理完成。槽位被替换或目录变成符号链接时也拒绝释放，避免删除其他请求的记录。Windows 原生子进程树清理仍须单独验收；本地进程退出也不能证明服务端已经撤销断线或超时请求。
+
+锁释放无法确认时，回执返回 `slot_unavailable` 和 `provider_slot=release_unverified`，并保留已观察到的 CLI 退出码。若 `cli_invoked=true`，先核对原请求状态和锁归属，再决定是否重试。
+
+受管 Mac 发布时，要把 `mmx-provider-slot.js` 与 wrapper 一同发布，再按原有发布流程重钉清单。显式开启槽位时，该 helper 必须在发布清单中且哈希匹配，否则在启动 CLI 前返回 `install_mismatch`。文件还未同步到受管安装目录时，不得仅更新 `mmx-chat.js`。
+
 ## 跨平台要点
 
 - wrapper 的受管根按**结构**判定（同级 `agy/` 与 `cross-validation/` 目录 + 发布清单），不再依赖某一台机器的绝对路径。

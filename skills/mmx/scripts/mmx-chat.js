@@ -44,6 +44,20 @@ function fail(result) {
   process.exitCode = 1;
 }
 
+function releaseProviderSlot(slot, exitCode = null) {
+  try {
+    slot.release();
+  } catch (error) {
+    telemetry.provider_slot = "release_unverified";
+    throw Object.assign(error, { envelope: {
+      status: "slot_unavailable",
+      exit_code: exitCode,
+      code: error.code || "MMX_SLOT_IO",
+      error: "MMX provider slot release could not be confirmed. Check the slot and original request before retrying.",
+    } });
+  }
+}
+
 function usageError(message) {
   throw Object.assign(new Error(message), { envelope: { status: "usage_error", error: message } });
 }
@@ -92,8 +106,10 @@ function validateInstall() {
   if (!isObject(release) || release.format !== 1 || release.state !== "active" ||
       typeof release.release_id !== "string" || !/^[a-f0-9]{64}$/.test(release.release_id) ||
       !isObject(release.files)) throw new Error("release marker is invalid");
-  for (const required of ["mmx/scripts/mmx-chat.js", "mmx/scripts/fetch-timeout-guard.js", "mmx/profiles/local.json",
-                          "cross-validation/scripts/cross_validate.py"]) {
+  const requiredFiles = ["mmx/scripts/mmx-chat.js", "mmx/scripts/fetch-timeout-guard.js", "mmx/profiles/local.json",
+                         "cross-validation/scripts/cross_validate.py"];
+  if (process.env.MMX_GLOBAL_SLOT === "1") requiredFiles.push("mmx/scripts/mmx-provider-slot.js");
+  for (const required of requiredFiles) {
     if (!Object.hasOwn(release.files, required)) throw new Error("release manifest is incomplete");
   }
   for (const [relative, expected] of Object.entries(release.files)) {
@@ -203,7 +219,7 @@ if (require.main === module) {
 
 // Capture stdout and stderr separately in private files. Buffering each
 // stream in memory while the request runs doubles the cost of a large reply.
-function runCmd(cmd, args, timeoutSecs, useShell, childEnv) {
+function runCmd(cmd, args, timeoutSecs, useShell, childEnv, confirmGroup = false) {
   const stdoutFd = privateFile("stdout");
   let stderrFd;
   try { stderrFd = privateFile("stderr"); }
@@ -221,6 +237,13 @@ function runCmd(cmd, args, timeoutSecs, useShell, childEnv) {
     let timeout;
     let grace;
     let deadline;
+    let groupCheck;
+
+    function groupGone() {
+      if (!grouped || !child?.pid) return true;
+      try { process.kill(-child.pid, 0); return false; }
+      catch (error) { return error.code === "ESRCH"; }
+    }
 
     function finish(kind) {
       if (finished) return;
@@ -228,10 +251,19 @@ function runCmd(cmd, args, timeoutSecs, useShell, childEnv) {
       clearTimeout(timeout);
       clearTimeout(grace);
       clearTimeout(deadline);
+      clearTimeout(groupCheck);
       cancelCurrentRequest = null;
       fs.closeSync(stdoutFd);
       fs.closeSync(stderrFd);
       resolve({ kind, code: forcedExitCode ?? childCode, termination_failed: terminationFailed });
+    }
+
+    function finishAfterTree(kind) {
+      if (finished) return;
+      if (!confirmGroup || groupGone()) { finish(kind); return; }
+      // A successful signal only queues termination. Keep the lease while a
+      // member still exists (including an un-reaped process or unknown probe).
+      groupCheck = setTimeout(() => finishAfterTree(kind), 50);
     }
 
     function stop(kind, code = null) {
@@ -244,7 +276,7 @@ function runCmd(cmd, args, timeoutSecs, useShell, childEnv) {
         // still needs escalation even after the close event.
         if ((grouped || !closed) && !terminateChildTree(child, true, grouped)) terminationFailed = true;
         escalated = true;
-        if (closed) finish(stopReason);
+        if (closed) finishAfterTree(stopReason);
       }, 1500);
       deadline = setTimeout(() => {
         child.stdout.destroy();
@@ -277,11 +309,23 @@ function runCmd(cmd, args, timeoutSecs, useShell, childEnv) {
     child.stdout.on("data", bytes => capture(stdoutFd, bytes));
     child.stderr.on("data", bytes => capture(stderrFd, bytes));
     child.on("spawn", () => { cliInvoked = true; });
-    child.on("error", () => finish(stopReason || "spawn_error"));
+    child.on("error", () => {
+      if (confirmGroup && child.pid && !groupGone()) {
+        // An error after spawn is not evidence that the process group exited.
+        terminationFailed = true;
+        stop(stopReason || "spawn_error");
+      } else finish(stopReason || "spawn_error");
+    });
     child.on("close", code => {
       closed = true;
       childCode = code;
-      if (!stopReason || escalated) finish(stopReason || "closed");
+      if (!stopReason) {
+        if (confirmGroup && !groupGone()) {
+          // The CLI root can exit successfully after leaving a live descendant
+          // with detached stdio. Never free its provider slot as an ordinary success.
+          stop("cleanup_error");
+        } else finish("closed");
+      } else if (escalated) finishAfterTree(stopReason);
     });
     timeout = setTimeout(() => stop("timeout", 124), timeoutSecs * 1000);
   });
@@ -664,8 +708,52 @@ async function main() {
   if (mmx.shell && ![mmx.cmd, ...chatArgs].every(safeCmdArgument)) {
     usageError("cmd.exe cannot safely represent the CLI path or arguments.");
   }
+  // Opt-in rollout: the global provider slot serializes independent sessions
+  // on this host. Until Windows and macOS native deployments are validated,
+  // existing installations retain their current parallel behavior.
+  const slotEnabled = process.env.MMX_GLOBAL_SLOT === "1";
+  const slotAbort = new AbortController();
+  let providerSlot = null;
+  if (slotEnabled) {
+    // The optional extension is not required for legacy managed-install
+    // validation fixtures or for hosts that have not enabled provider slots.
+    let acquireMmxSlot;
+    try { ({ acquireMmxSlot } = require("./mmx-provider-slot.js")); }
+    catch {
+      fail({ status: "slot_unavailable", code: "MMX_SLOT_MODULE_MISSING",
+        error: "MMX global slot module is missing; no upstream request was made." });
+      return;
+    }
+    cancelCurrentRequest = () => slotAbort.abort();
+    try {
+      providerSlot = await acquireMmxSlot({ signal: slotAbort.signal });
+    } catch (error) {
+      cancelCurrentRequest = null;
+      const status = error.code === "MMX_SLOT_CANCELLED" ? "cancelled" : "slot_unavailable";
+      fail({ status, code: error.code || "MMX_SLOT_IO", error: "MMX provider slot unavailable; no upstream request was made." });
+      return;
+    }
+    cancelCurrentRequest = null;
+    telemetry.provider_slot = "acquired";
+    telemetry.provider_slot_wait_ms = providerSlot.waited_ms;
+    if (slotAbort.signal.aborted) {
+      releaseProviderSlot(providerSlot);
+      fail({ status: "cancelled", code: "MMX_SLOT_CANCELLED" });
+      return;
+    }
+  }
   const requestStarted = Date.now();
-  const chat = await runCmd(mmx.cmd, [...launch.argsPrefix, ...chatArgs], wrapperTimeout, mmx.shell, launch.env);
+  let chat;
+  try {
+    chat = await runCmd(mmx.cmd, [...launch.argsPrefix, ...chatArgs], wrapperTimeout, mmx.shell, launch.env, Boolean(providerSlot));
+  } finally {
+    if (providerSlot) {
+      // Do not open the slot for a new paid request when descendant cleanup
+      // was not confirmed. The unreleased lock is an explicit recovery gate.
+      if (!chat || chat.termination_failed) telemetry.provider_slot = "held_for_recovery";
+      else releaseProviderSlot(providerSlot, chat.code);
+    }
+  }
   const elapsedMs = Date.now() - requestStarted;
   if (guardStatusFile) {
     let initialized = false;
