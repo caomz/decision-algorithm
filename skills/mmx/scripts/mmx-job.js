@@ -213,6 +213,10 @@ function groupGone(child) {
 function signalBatch(child, force) {
   if (!child || !child.pid) return;
   if (process.platform === "win32") {
+    // A native Windows SIGTERM kills Node immediately. During the grace
+    // period the batch/wrappers see the durable cancellation marker and
+    // clean up their own CLI descendants. Only the escalation is forced.
+    if (!force) return;
     try { spawnSync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"],
       { windowsHide: true, shell: false, timeout: 2000, stdio: "ignore" }); } catch {}
     return;
@@ -224,8 +228,14 @@ function signalBatch(child, force) {
   }
   try { child.kill(force ? "SIGKILL" : "SIGTERM"); } catch {}
 }
-async function stopBatch(child, closed) {
+async function stopBatch(child, closed, job) {
   if (!child) return;
+  if (process.platform === "win32") {
+    // This path also runs after internal errors, so publish the cooperative
+    // cancellation request even if the user did not call 'cancel'.
+    try { fs.writeFileSync(path.join(job, "cancel.request"), "cancel\\n", { flag: "wx", mode: 0o600 }); }
+    catch (error) { if (error.code !== "EEXIST") throw error; }
+  }
   signalBatch(child, false);
   const deadline = Date.now() + CANCEL_GRACE_MS;
   while (Date.now() < deadline && (!closed() || groupGone(child) === false)) await pause(25);
@@ -265,6 +275,9 @@ async function worker(jobPath) {
       child = spawn(process.execPath, [request.batch_script, ...request.batch_args], {
         cwd: job, shell: false, detached: process.platform !== "win32",
         windowsHide: true, stdio: ["ignore", out, err],
+        env: process.platform === "win32"
+          ? { ...process.env, MMX_CANCEL_REQUEST_FILE: path.join(job, "cancel.request") }
+          : process.env,
       });
       child.once("error", error => { spawnError = error.code || "error"; });
       exited = new Promise(resolve => {
@@ -283,13 +296,13 @@ async function worker(jobPath) {
       await Promise.race([exited, cancellation]);
       if (requested) {
         reason = "cancelled";
-        await stopBatch(child, () => closed !== null);
+        await stopBatch(child, () => closed !== null, job);
       } else if (spawnError) reason = "spawn_error";
     }
   } catch (error) {
     // A record-write failure after spawn must still initiate cleanup; there is
     // no verified terminal record and callers must treat the job as unknown.
-    await stopBatch(child, () => closed !== null);
+    await stopBatch(child, () => closed !== null, job);
     throw error;
   } finally {
     clearInterval(polling);
