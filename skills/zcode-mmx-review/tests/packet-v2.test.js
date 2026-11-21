@@ -622,7 +622,7 @@ describe("binary hunks must close and at least one must exist (V3/K5)", () => {
 
 describe("DIFFSTAT path quoting matches git -c core.quotePath=false numstat (V2)", () => {
   const read = name => fs.readFileSync(path.join(__dirname, "fixtures/parse", name), "utf8");
-  const numstatRows = file => read(file).trimEnd().split("\n").map(line => {
+  const numstatRows = file => read(file).replace(/\r\n/g, "\n").trimEnd().split("\n").map(line => {
     const parts = line.split("\t");
     assert.equal(parts.length, 3, `numstat line must have three fields: ${JSON.stringify(line)}`);
     return `+${parts[0]}\t-${parts[1]}\t${parts[2]}`;
@@ -678,7 +678,7 @@ describe("quoted astral paths and byte-ordered DIFFSTAT (W1-W4, fix4)", () => {
   // 按行取真值：只丢末尾换行产生的空串，不 trim 整个文件或行内容（尾随空格是
   // 名字的一部分）。binary 的 "-\t-" 记作 +0 -0，与 DIFFSTAT 口径一致。
   const truthRows = name => {
-    const lines = read(name).split("\n");
+    const lines = read(name).replace(/\r\n/g, "\n").split("\n");
     if (lines[lines.length - 1] === "") lines.pop();
     return lines.map(line => {
       const parts = line.split("\t");
@@ -787,7 +787,7 @@ describe("quoted astral paths and byte-ordered DIFFSTAT (W1-W4, fix4)", () => {
 describe("DIFFSTAT matches git apply --numstat line by line across real patches (J4)", () => {
   const read = name => fs.readFileSync(path.join(__dirname, "fixtures/parse", name), "utf8");
   const truthRows = name => {
-    const lines = read(name).split("\n");
+    const lines = read(name).replace(/\r\n/g, "\n").split("\n");
     if (lines[lines.length - 1] === "") lines.pop();
     return lines.map(line => {
       const parts = line.split("\t");
