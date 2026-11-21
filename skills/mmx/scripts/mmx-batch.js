@@ -224,6 +224,7 @@ function runWrapperOnce(promptFile, fixedArgs) {
     const absorb = (chunks, counter, chunk, limit) => {
       if (counter.value >= limit) { truncated = true; return; }
       const take = Math.min(chunk.length, limit - counter.value);
+      if (take < chunk.length) truncated = true;
       chunks.push(take === chunk.length ? chunk : chunk.subarray(0, take));
       counter.value += take;
     };
@@ -235,7 +236,7 @@ function runWrapperOnce(promptFile, fixedArgs) {
       liveChildren.delete(child);
       resolve({ receipt: { status: "child_error", error: `wrapper spawn failed: ${err.code || err.message}` }, duration: 0 });
     });
-    child.on("close", code => {
+    child.on("close", (code, signal) => {
       liveChildren.delete(child);
       const duration = (Date.now() - started) / 1000;
       if (cancelled) {
@@ -265,6 +266,15 @@ function runWrapperOnce(promptFile, fixedArgs) {
       if (receipt === null || typeof receipt !== "object" || Array.isArray(receipt) ||
           typeof receipt.status !== "string") {
         resolve({ receipt: { status: "child_error", exit_code: code, error: "wrapper envelope is not a JSON object with a status" }, duration });
+        return;
+      }
+      // A complete JSON reply does not override the observed process outcome.
+      // Exit 1 is expected for explicit error/incomplete receipts, including
+      // truncated replies that may receive the one permitted budget retry.
+      const usable = receipt.status === "ok" && receipt.complete === true && receipt.truncated !== true;
+      if (signal || (code !== 0 && (code !== 1 || usable))) {
+        resolve({ receipt: { status: "child_error", exit_code: code, signal,
+          error: "wrapper exit did not support its receipt", diagnostic_receipt: receipt }, duration });
         return;
       }
       resolve({ receipt, duration });
@@ -412,14 +422,22 @@ async function main() {
 function onSignal(code) {
   if (emitted) process.exit(code);
   cancelled = true;
-  for (const child of liveChildren) terminateChildTree(child, true, process.platform !== "win32");
+  for (const child of liveChildren) {
+    // The wrapper owns a detached CLI group. Let its signal handler clean that
+    // group before escalating: killing the wrapper first strands the CLI.
+    terminateChildTree(child, false, false);
+    const escalation = setTimeout(() => terminateChildTree(child, true, false), 4500);
+    escalation.unref();
+    child.once("close", () => clearTimeout(escalation));
+  }
   fail({ status: "cancelled", exit_code: code, note: "batch interrupted; shard receipts up to this point are lost" });
 }
-process.on("SIGTERM", () => onSignal(143));
-process.on("SIGINT", () => onSignal(130));
-process.on("SIGHUP", () => onSignal(129));
-
 if (require.main === module) {
+  // Importing the parser in the durable supervisor must not also install a
+  // second signal handler that emits a batch receipt or exits that supervisor.
+  process.on("SIGTERM", () => onSignal(143));
+  process.on("SIGINT", () => onSignal(130));
+  process.on("SIGHUP", () => onSignal(129));
   main().catch(error => {
     fail(error.envelope ?? { status: "batch_error", error: "mmx-batch failed locally." });
   });

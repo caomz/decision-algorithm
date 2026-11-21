@@ -133,21 +133,22 @@ node scripts/repin-release.js             # 重写清单
 
 ## 阶段 4：分片覆盖清单（实验性）
 
-通过独立离线入口 \`scripts/shard-coverage.js\` 生成确定性的 UTF-8 分片和验收条件覆盖计划；旧的 \`coverage_declared\` 仍只是模型自述，不是覆盖充分性证据。
+通过独立离线入口 `scripts/shard-coverage.js` 生成确定性的 UTF-8 分片和验收条件覆盖计划；旧的 `coverage_declared` 仍只是模型自述，不是覆盖充分性证据。
 
-\`\`\`sh
+```sh
 node skills/zcode-mmx-review/scripts/shard-coverage.js plan \
   --packet /absolute/path/to/packet.json \
   --out /absolute/path/to/new-coverage-dir \
   --shard-bytes 8192
 node skills/zcode-mmx-review/scripts/shard-coverage.js verify \
   --run /absolute/path/to/new-coverage-dir
-\`\`\`
+```
 
-- 不截断多字节字符，材料按字节连续分片；每个分片记录起止偏移和 SHA-256。核验会完整拼接并与原材料逐字节比较，拒绝缺失、额外文件和文件篡改。
-- 存在 \`goal.acceptance\` 时，为每条验收条件建立**全部分片**的保守必查矩阵；无验收条件时，不因模型“已检查”而得到 PASS。
-- \`evaluateCoverage(plan, records)\` 是纯函数：必须由**调用方先使用现有 \`evaluateSide\` 和输入绑定**验证每个分片对应的 ZCode / MMX 回执、模型族、进程状态后，才能喂入这些记录。单纯人工伪造 \`eligible:true\` 或一个摘要布尔值，不是可信执行证明。
-- 任何缺片、重复/未知分片、哈希不符、模型族不独立、材料未绑定或未验收均阻断 PASS；已验证的 P1 FAIL 不会被其他分片缺失冲淡。
-- 这是**分片计划 + 完整性检查 + 覆盖判定模块**，还不是在 \`review-run.js run\` 里自动发起多分片真实审核的生产执行器。CLI \`run --backend real\` 仍处于禁用状态（阶段 5 再接入），旧版 fixture 归档与 \`review-v1\` 保持不变。
-- 结构覆盖只能证明分片交付和机器可观察的复核资格；不保证模型真正理解每条验收条件。主 Agent 应保留审查、抽样复核与误报纠正流程。
+- 不截断多字节字符，材料按字节连续分片；每个分片记录起止偏移和 SHA-256。核验会完整拼接并与原材料逐字节比较，拒绝缺失、额外文件、文件篡改，以及重定向归档根目录或 `shards` 目录的符号链接/junction。
+- 存在 `goal.acceptance` 时，为每条验收条件建立**全部分片**的保守必查矩阵；无验收条件时，不因模型“已检查”而得到 PASS。
+- `evaluateCoverage(plan, records, { cancelled })` 是纯函数：先校验分片编号、字节区间、证据 ID 和完整验收矩阵的结构；调用方还必须先从原始 packet 重建/核验 plan，再使用现有 `evaluateSide` 和输入绑定验证每个分片对应的 ZCode / MMX 回执、模型族、进程状态后，才能喂入这些记录。单纯人工伪造 `eligible:true` 或一个摘要布尔值，不是可信执行证明。
+- 任何缺片、重复/未知分片、哈希不符、模型族不独立、材料未绑定或未验收均阻断 PASS；已验证的 P1 FAIL 不会被其他分片缺失冲淡。整轮被取消时，调用方必须传入 `cancelled: true`，最终判定按现有执行器规则降为 `NOT_EVALUATED`，保留原始缺陷回执供诊断。
+- 这是**分片计划 + 完整性检查 + 覆盖判定模块**，还不是在 `review-run.js run` 里自动发起多分片真实审核的生产执行器。CLI `run --backend real` 仍处于禁用状态（阶段 5 再接入），旧版 fixture 归档与 `review-v1` 保持不变。
+- 当前分片是规范材料的连续字节段，可能跨越 JSON 或证据结构边界。后续执行器仍需为每片提供目标、验收条件和关联上下文，并结合全部分片审核；不能把这些原始片段直接当作语义完整的独立审核包。
+- 本模块验证本地计划结构及传入资格记录的一致性；分片交付与复核资格是否成立，仍依赖调用方先完成的执行验证和输入绑定，不能由本模块接受的布尔字段独立证明，也不保证模型真正理解每条验收条件。主 Agent 应保留审查、抽样复核与误报纠正流程。
 

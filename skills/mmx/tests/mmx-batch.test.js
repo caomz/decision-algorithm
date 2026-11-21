@@ -40,6 +40,8 @@ const ok = extra => Object.assign({
 }, extra);
 const emit = receipt => { process.stdout.write(JSON.stringify(receipt) + "\\n"); process.exitCode = 0; };
 if (prompt.includes("CHILD_ERR")) { process.stdout.write("definitely not json"); process.exitCode = 1; return; }
+if (prompt.includes("OK_BAD_EXIT")) { emit(ok()); process.exitCode = 9; return; }
+if (prompt.includes("OK_SIGNAL")) { process.stdout.write(JSON.stringify(ok()) + "\\n", () => process.kill(process.pid,"SIGTERM")); return; }
 if (prompt.includes("FAIL_SHARD")) { emit({ status: "api_error", error: "upstream failed", exit_code: 1 }); return; }
 if (prompt.includes("TRUNCATE") && invocations === 0) { emit(ok({ stop_reason: "max_tokens", complete: false, truncated: true })); process.exitCode = 1; return; }
 if (prompt.includes("THINK") && invocations === 0) { emit({ status: "thinking_budget_exhausted", exit_code: 1, note: "budget consumed by thinking" }); process.exitCode = 1; return; }
@@ -239,6 +241,26 @@ test("child garbage stdout: child_error without a batch crash", () => {
   const receipt = receiptOf(run);
   assert.equal(run.status, 1);
   assert.equal(receipt.shards[0].status, "child_error");
+});
+
+test("a complete receipt cannot turn an unsuccessful wrapper exit into PASS", () => {
+  const run = runBatch(["--prompt-file", shardFile("bad-exit.txt", "OK_BAD_EXIT")]);
+  const receipt = receiptOf(run);
+  assert.equal(run.status, 1);
+  assert.equal(receipt.gate, "NOT_EVALUATED");
+  assert.equal(receipt.shards[0].status, "child_error");
+  assert.equal(receipt.shards[0].exit_code, 9);
+  assert.equal(receipt.shards[0].retried, false);
+});
+
+test("a complete receipt from a signal-terminated wrapper is not usable", { skip: process.platform === "win32" }, () => {
+  const run = runBatch(["--prompt-file", shardFile("bad-signal.txt", "OK_SIGNAL")]);
+  const receipt = receiptOf(run);
+  assert.equal(run.status, 1);
+  assert.equal(receipt.gate, "NOT_EVALUATED");
+  assert.equal(receipt.shards[0].status, "child_error");
+  assert.equal(receipt.shards[0].signal, "SIGTERM");
+  assert.equal(receipt.shards[0].retried, false);
 });
 
 test("--prompts-dir: .txt files only, natural order, receipts written to disk", () => {

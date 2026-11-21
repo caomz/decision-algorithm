@@ -1,6 +1,6 @@
 "use strict";
 
-const { test } = require("node:test");
+const { after, test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -9,6 +9,7 @@ const { spawnSync } = require("node:child_process");
 const { buildCoveragePlan, writePlan, verifyPlan, evaluateCoverage } = require("../scripts/shard-coverage.js");
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "zmx-shard-coverage-"));
+after(() => fs.rmSync(root, { recursive: true, force: true }));
 const packet = {
   goal: { request: "Verify every configured deployment gate", acceptance: [
     "Every service restart preserves the config", "Every recovery run keeps the audit trail",
@@ -94,8 +95,53 @@ test("a bound P1 FAIL is preserved even when other evidence is missing", () => {
   assert.equal(result.coverage_complete, false);
 });
 
+test("cancelled rounds never become a terminal PASS or FAIL verdict", () => {
+  const records = plan.shards.map(shard => receipt(shard));
+  let result = evaluateCoverage(plan, records, { cancelled: true });
+  assert.equal(result.review_gate, "NOT_EVALUATED");
+  assert.equal(result.exit_code, 2);
+  assert.equal(result.coverage_complete, false);
+  assert.equal(result.cancelled, true);
+  // The input's verified defect remains intact for diagnostics, just as in
+  // review-run, even though cancellation takes priority over the final gate.
+  records[0].providers.zcode.gate = "FAIL";
+  result = evaluateCoverage(plan, records, { cancelled: true });
+  assert.equal(result.review_gate, "NOT_EVALUATED");
+  assert.equal(records[0].providers.zcode.gate, "FAIL");
+  assert.throws(() => evaluateCoverage(plan, records, { cancelled: "false" }), /cancellation/);
+});
+
+test("malformed plans cannot turn matching side receipts into PASS", async t => {
+  const cases = {
+    "missing AC matrix": p => { p.requirements = []; },
+    "missing acceptance requirement": p => { p.requirements.pop(); },
+    "acceptance and matrix omit declared evidence": p => { p.acceptance_ids.pop(); p.requirements.pop(); },
+    "duplicate acceptance ID": p => { p.acceptance_ids[1] = p.acceptance_ids[0]; },
+    "unknown acceptance ID": p => { p.acceptance_ids[0] = "AC-999"; },
+    "acceptance omitted from evidence": p => { p.required_evidence_ids = p.required_evidence_ids.filter(id => id !== "AC-1"); },
+    "duplicate evidence ID": p => { p.required_evidence_ids.push(p.required_evidence_ids[0]); },
+    "empty requirement": p => { p.requirements[0].required_shards = []; },
+    "requirement drops one shard": p => { p.requirements[0].required_shards.pop(); },
+    "requirement repeats one shard": p => { p.requirements[0].required_shards[1] = p.shards[0].id; },
+    "sparse requirement": p => { delete p.requirements[0].required_shards[0]; },
+    "duplicate shard ID": p => { p.shards[1].id = p.shards[0].id; },
+    "shard path escapes": p => { p.shards[0].file = "../material.txt"; },
+    "overlapping byte ranges": p => { p.shards[1].start_byte--; },
+    "inconsistent shard length": p => { p.shards[0].bytes--; },
+    "material extends past shards": p => { p.material_bytes++; },
+    "invalid digest": p => { p.shards[0].sha256 = "not-a-digest"; },
+  };
+  for (const [name, corrupt] of Object.entries(cases)) {
+    await t.test(name, () => {
+      const broken = structuredClone(plan);
+      corrupt(broken);
+      assert.throws(() => evaluateCoverage(broken, broken.shards.map(shard => receipt(shard))), /invalid coverage plan/);
+    });
+  }
+});
+
 test("no declared acceptance conditions never silently passes", () => {
-  const v1 = Buffer.from(JSON.stringify({ facts: [{ id: "F1", text: "Legacy" }] }));
+  const v1 = Buffer.from(JSON.stringify({ facts: [{ id: "AC-1", text: "Legacy fact ID, not acceptance" }] }));
   const planLegacy = buildCoveragePlan(v1).plan;
   const result = evaluateCoverage(planLegacy, planLegacy.shards.map(shard => receipt(shard)));
   assert.equal(result.coverage_complete, true);
@@ -109,6 +155,30 @@ test("a corrupted manifest, unknown files and invalid shard sizes fail closed", 
   assert.equal(verifyPlan(dir).integrity, "corrupt");
   assert.throws(() => buildCoveragePlan(raw, { chunkBytes: 100 }), /shard bytes/);
   assert.throws(() => buildCoveragePlan(raw, { chunkBytes: 50000 }), /shard bytes/);
+});
+
+test("archive verification rejects redirected directories and symlinked shards", () => {
+  const dir = path.join(root, "redirected");
+  writePlan(raw, dir, { chunkBytes: 8192 });
+  const moved = path.join(root, "external-shards");
+  fs.renameSync(path.join(dir, "shards"), moved);
+  fs.symlinkSync(moved, path.join(dir, "shards"), process.platform === "win32" ? "junction" : "dir");
+  assert.equal(verifyPlan(dir).integrity, "corrupt");
+  fs.rmSync(path.join(dir, "shards"));
+  fs.renameSync(moved, path.join(dir, "shards"));
+  assert.equal(verifyPlan(dir).integrity, "match");
+
+  const alias = path.join(root, "archive-alias");
+  fs.symlinkSync(dir, alias, process.platform === "win32" ? "junction" : "dir");
+  assert.equal(verifyPlan(alias).integrity, "corrupt");
+  if (process.platform !== "win32") {
+    // Windows junction tests above need no elevation; file symlinks may.
+    const shard = path.join(dir, "shards", plan.shards[0].file);
+    const outside = path.join(root, "external-shard.txt");
+    fs.renameSync(shard, outside);
+    fs.symlinkSync(outside, shard);
+    assert.equal(verifyPlan(dir).integrity, "corrupt");
+  }
 });
 
 test("CLI plan and verify produce machine-readable receipts", () => {

@@ -78,3 +78,51 @@ test("tampered owner record refuses unsafe release", async () => {
     assert.equal(fs.existsSync(slot.path), true);
   });
 });
+
+test("a release between a waiter's mkdir and stat retries acquisition", async () => {
+  await withRoot(async root => {
+    const owner = await acquireMmxSlot({ root });
+    const lstat = fs.lstatSync;
+    let raced = false;
+    fs.lstatSync = function (file, ...args) {
+      if (file === owner.path && !raced) {
+        raced = true;
+        owner.release();
+      }
+      return lstat.call(fs, file, ...args);
+    };
+    let next;
+    try { next = await acquireMmxSlot({ root, waitMs: 100 }); }
+    finally { fs.lstatSync = lstat; }
+    assert.equal(raced, true);
+    next.release();
+  });
+});
+
+test("replaced lock directory cannot be released using a copied owner record", async () => {
+  await withRoot(async root => {
+    const slot = await acquireMmxSlot({ root });
+    const previous = slot.path + "-previous";
+    fs.renameSync(slot.path, previous);
+    fs.mkdirSync(slot.path, { mode: 0o700 });
+    fs.copyFileSync(path.join(previous, "owner.json"), path.join(slot.path, "owner.json"));
+    assert.throws(() => slot.release(), error => error.code === "MMX_SLOT_UNSAFE");
+    assert.equal(fs.existsSync(path.join(slot.path, "owner.json")), true);
+  });
+});
+
+test("symlink replacement of a slot cannot delete a file outside the owned directory", {
+  skip: process.platform === "win32" ? "symlinks require Windows privileges" : false,
+}, async () => {
+  await withRoot(async root => {
+    const slot = await acquireMmxSlot({ root });
+    const original = slot.path + "-original";
+    const external = path.join(root, "external");
+    fs.mkdirSync(external, { mode: 0o700 });
+    fs.copyFileSync(path.join(slot.path, "owner.json"), path.join(external, "owner.json"));
+    fs.renameSync(slot.path, original);
+    fs.symlinkSync(external, slot.path, "dir");
+    assert.throws(() => slot.release(), error => error.code === "MMX_SLOT_UNSAFE");
+    assert.equal(fs.existsSync(path.join(external, "owner.json")), true);
+  });
+});

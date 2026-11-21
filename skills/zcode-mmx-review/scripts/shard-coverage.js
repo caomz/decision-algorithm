@@ -10,7 +10,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { createHash } = require("node:crypto");
 const { TextDecoder } = require("node:util");
-const { strictJson } = require("../../zcode/scripts/review.js");
+const { strictJson, validateIds } = require("../../zcode/scripts/review.js");
 const runner = require("./review-run.js");
 
 const FORMAT = 1;
@@ -37,6 +37,64 @@ function validateShardBytes(size) {
     usage("shard bytes must be an integer between " + MIN_SHARD_BYTES + " and " + MAX_SHARD_BYTES);
   }
   return size;
+}
+
+function exactKeys(value, keys) {
+  return value !== null && typeof value === "object" && !Array.isArray(value) &&
+    Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
+}
+
+// The reducer can validate structure, not the source material's provenance.
+// In particular, an absent AC matrix, overlapping offsets, or duplicate IDs
+// must never turn an otherwise complete set of receipts into a PASS.
+function validatePlan(plan) {
+  const invalid = () => { throw new Error("invalid coverage plan"); };
+  const digest = value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+  if (!exactKeys(plan, ["format", "packet_sha256", "material_sha256", "material_bytes",
+    "shard_bytes", "required_evidence_ids", "acceptance_ids", "requirements", "shards"]) ||
+      plan.format !== FORMAT || !digest(plan.packet_sha256) || !digest(plan.material_sha256) ||
+      !Number.isSafeInteger(plan.material_bytes) || plan.material_bytes < 1 ||
+      plan.material_bytes > MAX_MATERIAL_BYTES || !Array.isArray(plan.shards) ||
+      plan.shards.length < 1 || plan.shards.length > MAX_SHARDS ||
+      !Array.isArray(plan.acceptance_ids) || !Array.isArray(plan.requirements)) invalid();
+  try {
+    validateShardBytes(plan.shard_bytes);
+    if (!Array.isArray(plan.required_evidence_ids)) invalid();
+    validateIds(Array.from(plan.required_evidence_ids));
+  }
+  catch { invalid(); }
+  if (Array.from(plan.acceptance_ids).some((id, i) => id !== "AC-" + (i + 1) ||
+      !plan.required_evidence_ids.includes(id))) invalid();
+  if (plan.acceptance_ids.length) {
+    // A v2 packet reserves AC-* for the declared acceptance conditions. Do
+    // not let a caller omit the last condition and its matrix row while its
+    // evidence ID still exists. Legacy v1 fact IDs may use this prefix, but
+    // plans with no acceptance conditions can never receive PASS anyway.
+    const evidenceAcceptance = plan.required_evidence_ids.filter(id => id.startsWith("AC-"));
+    if (evidenceAcceptance.length !== plan.acceptance_ids.length ||
+        evidenceAcceptance.some((id, i) => id !== plan.acceptance_ids[i])) invalid();
+  }
+
+  let next = 0;
+  for (const [i, shard] of plan.shards.entries()) {
+    const suffix = String(i + 1).padStart(4, "0");
+    if (!exactKeys(shard, ["id", "file", "index", "start_byte", "end_byte", "bytes", "sha256"]) ||
+        shard.id !== "S-" + suffix || shard.file !== "shard-" + suffix + ".txt" ||
+        shard.index !== i + 1 || shard.start_byte !== next || !digest(shard.sha256) ||
+        !Number.isSafeInteger(shard.bytes) || shard.bytes < 1 || shard.bytes > plan.shard_bytes ||
+        !Number.isSafeInteger(shard.end_byte) || shard.end_byte !== next + shard.bytes ||
+        (i < plan.shards.length - 1 && shard.bytes < plan.shard_bytes - 3)) invalid();
+    next = shard.end_byte;
+  }
+  if (next !== plan.material_bytes) invalid();
+  const requirementIds = plan.acceptance_ids.length ? plan.acceptance_ids : ["MATERIAL"];
+  if (plan.requirements.length !== requirementIds.length) invalid();
+  for (const [i, requirement] of plan.requirements.entries()) {
+    if (!exactKeys(requirement, ["id", "required_shards"]) || requirement.id !== requirementIds[i] ||
+        !Array.isArray(requirement.required_shards) ||
+        requirement.required_shards.length !== plan.shards.length ||
+        Array.from(requirement.required_shards).some((id, j) => id !== plan.shards[j].id)) invalid();
+  }
 }
 
 // Byte offsets are defined on UTF-8, not JavaScript UTF-16 code units.
@@ -124,11 +182,19 @@ function writePlan(rawPacketBytes, output, options) {
 }
 
 function verifyPlan(directory) {
-  const dir = path.resolve(directory);
   try {
+    const requestedDir = path.resolve(directory);
+    if (!fs.lstatSync(requestedDir).isDirectory()) throw new Error("archive is not a directory");
+    // Canonicalize legitimate parent aliases (e.g. macOS /tmp), then require
+    // the archive's own directories to be real directories, not symlinks or
+    // Windows junctions redirecting verification outside this archive.
+    const dir = fs.realpathSync(requestedDir);
+    const shardDir = path.join(dir, "shards");
+    if (!fs.lstatSync(shardDir).isDirectory() || fs.realpathSync(shardDir) !== shardDir) {
+      throw new Error("shards directory is redirected");
+    }
     const plan = strictJson(decodeUtf8(regularBytes(path.join(dir, "coverage-plan.json"))));
-    if (plan === null || typeof plan !== "object" || Array.isArray(plan) ||
-        !Number.isSafeInteger(plan.shard_bytes)) throw new Error("invalid plan");
+    validatePlan(plan);
     const packet = regularBytes(path.join(dir, "packet.json"));
     const expected = buildCoveragePlan(packet, { chunkBytes: plan.shard_bytes });
     if (JSON.stringify(plan) !== JSON.stringify(expected.plan)) throw new Error("plan differs from packet");
@@ -155,11 +221,10 @@ function verifyPlan(directory) {
 // verified the wrapper exit, model identity, review-v1, and exact prompt binding.
 // This is a pure reducer for that *already-verified* execution data, not a
 // public "receipt says eligible" proof.
-function evaluateCoverage(plan, records) {
-  if (!plan || plan.format !== FORMAT || !Array.isArray(plan.shards) ||
-      plan.shards.length === 0 || !Array.isArray(plan.acceptance_ids) ||
-      !Array.isArray(plan.requirements) || !Array.isArray(records)) {
-    throw new Error("invalid coverage plan or execution records");
+function evaluateCoverage(plan, records, { cancelled = false } = {}) {
+  validatePlan(plan);
+  if (!Array.isArray(records) || typeof cancelled !== "boolean") {
+    throw new Error("invalid coverage execution records or cancellation state");
   }
   const byId = new Map(plan.shards.map(shard => [shard.id, shard]));
   const seen = new Map();
@@ -201,14 +266,17 @@ function evaluateCoverage(plan, records) {
     covered_shards: requirement.required_shards.filter(id => covered.has(id)),
     missing_shards: requirement.required_shards.filter(id => !covered.has(id)),
   }));
-  const allCovered = missing.length === 0 && extras.length === 0 &&
+  const allCovered = !cancelled && missing.length === 0 && extras.length === 0 &&
     plan.shards.length === records.length &&
     requirements.every(row => row.missing_shards.length === 0);
-  const gate = validFail ? "FAIL" :
+  // Match review-run's cancellation priority. Keep side evidence available to
+  // the caller, but never issue a terminal audit verdict for a cancelled run.
+  const gate = cancelled ? "NOT_EVALUATED" : validFail ? "FAIL" :
     (allCovered && plan.acceptance_ids.length > 0 ? "PASS" : "NOT_EVALUATED");
   return {
     review_gate: gate,
     exit_code: gate === "PASS" ? 0 : gate === "FAIL" ? 1 : 2,
+    cancelled,
     coverage_complete: allCovered,
     required_shards: plan.shards.length,
     covered_shards: covered.size,

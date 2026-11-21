@@ -68,11 +68,13 @@ node skills/mmx/scripts/mmx-job.js cancel /absolute/path/to/jobs/review-001
 ```
 
 - `start`：创建持久 Job 和独立监督进程，返回目录与 PID；不等待供应商请求完成。
-- `status`：查询完成记录、最终回执；无完成记录时报告 `unknown`，不得据此再启动。
+- `status`：核验完成记录、最终回执；只有原子发布的 `completion.json` 与各记录摘要一致，且观察到批进程退出（或启动前取消）时才报告 `finished`。旧版、缺失、变动或未完成的记录保持 `unknown`，不得据此再启动。
 - `resume`：**只重新附着到已有记录查询**，不重发请求。自动从中断点重新执行尚未实现。
-- `verify`：验证输入快照 SHA-256 和基本完成记录；不是 API 输出内容的加密签名。
-- `cancel`：写取消标志，由监督进程处理；仅在 `execution.json` 存在后才确认结束。Windows 与 POSIX 取消路径不同，需分别验收。
+- `verify`：核对输入快照、实际参数与快照绑定、请求与批处理脚本摘要，以及输出/回执/退出记录的一致性；只有 `integrity=match` 时退出 0，损坏或未完成时退出 2。这是本地记录自洽校验，不是供应商响应的真实性证明。
+- `cancel`：写取消标志；启动前已取消则不创建批进程。运行中先请求协作清理，POSIX 下 5 秒宽限后升级强制结束，再最多等待 2 秒。记录分别报告 `batch_exit_observed`、`batch_group_gone`；它们不证明独立进程组内的 CLI 或服务端请求已结束。`termination_confirmed=true` 仅用于从未启动批进程的取消；已启动任务正常退出记 `null`、取消后记 `false`。Windows 原生取消仍需独立验收。
 - Job 进程崩溃、强杀或监督进程失联时，状态可能保持 `unknown`；**不要自动重试或删除已有 Job**。如已启用 `MMX_GLOBAL_SLOT=1`，仍须核实遗留 Provider 锁与外部请求。
+
+新 Job 使用记录格式 2：`request-digest.json` 绑定请求，`completion.json` 最后原子发布，永久保留的 `worker.lock` 拒绝 worker 重入。仅有 `execution.json` 不再充当完成凭据。批处理也要求成功回执与实际零退出一致，输出成功 JSON 后异常退出或被信号终止不能得到 PASS。
 
 此阶段先实现持久化执行、查询与保守不重放。分片级断点续跑、跨进程完整树退出证明和任务孤儿回收留待进一步验收；云端离线 CI 通过不等于 Mac 真机带凭据验证通过。
 
@@ -82,7 +84,9 @@ MMX 2.7.0 后续云端改造新增 `scripts/mmx-provider-slot.js`。当 `MMX_GLO
 
 未明确启用时，沿用原来的并发行为；在 Mac/Windows 真机验收前不默认开启。此锁采用 **fail closed**：进程遭强制杀死或无法确认其子进程树清理完成时，锁可能保留，不会自动判定上游请求结束并抢锁重发。应先确认原请求已经停止，再人工处理遗留的 `slot-0`；不得在未知请求状态下直接删除锁。等待超过 120 秒会返回 `slot_unavailable`，不会静默绕过保护或发起新请求。
 
-受管 Mac 发布时，要把 `mmx-provider-slot.js` 与 wrapper 一同发布，再按原有发布流程重钉清单。文件还未同步到受管安装目录时，不得仅更新 `mmx-chat.js`。
+POSIX 下，CLI 主进程退出后仍存在同一进程组的后代时，wrapper 返回 `cleanup_error` 并尝试有时限的清理；只有确认该进程组不存在才释放槽位，否则回执标记 `provider_slot: held_for_recovery`。发送终止信号成功不等于清理完成。槽位被替换或目录变成符号链接时也拒绝释放，避免删除其他请求的记录。Windows 原生子进程树清理仍须单独验收；本地进程退出也不能证明服务端已经撤销断线或超时请求。
+
+受管 Mac 发布时，要把 `mmx-provider-slot.js` 与 wrapper 一同发布，再按原有发布流程重钉清单。显式开启槽位时，该 helper 必须在发布清单中且哈希匹配，否则在启动 CLI 前返回 `install_mismatch`。文件还未同步到受管安装目录时，不得仅更新 `mmx-chat.js`。
 
 ## 跨平台要点
 

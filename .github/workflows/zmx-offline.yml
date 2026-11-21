@@ -48,6 +48,7 @@ jobs:
           node --check skills/zcode/scripts/zcode-run.js
           node --check skills/zcode/scripts/zcode-batch.js
           node --check skills/mmx/scripts/mmx-chat.js
+          node --check skills/mmx/scripts/fetch-timeout-guard.js
           node --check skills/mmx/scripts/mmx-batch.js
           node --check skills/mmx/scripts/mmx-job.js
           node --check skills/mmx/scripts/mmx-provider-slot.js
