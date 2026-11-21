@@ -54,6 +54,14 @@ mmx/
 | 思考块 | `stop_reason=max_tokens` 且只有思考块时归类为 `thinking_budget_exhausted`（预算问题，不是契约漂移）；其他结束原因下没有正文记 `schema_mismatch`，附 `stop_reason` 与块类型（v2.7.0 起） | 一律归类为 `schema_mismatch`（会误导人去核对 CLI 契约） |
 | 错误回执 | 只输出分类、数值码与固定提示，不回显上游原文 | Windows 版的原文回显（需额外脱敏） |
 
+## 跨会话并发槽位（实验性，显式开启）
+
+MMX 2.7.0 后续云端改造新增 `scripts/mmx-provider-slot.js`。当 `MMX_GLOBAL_SLOT=1` 时，`mmx-chat.js` 在发起 CLI 子进程前取得**同一用户、同一台主机**共用的原子文件锁（`~/.zmx/locks/mmx/slot-0/`），直到请求子进程确认结束后释放。独立 Agent 会话或 Batch 只有在都启用了这一开关后才参与排队；它**不是跨机器分布式锁**，也不是云端 API 配额仲裁。
+
+未明确启用时，沿用原来的并发行为；在 Mac/Windows 真机验收前不默认开启。此锁采用 **fail closed**：进程遭强制杀死或无法确认其子进程树清理完成时，锁可能保留，不会自动判定上游请求结束并抢锁重发。应先确认原请求已经停止，再人工处理遗留的 `slot-0`；不得在未知请求状态下直接删除锁。等待超过 120 秒会返回 `slot_unavailable`，不会静默绕过保护或发起新请求。
+
+受管 Mac 发布时，要把 `mmx-provider-slot.js` 与 wrapper 一同发布，再按原有发布流程重钉清单。文件还未同步到受管安装目录时，不得仅更新 `mmx-chat.js`。
+
 ## 跨平台要点
 
 - wrapper 的受管根按**结构**判定（同级 `agy/` 与 `cross-validation/` 目录 + 发布清单），不再依赖某一台机器的绝对路径。
