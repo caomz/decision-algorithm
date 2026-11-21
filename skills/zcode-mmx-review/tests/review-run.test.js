@@ -17,6 +17,37 @@ const runner = require(RUNNER);
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "zmx-review-run-"));
 const sha256 = bytes => createHash("sha256").update(bytes).digest("hex");
 
+// Node 22's native recursive fs.cpSync can abort the Windows process when a
+// source directory contains non-ASCII characters (nodejs/node#59636). Copy the
+// fixture tree one entry at a time so the offline acceptance suite also runs
+// from ordinary Chinese user/repository paths. Sources must remain regular
+// files/directories, and an existing destination is never overwritten.
+function copyFixtureTree(source, destination) {
+  const stat = fs.lstatSync(source);
+  if (stat.isDirectory()) {
+    fs.mkdirSync(destination, { mode: stat.mode & 0o777 });
+    for (const name of fs.readdirSync(source)) {
+      copyFixtureTree(path.join(source, name), path.join(destination, name));
+    }
+    return;
+  }
+  assert.ok(stat.isFile(), `fixture source must be a regular file or directory: ${source}`);
+  fs.copyFileSync(source, destination, fs.constants.COPYFILE_EXCL);
+}
+
+// A normal Windows 10 account can create directory junctions without enabling
+// Developer Mode or running an elevated shell. Put one at the expected file
+// path to exercise the same lstat-based non-regular-file rejection on Windows;
+// POSIX retains the file-symlink case. Preserve the original fixture bytes.
+function linkNonRegularFixture(target, link) {
+  if (process.platform !== "win32") return fs.symlinkSync(target, link);
+  const resolvedTarget = path.resolve(path.dirname(link), target);
+  const directory = `${resolvedTarget}.junction-target`;
+  fs.mkdirSync(directory);
+  fs.copyFileSync(resolvedTarget, path.join(directory, "fixture.json"), fs.constants.COPYFILE_EXCL);
+  fs.symlinkSync(directory, link, "junction");
+}
+
 const PACKET = {
   facts: [
     { id: "F1", text: "fixture fact one" },
@@ -662,7 +693,7 @@ describe("verify", () => {
     const outside = path.join(root, "verify-manifest-outside.json");
     fs.copyFileSync(path.join(dir, "record-manifest.json"), outside);
     fs.renameSync(path.join(dir, "record-manifest.json"), path.join(dir, "record-manifest.real.json"));
-    fs.symlinkSync(outside, path.join(dir, "record-manifest.json"));
+    linkNonRegularFixture(outside, path.join(dir, "record-manifest.json"));
     const outcome = verifyCli(dir);
     assert.equal(outcome.status, 2);
     assert.equal(report(outcome).integrity, "corrupt");
@@ -718,7 +749,7 @@ describe("doctor offline", () => {
   function makeCopy(name, transform) {
     const target = path.join(scenariosRoot, name);
     fs.mkdirSync(target, { recursive: true });
-    for (const skill of skills) fs.cpSync(path.join(runner.SKILLS, skill), path.join(target, skill), { recursive: true });
+    for (const skill of skills) copyFixtureTree(path.join(runner.SKILLS, skill), path.join(target, skill));
     if (transform) transform(target);
     return target;
   }
@@ -741,9 +772,9 @@ describe("doctor offline", () => {
         fs.mkdirSync(path.join(replaced, "zcode"), { recursive: true });
         for (const entry of fs.readdirSync(path.join(runner.SKILLS, "zcode"))) {
           if (entry === ".zcode-release.json") continue;
-          fs.cpSync(path.join(runner.SKILLS, "zcode", entry), path.join(replaced, "zcode", entry), { recursive: true });
+          copyFixtureTree(path.join(runner.SKILLS, "zcode", entry), path.join(replaced, "zcode", entry));
         }
-      } else fs.cpSync(path.join(runner.SKILLS, skill), path.join(replaced, skill), { recursive: true });
+      } else copyFixtureTree(path.join(runner.SKILLS, skill), path.join(replaced, skill));
     }
     assert.equal(fs.existsSync(readMarker(replaced)), false);
     assert.equal(runner.doctorOffline(replaced).status, "failed");
@@ -1065,7 +1096,7 @@ describe("verify integrity locks (F2: M12b, M20, M32, M35)", () => {
     const dir = copyArchive(base, "f2i-m12b");
     // 目录内符号链接：真清单改名收存，链接指回它。lstat 拒链接本身。
     fs.renameSync(path.join(dir, "record-manifest.json"), path.join(dir, "record-manifest.real.json"));
-    fs.symlinkSync("record-manifest.real.json", path.join(dir, "record-manifest.json"));
+    linkNonRegularFixture("record-manifest.real.json", path.join(dir, "record-manifest.json"));
     const outcome = verifyCli(dir);
     assert.equal(outcome.status, 2);
     assert.equal(report(outcome).integrity, "corrupt");
@@ -1101,10 +1132,10 @@ describe("run-level regression locks (F2: M27, M28, M33)", () => {
     // 在 X 风格的副本树里构造：scenarios.json 换成指向目录内副本的符号链接。
     const tree = path.join(root, "f2-m33-tree");
     fs.mkdirSync(tree, { recursive: true });
-    for (const skill of ["zcode", "mmx", "zcode-mmx-review"]) fs.cpSync(path.join(runner.SKILLS, skill), path.join(tree, skill), { recursive: true });
+    for (const skill of ["zcode", "mmx", "zcode-mmx-review"]) copyFixtureTree(path.join(runner.SKILLS, skill), path.join(tree, skill));
     const scenarios = path.join(tree, "zcode-mmx-review", "tests", "fixtures", "backends", "scenarios.json");
     fs.renameSync(scenarios, path.join(path.dirname(scenarios), "scenarios.real.json"));
-    fs.symlinkSync("scenarios.real.json", scenarios);
+    linkNonRegularFixture("scenarios.real.json", scenarios);
     const out = path.join(root, "f2-m33-out");
     const result = spawnSync(process.execPath, [path.join(tree, "zcode-mmx-review", "scripts", "review-run.js"),
       "run", "--backend", "fixture", "--scenario", "both-pass", "--packet", packetFile, "--out", out],
