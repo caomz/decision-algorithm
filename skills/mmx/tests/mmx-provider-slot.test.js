@@ -8,9 +8,9 @@ const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { acquireMmxSlot } = require("../scripts/mmx-provider-slot.js");
 
-function withRoot(fn) {
+async function withRoot(fn) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "mmx-slot-test-"));
-  try { return fn(root); }
+  try { return await fn(root); }
   finally { fs.rmSync(root, { force: true, recursive: true }); }
 }
 
