@@ -294,6 +294,10 @@ async function worker(jobPath) {
       }, 100);
       if (fs.existsSync(path.join(job, "cancel.request"))) requestCancel();
       await Promise.race([exited, cancellation]);
+      // On Windows a cooperative child can observe the marker and exit in
+      // less than the supervisor's polling interval. A pending cancellation
+      // must never be mislabeled as ordinary successful completion.
+      if (fs.existsSync(path.join(job, "cancel.request"))) requestCancel();
       if (requested) {
         reason = "cancelled";
         await stopBatch(child, () => closed !== null, job);
