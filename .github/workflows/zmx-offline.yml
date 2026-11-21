@@ -10,6 +10,7 @@ on:
   push:
     branches:
       - "cloud/**"
+      - "windows-zmx-*"
     paths:
       - ".github/workflows/zmx-offline.yml"
       - "skills/zcode/**"
@@ -54,6 +55,18 @@ jobs:
           node --check skills/mmx/scripts/mmx-provider-slot.js
           node --check skills/zcode-mmx-review/scripts/review-run.js
           node --check skills/zcode-mmx-review/scripts/shard-coverage.js
+      - name: Windows native PowerShell smoke
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host "PowerShell: $($PSVersionTable.PSVersion)"
+          node --version
+          if ($LASTEXITCODE -ne 0) { throw 'Node version probe failed' }
+          node --check skills/mmx/scripts/mmx-job.js
+          if ($LASTEXITCODE -ne 0) { throw 'Windows durable worker syntax failed' }
+          node --check skills/mmx/scripts/mmx-chat.js
+          if ($LASTEXITCODE -ne 0) { throw 'Windows MMX wrapper syntax failed' }
       - name: ZCode offline regression
         run: node --test skills/zcode/tests/*.test.js
       - name: MMX offline regression
