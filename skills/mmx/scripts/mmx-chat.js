@@ -11,6 +11,7 @@ const os = require("os");
 const path = require("path");
 const { spawn, spawnSync } = require("child_process");
 const { TextDecoder } = require("util");
+const { acquireMmxSlot } = require("./mmx-provider-slot.js");
 
 const VERSION = "2.7.0";
 const FETCH_GUARD = path.join(__dirname, "fetch-timeout-guard.js");
@@ -655,8 +656,43 @@ async function main() {
   if (mmx.shell && ![mmx.cmd, ...chatArgs].every(safeCmdArgument)) {
     usageError("cmd.exe cannot safely represent the CLI path or arguments.");
   }
+  // Opt-in rollout: the global provider slot serializes independent sessions
+  // on this host. Until Windows and macOS native deployments are validated,
+  // existing installations retain their current parallel behavior.
+  const slotEnabled = process.env.MMX_GLOBAL_SLOT === "1";
+  const slotAbort = new AbortController();
+  let providerSlot = null;
+  if (slotEnabled) {
+    cancelCurrentRequest = () => slotAbort.abort();
+    try {
+      providerSlot = await acquireMmxSlot({ signal: slotAbort.signal });
+    } catch (error) {
+      cancelCurrentRequest = null;
+      const status = error.code === "MMX_SLOT_CANCELLED" ? "cancelled" : "slot_unavailable";
+      fail({ status, code: error.code || "MMX_SLOT_IO", error: "MMX provider slot unavailable; no upstream request was made." });
+      return;
+    }
+    cancelCurrentRequest = null;
+    telemetry.provider_slot = "acquired";
+    telemetry.provider_slot_wait_ms = providerSlot.waited_ms;
+    if (slotAbort.signal.aborted) {
+      providerSlot.release();
+      fail({ status: "cancelled", code: "MMX_SLOT_CANCELLED" });
+      return;
+    }
+  }
   const requestStarted = Date.now();
-  const chat = await runCmd(mmx.cmd, [...launch.argsPrefix, ...chatArgs], wrapperTimeout, mmx.shell, launch.env);
+  let chat;
+  try {
+    chat = await runCmd(mmx.cmd, [...launch.argsPrefix, ...chatArgs], wrapperTimeout, mmx.shell, launch.env);
+  } finally {
+    if (providerSlot) {
+      // Do not open the slot for a new paid request when descendant cleanup
+      // was not confirmed. The unreleased lock is an explicit recovery gate.
+      if (chat?.termination_failed) telemetry.provider_slot = "held_for_recovery";
+      else providerSlot.release();
+    }
+  }
   const elapsedMs = Date.now() - requestStarted;
   if (chat.kind !== "closed") {
     const status = chat.kind === "spawn_error" ? "api_error" : chat.kind;
