@@ -399,7 +399,11 @@ describe("second signals and entry hardening (fix2)", { skip: process.platform =
     const child = spawn(process.execPath, [RUNNER, "run", "--backend", "fixture", "--scenario", scenario, "--packet", packetFile, "--out", out], {
       stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...extraEnv },
     });
-    return { out, child };
+    // Record close before waiting for any markers or sending signals.
+    const closed = new Promise(resolve => child.once("close", resolve));
+    child.stdout.resume();
+    child.stderr.resume();
+    return { out, child, closed };
   };
   const waitForMmxObserved = async out => {
     const mmxStarted = path.join(out, "mmx-observed-input.json");
@@ -408,13 +412,13 @@ describe("second signals and entry hardening (fix2)", { skip: process.platform =
   };
 
   const doubleSignalCase = (name, scenario, signal) => test(`${signal} twice: records survive, exit 2, mmx cancelled by SIGKILL, verify match (${name})`, { timeout: 60000 }, async () => {
-    const { out, child } = spawnRun(`cli-2x-${name}-${signal.toLowerCase()}`, scenario);
+    const { out, child, closed } = spawnRun(`cli-2x-${name}-${signal.toLowerCase()}`, scenario);
     await waitForMmxObserved(out);
     child.kill(signal);
     await sleep(300); // 仍在宽限期内（slow-exit 的 1500ms 退出计时未到 / ignore-term 根本不退）
     const secondAt = Date.now();
     child.kill(signal); // 第二次：立即 SIGKILL，不再等宽限期
-    const code = await new Promise(resolve => child.once("close", resolve));
+    const code = await closed;
     const elapsed = Date.now() - secondAt;
     assert.equal(code, 2, "the entry must survive the second signal and exit 2");
     assert.ok(elapsed < 4500, `second signal must escalate immediately (took ${elapsed}ms; grace is 5000ms)`);
@@ -434,14 +438,21 @@ describe("second signals and entry hardening (fix2)", { skip: process.platform =
   doubleSignalCase("slow", "zcode-fail-mmx-slow", "SIGTERM");
   doubleSignalCase("slow", "zcode-fail-mmx-slow", "SIGINT");
 
+  test("fixture close is still observable after the caller waits for another event", async () => {
+    const { child, closed } = spawnRun("cli-early-close", "both-pass");
+    const observed = await new Promise(resolve => child.once("close", resolve));
+    assert.equal(observed, 0);
+    assert.equal(await closed, observed);
+  });
+
   test("second SIGTERM on a SIGTERM-deaf wrapper: SIGKILL wins, no orphan left", { timeout: 60000 }, async () => {
-    const { out, child } = spawnRun("cli-2x-deaf", "zcode-fail-mmx-ignore-term");
+    const { out, child, closed } = spawnRun("cli-2x-deaf", "zcode-fail-mmx-ignore-term");
     await waitForMmxObserved(out);
     child.kill("SIGTERM");
     await sleep(300);
     const secondAt = Date.now();
     child.kill("SIGTERM");
-    const code = await new Promise(resolve => child.once("close", resolve));
+    const code = await closed;
     assert.equal(code, 2);
     assert.ok(Date.now() - secondAt < 4500, "second signal must SIGKILL immediately");
     const result = JSON.parse(fs.readFileSync(path.join(out, "result.json"), "utf8"));
@@ -459,14 +470,14 @@ describe("second signals and entry hardening (fix2)", { skip: process.platform =
 
   test("a signal in the between-close-and-record window does not kill the entry and keeps cancelled=false", { timeout: 60000 }, async () => {
     // ZMX_TEST_HOLD_BEFORE_RECORDS_MS 撑开"两侧 close 之后、记录写完之前"的窗口。
-    const { out, child } = spawnRun("cli-window-signal", "both-pass", { ZMX_TEST_HOLD_BEFORE_RECORDS_MS: "3000" });
+    const { out, child, closed } = spawnRun("cli-window-signal", "both-pass", { ZMX_TEST_HOLD_BEFORE_RECORDS_MS: "3000" });
     const zcodeStarted = path.join(out, "zcode-observed-input.json");
     for (let i = 0; i < 200 && !(fs.existsSync(zcodeStarted) && fs.existsSync(path.join(out, "mmx-observed-input.json"))); i++) await sleep(100);
     await sleep(1000); // wrapper 已退出，入口停在 hold 内
     child.kill("SIGTERM");
     await sleep(200);
     child.kill("SIGTERM"); // 窗口内第二信号同样是 no-op（处理幂等）
-    const code = await new Promise(resolve => child.once("close", resolve));
+    const code = await closed;
     assert.equal(code, 0, "the entry must survive window signals and finish PASS");
     const result = JSON.parse(fs.readFileSync(path.join(out, "result.json"), "utf8"));
     assert.equal(result.cancelled, false);
