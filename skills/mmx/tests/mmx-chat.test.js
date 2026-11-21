@@ -680,7 +680,7 @@ test("package entry resolution accepts linked mmx-cli entries and rejects other 
   if (process.platform === "win32") return;
   const { pkgRoot, pkgBin, entry } = buildFakePackage();
   try {
-    assert.equal(linkedEntry(path.join(pkgBin, "mmx")), entry);
+    assert.equal(linkedEntry(path.join(pkgBin, "mmx")), fs.realpathSync(entry));
     assert.equal(mmxPackageEntry(entry)?.root, fs.realpathSync(pkgRoot));
     // The default fake is a custom launcher, not an mmx-cli package.
     assert.equal(linkedEntry(fakeMmxPath), null);
@@ -713,7 +713,7 @@ test("the mmx-cli package entry launches with the fetch guard preloaded and a no
     const dumped = JSON.parse(fs.readFileSync(envDumpPath, "utf8"));
     assert.deepEqual(dumped.argv.slice(0, 2), ["text", "chat"]);
     assert.equal(dumped.minimax_base_url, "https://api.example.com");
-    assert.equal(dumped.undici_path, path.join(pkgRoot, "node_modules", "undici", "index.js"));
+    assert.equal(dumped.undici_path, fs.realpathSync(path.join(pkgRoot, "node_modules", "undici", "index.js")));
     assert.equal(dumped.https_proxy_set, false);
     // The preload really ran in the CLI process, before the CLI's own code.
     assert.deepEqual(dumped.guard, { headersTimeout: 0, bodyTimeout: 0 });
@@ -800,7 +800,7 @@ test("proxy variables downgrade the preloaded guard to proxy_limited", () => {
     assert.equal(result.fetch_timeout_guard, "proxy_limited");
     const dumped = JSON.parse(fs.readFileSync(envDumpPath, "utf8"));
     assert.equal(dumped.https_proxy_set, true);
-    assert.equal(dumped.undici_path, path.join(pkgRoot, "node_modules", "undici", "index.js"));
+    assert.equal(dumped.undici_path, fs.realpathSync(path.join(pkgRoot, "node_modules", "undici", "index.js")));
     assert.deepEqual(dumped.guard, { headersTimeout: 0, bodyTimeout: 0 }, "the guard still loads; the CLI proxy dispatcher replaces it later");
   } finally {
     removeFakePackage(pkgRoot, pkgBin, entry);
