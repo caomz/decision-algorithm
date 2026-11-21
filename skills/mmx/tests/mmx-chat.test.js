@@ -1031,3 +1031,27 @@ test("opt-in slot cannot report success when the CLI leaves a same-group descend
     }
   }
 });
+
+test("a pre-existing durable job cancellation marker stops before invoking MMX", () => {
+  writeInputs("cancelled before CLI launch");
+  const marker = path.join(root, "preexisting-job-cancel.marker");
+  fs.writeFileSync(marker, "cancel\\n");
+  const run = runChat([], { MMX_CANCEL_REQUEST_FILE: marker });
+  const result = jsonResult(run);
+  assert.equal(run.status, 1);
+  assert.equal(result.status, "cancelled");
+  assert.equal(result.code, "MMX_JOB_CANCEL_REQUESTED");
+  assert.equal(result.cli_invoked, false);
+});
+
+test("Windows opt-in global slot fails closed before MMX without verified process trees", {
+  skip: process.platform !== "win32" ? "Windows-specific safety boundary" : false,
+}, () => {
+  writeInputs("slot on Windows");
+  const run = runChat([], { MMX_GLOBAL_SLOT: "1" });
+  const result = jsonResult(run);
+  assert.equal(run.status, 1);
+  assert.equal(result.status, "slot_unavailable");
+  assert.equal(result.code, "MMX_SLOT_WINDOWS_TREE_UNVERIFIED");
+  assert.equal(result.cli_invoked, false);
+});
