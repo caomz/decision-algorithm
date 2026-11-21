@@ -54,6 +54,14 @@ mmx/
 | 思考块 | `stop_reason=max_tokens` 且只有思考块时归类为 `thinking_budget_exhausted`（预算问题，不是契约漂移）；其他结束原因下没有正文记 `schema_mismatch`，附 `stop_reason` 与块类型（v2.7.0 起） | 一律归类为 `schema_mismatch`（会误导人去核对 CLI 契约） |
 | 错误回执 | 只输出分类、数值码与固定提示，不回显上游原文 | Windows 版的原文回显（需额外脱敏） |
 
+## Windows 原生回归与取消边界（专用验证分支）
+
+Windows 上 `mmx-job.js` 不再在用户请求取消时立即以 `taskkill /F` 终止整个 batch。监督进程先创建 `cancel.request`，通过私有环境变量 `MMX_CANCEL_REQUEST_FILE` 传给 batch 与 wrapper；batch 禁止开始新分片/重试，wrapper 在 75ms 内轮询标记并终止自己管理的 CLI。超过约 5 秒宽限期，才升级到 `taskkill.exe /PID ... /T /F`，并记录实际 batch 退出证据。强制终止不能证明代理端已停止处理请求，因此保留 `termination_confirmed=false`，不自动重放。
+
+Windows 上 `MMX_GLOBAL_SLOT=1` 暂时明确拒绝调用并返回 `MMX_SLOT_WINDOWS_TREE_UNVERIFIED`。当前标准 Node.js 子进程 API 无法在父进程自然退出后证明其所有后代均已清理；这是有意的安全保护，**不是 Windows 全局并发槽已实现**。在 Windows Job Object 或等效原生追踪方案通过真机验收前保持默认关闭。正常的单次 MMX 请求不受此限制。
+
+本分支使用 `windows-zmx-*` push CI 触发器及 Windows PowerShell 冒烟检查。GitHub CI 通过不代替本机 ZCode/MMX 桌面端与 CLI 的独立验证。真机验收须核对 `zcode --version` 的运行时版本、代理/启动器路径、`taskkill` 与 Windows Job 回执；不得向报告写入真实凭据。
+
 ## 长任务持久化 Job（阶段 3，实验性）
 
 新增 `scripts/mmx-job.js`，在独立后台进程中调用现有 `mmx-batch.js`。启动时原子创建任务目录，并复制分片及运行 Profile 到只读用途的输入快照（附 SHA-256）。重复使用同一个目录时 **start 拒绝**，避免主 Agent 等待超时后再次发送付费请求。
