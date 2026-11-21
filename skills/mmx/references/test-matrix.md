@@ -4,6 +4,20 @@
 
 本文件是**事实记录**，不是契约。契约见 [verification.md](verification.md)。
 
+## 2026-11-19 v2.7.0 回传验证（macOS，mmx-cli 1.0.29，Node v24.15.0；Windows 未运行）
+
+| 路径 | 覆盖方式 | 结果 |
+|---|---|---|
+| `node --test "skills/mmx/tests/**/*.test.js"` | mock / 构造 | 70/70 通过：原 60 个，加新增 10 个（版本一致、包入口解析、防护预加载、代理降级、mmx 配置 `proxy` 降级、404 脱敏、基址规范化、Windows 变量名大小写、300 秒网络错误提示、batch→wrapper→假 CLI 链路） |
+| 只有 thinking 块的回复 | mock ×2 | `stop_reason=max_tokens` 为 `thinking_budget_exhausted`，`end_turn` 为 `schema_mismatch`，均附 `stop_reason` 与 `content_block_types`；2026-11-17 那一行里 `end_turn` 的结论不再适用 |
+| 防护预加载的回归保护 | 构造：删掉 `--require` 的变异副本 | 防护用例失败，未改动时通过；用例能拦住预加载被去掉 |
+| mmx 配置 `proxy` 项 | mock：`MMX_CONFIG_DIR` / HOME / Windows `USERPROFILE` 下的合成配置；变异副本去掉配置检查 | 以 `http` 开头时 `proxy_limited`，`socks5://` 与坏 JSON 为 `preloaded`，回执不含配置内容；去掉检查后用例失败 |
+| `mmx-batch.js` 预算自愈经真 wrapper | mock：batch → `mmx-chat.js` → 假 CLI，`--max-tokens 128`；变异副本把 C2 改回旧判定 | 纯思考 + `max_tokens`、带正文的 `max_tokens` 各重发一次（524288）后 `ok`；纯思考 + `end_turn` 为 `schema_mismatch`、不重发；改回旧判定后用例失败 |
+| 真实 HTTP 404 报文 | 真实：基址带 `/v1` 直连 CLI；经 wrapper 用 `/v1/v1`（去掉一层后仍 404） | CLI 报文 `API error: HTTP 404 (HTTP 404)`，与测试样例逐字一致；wrapper 回执 `http_status=404`、`base_url_env=stripped_v1`，`base_url_env_value` 只含协议和主机 |
+| 本地假服务 305 秒才回响应头，真实 CLI | 真实 CLI + 本地服务（隔离 HOME、假 key、无代理） | 经 wrapper：`fetch_timeout_guard=preloaded`、`base_url_env=stripped_v1`，305 秒 `ok`；直接调用 CLI 的对照组约 301 秒以退出码 6 `Network request failed.` 失败 |
+| 真实 API 冒烟：默认 PATH / npm 入口优先 + `/v1` 环境变量 + 代理 / npm 入口优先、无代理 | 真实 ×3 | 均 `ok`、`MiniMax-M3.1-Flash`、`end_turn`；`fetch_timeout_guard` 依次为 `custom_launcher`、`proxy_limited`、`preloaded`，`base_url_env` 均为 `stripped_v1`。同一 npm 入口优先配置在 11-18 曾连续 HTTP 404 |
+| Windows：npm shim 预加载、PowerShell / Git Bash、超过 300 秒的真实请求 | — | **未运行**，待值班机实测 |
+
 ## 2026-11-18 增量验证（Windows，mmx-cli 1.0.28，Node v22.20.0）
 
 | 路径 | 覆盖方式 | 结果 |

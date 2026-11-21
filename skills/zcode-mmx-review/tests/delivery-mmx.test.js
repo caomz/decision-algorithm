@@ -64,7 +64,7 @@ function runDelivery(material, name) {
   return { receipt, dump, directory };
 }
 
-test("the single user message equals P byte for byte (small P)", () => {
+test("the single user message equals P byte for byte (small P)", { skip: process.platform === "win32" && "POSIX fake CLI fixture is not an npm .cmd shim; Windows npm-shim behavior is exercised in mmx-chat.test.js" }, () => {
   const { buildPrompt } = require("../../zcode/scripts/review.js");
   const material = runner.materialFrom({ facts: [{ id: "F1", text: "small mmx delivery check 中文 🌟" }] });
   const P = buildPrompt(material, "review", ["F1"]);
@@ -76,7 +76,7 @@ test("the single user message equals P byte for byte (small P)", () => {
   assert.equal(dump.user_content, P);
 });
 
-test("the single user message equals P byte for byte (P of 24577 bytes)", () => {
+test("the single user message equals P byte for byte (P of 24577 bytes)", { skip: process.platform === "win32" && "POSIX fake CLI fixture is not an npm .cmd shim; Windows npm-shim behavior is exercised in mmx-chat.test.js" }, () => {
   const { buildPrompt } = require("../../zcode/scripts/review.js");
   const material = materialReaching(24577);
   const P = buildPrompt(material, "review", ["F1"]);
@@ -87,7 +87,7 @@ test("the single user message equals P byte for byte (P of 24577 bytes)", () => 
   assert.equal(dump.user_content, P);
 });
 
-test("the wrapper keeps prompt content out of argv", () => {
+test("the wrapper keeps prompt content out of argv", { skip: process.platform === "win32" && "POSIX fake CLI fixture is not an npm .cmd shim; Windows npm-shim behavior is exercised in mmx-chat.test.js" }, () => {
   const material = runner.materialFrom({ facts: [{ id: "F1", text: "argv must stay clean" }] });
   const { dump } = runDelivery(require("../../zcode/scripts/review.js").buildPrompt(material, "review", ["F1"]), "argv-clean");
   assert.equal(dump.argv.some(item => item.includes("argv must stay clean")), false);
