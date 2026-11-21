@@ -77,8 +77,10 @@ function assertDelivery(record, P) {
   }
 }
 
+// Move this pin only after the delivery tests below pass against the new wrapper.
+// 1.5.1 changed the supervisor status check and the manifest re-pin, not delivery.
 test("the wrapper advertises the version this delivery contract was written for", () => {
-  assert.match(wrapperSource, /VERSION = "1\.5\.0"/);
+  assert.match(wrapperSource, /VERSION = "1\.5\.1"/);
 });
 
 test("P of exactly 24576 bytes stays on argv", () => {
