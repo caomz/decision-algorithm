@@ -646,41 +646,42 @@ test("a plain install without siblings and without a marker is not treated as ma
   fs.rmdirSync(plain);
 });
 
-// A POSIX `mmx` that is a symlink to the declared bin of a fake mmx-cli
-// package, with an undici stub the fetch guard can import.
+// A real npm-style package entry on every platform: POSIX uses its executable
+// link and Windows uses the .cmd shim resolved by the production launcher.
 function buildFakePackage() {
-  const pkgRoot = path.join(root, "fake-mmx-cli");
   const pkgBin = path.join(root, "pkg-bin");
+  const pkgRoot = path.join(pkgBin, "node_modules", "mmx-cli");
   fs.mkdirSync(path.join(pkgRoot, "dist"), { recursive: true });
   fs.mkdirSync(path.join(pkgRoot, "node_modules", "undici"), { recursive: true });
-  fs.mkdirSync(pkgBin);
-  const entry = path.join(pkgRoot, "dist", "mmx.cjs");
-  fs.writeFileSync(path.join(pkgRoot, "package.json"), JSON.stringify({ name: "mmx-cli", bin: { mmx: "dist/mmx.cjs" } }));
-  fs.writeFileSync(entry, `#!${process.execPath}\nrequire(${JSON.stringify(fakeJsPath)});\n`, { mode: 0o755 });
+  const entry = path.join(pkgRoot, "dist", "mmx.mjs");
+  fs.writeFileSync(path.join(pkgRoot, "package.json"), JSON.stringify({ name: "mmx-cli", bin: { mmx: "dist/mmx.mjs" } }));
+  fs.writeFileSync(entry, `#!${process.execPath}\nimport { createRequire } from 'node:module';\ncreateRequire(import.meta.url)(${JSON.stringify(fakeJsPath)});\n`, { mode: 0o755 });
   fs.writeFileSync(path.join(pkgRoot, "node_modules", "undici", "package.json"), JSON.stringify({ name: "undici", main: "index.js" }));
   fs.writeFileSync(path.join(pkgRoot, "node_modules", "undici", "index.js"),
     "class Agent { constructor(options) { this.options = options; } }\n" +
     "module.exports = { Agent, setGlobalDispatcher(dispatcher) { globalThis.__fakeGuard = dispatcher.options; } };\n");
-  fs.symlinkSync(entry, path.join(pkgBin, "mmx"));
+  if (process.platform === "win32") {
+    fs.writeFileSync(path.join(pkgBin, "mmx.cmd"), '@echo off\r\n"%_prog%" "%dp0%\\node_modules\\mmx-cli\\dist\\mmx.mjs" %*\r\n');
+  } else fs.symlinkSync(entry, path.join(pkgBin, "mmx"));
   return { pkgRoot, pkgBin, entry };
 }
 
 function removeFakePackage(pkgRoot, pkgBin, entry) {
   unlinkKnown(path.join(pkgBin, "mmx"));
+  unlinkKnown(path.join(pkgBin, "mmx.cmd"));
   unlinkKnown(entry);
   unlinkKnown(path.join(pkgRoot, "package.json"));
-  unlinkKnown(path.join(pkgRoot, "dist", "mmx.cjs"));
   unlinkKnown(path.join(pkgRoot, "node_modules", "undici", "package.json"));
   unlinkKnown(path.join(pkgRoot, "node_modules", "undici", "index.js"));
   for (const dir of [path.join(pkgRoot, "dist"), path.join(pkgRoot, "node_modules", "undici"),
-                     path.join(pkgRoot, "node_modules"), pkgRoot, pkgBin]) fs.rmdirSync(dir);
+                     path.join(pkgRoot, "node_modules"), pkgRoot, path.join(pkgBin, "node_modules"), pkgBin]) fs.rmdirSync(dir);
 }
 
 test("package entry resolution accepts linked mmx-cli entries and rejects other packages", () => {
-  if (process.platform === "win32") return;
   const { pkgRoot, pkgBin, entry } = buildFakePackage();
   try {
-    assert.equal(linkedEntry(path.join(pkgBin, "mmx")), fs.realpathSync(entry));
+    if (process.platform !== "win32") assert.equal(linkedEntry(path.join(pkgBin, "mmx")), fs.realpathSync(entry));
+    assert.equal(fs.realpathSync(findMmx(process.platform, pkgBin).argsPrefix[0]), fs.realpathSync(entry));
     assert.equal(mmxPackageEntry(entry)?.root, fs.realpathSync(pkgRoot));
     // The default fake is a custom launcher, not an mmx-cli package.
     assert.equal(linkedEntry(fakeMmxPath), null);
@@ -694,7 +695,6 @@ test("package entry resolution accepts linked mmx-cli entries and rejects other 
 });
 
 test("the mmx-cli package entry launches with the fetch guard preloaded and a normalized base URL", () => {
-  if (process.platform === "win32") return;
   const { pkgRoot, pkgBin, entry } = buildFakePackage();
   const envDumpPath = path.join(root, "env-dump.json");
   const noProxy = Object.fromEntries(["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy",
@@ -743,8 +743,64 @@ test("the mmx-cli package entry launches with the fetch guard preloaded and a no
   }
 });
 
+test("a selected fetch guard fails before invoking the CLI if initialization throws", () => {
+  const { pkgRoot, pkgBin, entry } = buildFakePackage();
+  const undiciFile = path.join(pkgRoot, "node_modules", "undici", "index.js");
+  const secret = "synthetic-private-dependency-detail";
+  try {
+    writeInputs("guard initialization must precede request");
+    for (const broken of [
+      `throw new Error(${JSON.stringify(secret)});`,
+      "module.exports = { Agent: class {}, setGlobalDispatcher() { throw new Error('dispatcher rejected'); } };",
+    ]) {
+      fs.writeFileSync(undiciFile, broken);
+      const run = runChat([], { PATH: `${pkgBin}${path.delimiter}${process.env.PATH || ""}` });
+      const receipt = jsonResult(run);
+      assert.equal(run.status, 1);
+      assert.equal(receipt.status, "guard_error");
+      assert.equal(receipt.fetch_timeout_guard, "preload_failed");
+      assert.equal(receipt.exit_code, 78);
+      assert.equal(fs.readFileSync(invocationLog, "utf8"), "", "the CLI entry never runs");
+      assert.doesNotMatch(run.stdout + run.stderr, new RegExp(secret));
+      assert.deepEqual(fs.readdirSync(wrapperTmp), []);
+    }
+  } finally { removeFakePackage(pkgRoot, pkgBin, entry); }
+});
+
+test("fetch guard acknowledgement does not break inherited Worker preloads", () => {
+  const { pkgRoot, pkgBin, entry } = buildFakePackage();
+  try {
+    fs.writeFileSync(entry, "import { Worker } from 'node:worker_threads';\n" +
+      "import { createRequire } from 'node:module';\n" +
+      "const worker = new Worker('0', { eval: true });\n" +
+      "worker.on('exit', code => { if (code) process.exit(code); else createRequire(import.meta.url)(" +
+      JSON.stringify(fakeJsPath) + "); });\n");
+    writeInputs("worker preload");
+    const result = jsonResult(runChat([], { PATH: `${pkgBin}${path.delimiter}${process.env.PATH || ""}` }));
+    assert.equal(result.status, "ok");
+    assert.notEqual(result.fetch_timeout_guard, "preload_failed");
+    assert.deepEqual(fs.readdirSync(wrapperTmp), []);
+  } finally { removeFakePackage(pkgRoot, pkgBin, entry); }
+});
+
+test("a blocked guard import preserves timeout without claiming initialization", () => {
+  const { pkgRoot, pkgBin, entry } = buildFakePackage();
+  try {
+    fs.writeFileSync(path.join(pkgRoot, "node_modules", "undici", "index.js"),
+      "Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30000);\n");
+    writeInputs("blocked preload");
+    const run = runChat(["--timeout", "1", "--wrap-timeout", "2"],
+      { PATH: `${pkgBin}${path.delimiter}${process.env.PATH || ""}` });
+    const result = jsonResult(run);
+    assert.equal(run.status, 1);
+    assert.equal(result.status, "timeout");
+    assert.equal(result.fetch_timeout_guard, "preload_failed");
+    assert.equal(fs.readFileSync(invocationLog, "utf8"), "");
+    assert.deepEqual(fs.readdirSync(wrapperTmp), []);
+  } finally { removeFakePackage(pkgRoot, pkgBin, entry); }
+});
+
 test("the mmx config proxy key downgrades the guard the way mmx-cli reads it", () => {
-  if (process.platform === "win32") return;
   const { pkgRoot, pkgBin, entry } = buildFakePackage();
   const envDumpPath = path.join(root, "env-dump.json");
   const noProxy = Object.fromEntries(["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy",
@@ -786,7 +842,6 @@ test("the mmx config proxy key downgrades the guard the way mmx-cli reads it", (
 });
 
 test("proxy variables downgrade the preloaded guard to proxy_limited", () => {
-  if (process.platform === "win32") return;
   const { pkgRoot, pkgBin, entry } = buildFakePackage();
   const envDumpPath = path.join(root, "env-dump.json");
   try {

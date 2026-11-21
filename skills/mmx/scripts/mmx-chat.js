@@ -641,6 +641,15 @@ async function main() {
   telemetry.base_url_env = launch.base_url_env;
 
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mmx-chat-"));
+  let guardStatusFile = null;
+  if (["preloaded", "proxy_limited"].includes(launch.fetch_timeout_guard)) {
+    guardStatusFile = path.join(tempDir, "fetch-guard-status");
+    tempFiles.add(guardStatusFile);
+    // Remove differently-cased inherited keys on Windows before assigning the
+    // private acknowledgement path owned by this invocation.
+    delete launch.env[envKey(launch.env, "MMX_CHAT_FETCH_GUARD_STATUS", process.platform)];
+    launch.env.MMX_CHAT_FETCH_GUARD_STATUS = guardStatusFile;
+  }
   const messages = [];
   if (system.trim()) messages.push({ role: "system", content: system });
   messages.push({ role: "user", content: prompt });
@@ -658,6 +667,20 @@ async function main() {
   const requestStarted = Date.now();
   const chat = await runCmd(mmx.cmd, [...launch.argsPrefix, ...chatArgs], wrapperTimeout, mmx.shell, launch.env);
   const elapsedMs = Date.now() - requestStarted;
+  if (guardStatusFile) {
+    let initialized = false;
+    try {
+      initialized = fs.lstatSync(guardStatusFile).isFile() && fs.readFileSync(guardStatusFile, "utf8") === "applied\n";
+    } catch {}
+    if (!initialized) {
+      telemetry.fetch_timeout_guard = "preload_failed";
+      if (chat.kind === "closed") {
+        fail({ status: "guard_error", exit_code: chat.code,
+          error: "MMX fetch timeout guard initialization could not be confirmed." });
+        return;
+      }
+    }
+  }
   if (chat.kind !== "closed") {
     const status = chat.kind === "spawn_error" ? "api_error" : chat.kind;
     fail({

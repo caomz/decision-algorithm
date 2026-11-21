@@ -355,7 +355,7 @@ describe("cli run smoke", () => {
 test("SIGTERM mid-run cancels but preserves the bound FAIL", { timeout: 60000, skip: process.platform === "win32" && "POSIX signal semantics; Windows process-tree cancellation requires separate native tests" }, async () => {
   const out = path.join(root, "cli-cancel");
   const child = spawn(process.execPath, [RUNNER, "run", "--backend", "fixture", "--scenario", "zcode-fail-mmx-hang", "--packet", packetFile, "--out", out], {
-    stdio: ["ignore", "pipe", "pipe"], env: { ...process.env },
+    stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ZMX_TEST_CLOSE_MARKER: "1" },
   });
   let stdout = "";
   child.stdout.on("data", data => { stdout += data; });
@@ -363,6 +363,11 @@ test("SIGTERM mid-run cancels but preserves the bound FAIL", { timeout: 60000, s
   const mmxStarted = path.join(out, "mmx-observed-input.json");
   for (let i = 0; i < 200 && !fs.existsSync(mmxStarted); i++) await new Promise(resolve => setTimeout(resolve, 100));
   assert.ok(fs.existsSync(mmxStarted), "mmx side should have started before cancellation");
+  // Wait for the supervisor to observe ZCode close. A fixture's observed
+  // input alone only proves it started, not that its FAIL vote is terminal.
+  const zcodeClosed = path.join(out, "tmp", "zcode-closed.marker");
+  for (let i = 0; i < 200 && !fs.existsSync(zcodeClosed); i++) await new Promise(resolve => setTimeout(resolve, 50));
+  assert.ok(fs.existsSync(zcodeClosed), "zcode close marker must precede cancellation");
   child.kill("SIGTERM");
   const code = await new Promise(resolve => child.once("close", resolve));
   assert.equal(code, 2);
