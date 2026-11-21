@@ -37,7 +37,7 @@ test("cancel marker before the batch starts blocks all paid wrapper calls", t =>
   assert.equal(receipt.status, "cancelled");
   assert.equal(receipt.gate, "NOT_EVALUATED");
   assert.equal(receipt.shards.length, 1);
-  assert.equal(receipt.shards[0], undefined);
+  assert.equal(receipt.shards[0], null, "unstarted shard must not have a fabricated receipt");
 });
 
 test("Windows cancel waits for a cooperative batch acknowledgement before force", {
