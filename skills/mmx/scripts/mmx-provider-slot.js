@@ -44,6 +44,16 @@ function assertPrivateDirectory(dir) {
   if (process.platform !== "win32" && (st.mode & 0o077) !== 0) {
     throw slotError("MMX_SLOT_UNSAFE", "MMX lock directory must not be group/world-accessible");
   }
+  return st;
+}
+
+function assertSameDirectory(dir, expected) {
+  let current;
+  try { current = assertPrivateDirectory(dir); }
+  catch { throw slotError("MMX_SLOT_UNSAFE", "MMX lock directory changed or became inaccessible"); }
+  if (current.dev !== expected.dev || current.ino !== expected.ino) {
+    throw slotError("MMX_SLOT_UNSAFE", "MMX lock directory was replaced");
+  }
 }
 
 // A single slot across every cooperating process on this host/user.
@@ -60,17 +70,20 @@ async function acquireMmxSlot(options = {}) {
   // user-supplied symlink at the exact lock namespace boundary.
   const namespace = path.join(root, "mmx");
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
-  assertPrivateDirectory(root);
+  const rootStat = assertPrivateDirectory(root);
   fs.mkdirSync(namespace, { recursive: true, mode: 0o700 });
-  assertPrivateDirectory(namespace);
+  const namespaceStat = assertPrivateDirectory(namespace);
 
   const lockDir = path.join(namespace, "slot-0");
   const started = Date.now();
   const ownerId = randomUUID();
   while (true) {
     if (signal?.aborted) throw slotError("MMX_SLOT_CANCELLED", "Waiting for the MMX slot was cancelled");
+    assertSameDirectory(root, rootStat);
+    assertSameDirectory(namespace, namespaceStat);
     try {
       fs.mkdirSync(lockDir, { mode: 0o700 });
+      const lockStat = assertPrivateDirectory(lockDir);
       const ownerFile = path.join(lockDir, "owner.json");
       try {
         fs.writeFileSync(ownerFile, JSON.stringify({
@@ -80,6 +93,7 @@ async function acquireMmxSlot(options = {}) {
         try { fs.rmdirSync(lockDir); } catch {}
         throw slotError("MMX_SLOT_IO", "MMX slot owner record could not be written");
       }
+      const ownerStat = fs.lstatSync(ownerFile);
       let released = false;
       return {
         path: lockDir,
@@ -87,10 +101,17 @@ async function acquireMmxSlot(options = {}) {
         release() {
           if (released) return;
           // Never delete another process's lock after an unexpected replacement.
+          assertSameDirectory(root, rootStat);
+          assertSameDirectory(namespace, namespaceStat);
+          assertSameDirectory(lockDir, lockStat);
           let owner;
-          try { owner = JSON.parse(fs.readFileSync(ownerFile, "utf8")); }
+          try {
+            const current = fs.lstatSync(ownerFile);
+            if (!current.isFile() || current.dev !== ownerStat.dev || current.ino !== ownerStat.ino) throw new Error();
+            owner = JSON.parse(fs.readFileSync(ownerFile, "utf8"));
+          }
           catch { throw slotError("MMX_SLOT_UNSAFE", "MMX lock owner record is missing or unreadable"); }
-          if (owner.owner_id !== ownerId || owner.pid !== process.pid) {
+          if (owner?.owner_id !== ownerId || owner.pid !== process.pid) {
             throw slotError("MMX_SLOT_UNSAFE", "MMX lock ownership changed");
           }
           fs.unlinkSync(ownerFile);
@@ -100,7 +121,19 @@ async function acquireMmxSlot(options = {}) {
       };
     } catch (error) {
       if (error.code !== "EEXIST") throw error;
-      const st = fs.lstatSync(lockDir);
+      let st;
+      try { st = fs.lstatSync(lockDir); }
+      catch (statError) {
+        // A cooperating owner can release after mkdir sees EEXIST but before
+        // lstat. The vanished directory is available again, not an I/O failure.
+        if (statError.code === "ENOENT") {
+          if (Date.now() - started >= waitMs) {
+            throw slotError("MMX_SLOT_BUSY", "MMX slot changed while waiting; acquisition deadline expired");
+          }
+          continue;
+        }
+        throw statError;
+      }
       if (!st.isDirectory() || st.isSymbolicLink()) {
         throw slotError("MMX_SLOT_UNSAFE", "MMX slot is not a directory");
       }

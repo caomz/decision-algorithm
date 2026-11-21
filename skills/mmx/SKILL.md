@@ -91,7 +91,7 @@ python3 <CROSS_VALIDATION_SKILL_DIR>/scripts/cross_validate.py validate-review -
 - 请求模型与实际模型不同时分别展示 `requested_model` 和 `model`。模型以响应里的 `model` 为准，CLI 静默回退不改变这个事实。
 - `auth_error`、`quota_error`、`timeout`、`schema_mismatch`、`install_mismatch`、`thinking_budget_exhausted` 等状态按实际分类报告。一次调用结束后交还结论，不自动重试。
 - `thinking_budget_exhausted` 表示 `stop_reason=max_tokens`、只有思考块、没有正文（输出预算被服务端思考吃光），**不是**契约问题：省略或加大 `--max-tokens` 重发，不要去核对 CLI schema。没有正文、但不是 `max_tokens` 结束的回复记 `schema_mismatch`，回执附 `stop_reason` 与 `content_block_types`。
-- 回执的 `fetch_timeout_guard` 说明 wrapper 有没有取消 Node fetch 等待响应的 300 秒上限：`preloaded` 为已预加载；`proxy_limited`（子进程环境有非空的代理变量，或 mmx 配置的 `proxy` 以 `http` 开头）、`undici_not_found`、`guard_missing` 时没有取消；`custom_launcher` 表示 PATH 上的 `mmx` 不是 mmx-cli 包入口（自定义 batch 或启动脚本），由它自己处理。上限还在时，超过 300 秒的非流式回复会以网络错误失败（CLI 退出码 6），回执附 `hint`。
+- 回执的 `fetch_timeout_guard` 说明 wrapper 有没有取消 Node fetch 等待响应的 300 秒上限：`preloaded` 表示预加载器已确认初始化；`preload_failed` / `guard_error` 表示初始化未确认并中止本次调用；`proxy_limited`（子进程环境有非空的代理变量，或 mmx 配置的 `proxy` 以 `http` 开头）、`undici_not_found`、`guard_missing` 时没有取消；`custom_launcher` 表示 PATH 上的 `mmx` 不是 mmx-cli 包入口（自定义 batch 或启动脚本），由它自己处理。上限还在时，超过 300 秒的非流式回复会以网络错误失败（CLI 退出码 6），回执附 `hint`。
 - wrapper 只对 CLI 子进程去掉 `MINIMAX_BASE_URL` 末尾的 `/v1`，回执 `base_url_env` 记 `stripped_v1`、`unchanged` 或 `unset`。HTTP 404 时回执附 `http_status` 与 `hint`；设了该变量时另附只含协议和主机的 `base_url_env_value`。
 - `auth_error` 时提示用户交互运行 `mmx auth login` 后重试；`cli_missing` 时提示 `npm install -g mmx-cli`。
 - 用量缺失保留 `null`，下游做算术前先判空。
