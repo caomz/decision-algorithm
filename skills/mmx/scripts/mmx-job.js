@@ -233,7 +233,7 @@ async function stopBatch(child, closed, job) {
   if (process.platform === "win32") {
     // This path also runs after internal errors, so publish the cooperative
     // cancellation request even if the user did not call 'cancel'.
-    try { fs.writeFileSync(path.join(job, "cancel.request"), "cancel\\n", { flag: "wx", mode: 0o600 }); }
+    try { fs.writeFileSync(path.join(job, "cancel.request"), "cancel\n", { flag: "wx", mode: 0o600 }); }
     catch (error) { if (error.code !== "EEXIST") throw error; }
   }
   signalBatch(child, false);
