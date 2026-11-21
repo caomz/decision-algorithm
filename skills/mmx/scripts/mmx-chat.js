@@ -11,7 +11,6 @@ const os = require("os");
 const path = require("path");
 const { spawn, spawnSync } = require("child_process");
 const { TextDecoder } = require("util");
-const { acquireMmxSlot } = require("./mmx-provider-slot.js");
 
 const VERSION = "2.7.0";
 const FETCH_GUARD = path.join(__dirname, "fetch-timeout-guard.js");
@@ -663,6 +662,15 @@ async function main() {
   const slotAbort = new AbortController();
   let providerSlot = null;
   if (slotEnabled) {
+    // The optional extension is not required for legacy managed-install
+    // validation fixtures or for hosts that have not enabled provider slots.
+    let acquireMmxSlot;
+    try { ({ acquireMmxSlot } = require("./mmx-provider-slot.js")); }
+    catch {
+      fail({ status: "slot_unavailable", code: "MMX_SLOT_MODULE_MISSING",
+        error: "MMX global slot module is missing; no upstream request was made." });
+      return;
+    }
     cancelCurrentRequest = () => slotAbort.abort();
     try {
       providerSlot = await acquireMmxSlot({ signal: slotAbort.signal });
