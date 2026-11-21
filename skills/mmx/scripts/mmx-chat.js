@@ -238,6 +238,7 @@ function runCmd(cmd, args, timeoutSecs, useShell, childEnv, confirmGroup = false
     let grace;
     let deadline;
     let groupCheck;
+    let cancelPoll;
 
     function groupGone() {
       if (!grouped || !child?.pid) return true;
@@ -252,6 +253,7 @@ function runCmd(cmd, args, timeoutSecs, useShell, childEnv, confirmGroup = false
       clearTimeout(grace);
       clearTimeout(deadline);
       clearTimeout(groupCheck);
+      clearInterval(cancelPoll);
       cancelCurrentRequest = null;
       fs.closeSync(stdoutFd);
       fs.closeSync(stderrFd);
@@ -328,6 +330,16 @@ function runCmd(cmd, args, timeoutSecs, useShell, childEnv, confirmGroup = false
       } else if (escalated) finishAfterTree(stopReason);
     });
     timeout = setTimeout(() => stop("timeout", 124), timeoutSecs * 1000);
+    // A Windows supervisor cannot deliver a catchable SIGTERM to Node.
+    // Observe its durable cancellation marker instead of requiring a hard
+    // kill of this wrapper and losing the provider cleanup receipt.
+    const marker = process.env.MMX_CANCEL_REQUEST_FILE;
+    if (marker) {
+      cancelPoll = setInterval(() => {
+        if (fs.existsSync(marker)) stop("cancelled", 130);
+      }, 75);
+      if (fs.existsSync(marker)) stop("cancelled", 130);
+    }
   });
 }
 
@@ -712,6 +724,19 @@ async function main() {
   // on this host. Until Windows and macOS native deployments are validated,
   // existing installations retain their current parallel behavior.
   const slotEnabled = process.env.MMX_GLOBAL_SLOT === "1";
+  if (slotEnabled && process.platform === "win32") {
+    // The native Windows process model cannot prove that a CLI's detached
+    // grandchildren have exited once the root closes. Until a verified Job
+    // Object implementation exists, never promise global-slot safety on Win.
+    fail({ status: "slot_unavailable", code: "MMX_SLOT_WINDOWS_TREE_UNVERIFIED",
+      error: "Windows descendant cleanup is not independently verified; no upstream request was made." });
+    return;
+  }
+  if (process.env.MMX_CANCEL_REQUEST_FILE && fs.existsSync(process.env.MMX_CANCEL_REQUEST_FILE)) {
+    fail({ status: "cancelled", code: "MMX_JOB_CANCEL_REQUESTED",
+      error: "The durable job was cancelled before the CLI request." });
+    return;
+  }
   const slotAbort = new AbortController();
   let providerSlot = null;
   if (slotEnabled) {
