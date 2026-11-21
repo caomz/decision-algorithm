@@ -9,6 +9,8 @@ MMX 一方的文本复核 skill：`/mmx <问题>`、`/mmx review <文件>`、`/m
 > **2026-11-17 三方合并**：macOS 侧 `skills/mmx`（加固 wrapper，受管发布 + review-v1 协议）、Windows 侧 `~/.claude/skills/mmx`（实战版：auth 指引、thinking 分类、mcode 通道、Windows 运维）、官方 `mmx-cli` skill（全模态 CLI 指南）合并为本 skill v2.4.0。
 >
 > **2026-11-18 v2.5.0**：新增 `scripts/mmx-batch.js` 分片批量入口（有界并发池 + 传输层 gate + 预算自愈），修复多分片交叉验证的两大复发故障：裸 CLI 默认 4096 预算截断、逐片串行墙钟求和。
+>
+> **2026-11-19 v2.7.0**：从 macOS 线回传三项修复：预加载 fetch 防护，取消 Node fetch 的 300 秒响应头上限；`thinking_budget_exhausted` 只在 `stop_reason=max_tokens` 时成立；只对子进程去掉 `MINIMAX_BASE_URL` 末尾的 `/v1`，并给 HTTP 404 诊断。wrapper 版本与 `SKILL.md` 统一为 2.7.0，并加一致性测试。只在 macOS 实测过，Windows 待测，见 [test-matrix](references/test-matrix.md)。
 
 ## 外部依赖
 
@@ -49,7 +51,7 @@ mmx/
 | 认证 | 不预检，改为 `auth_error` 附 `mmx auth login` 指引（零额外调用成本） | Windows 版的 `mmx auth status` 预检（实测 2.3s，且可能误判） |
 | gate | 结构化 findings（`kind` + `severity`）计算 | Windows 版的 `[P1]` 字符串匹配（`No [P1] findings` 会误判） |
 | 输出预算 | 不设字节上限，由宿主控制范围 | Windows 版的 256 KiB `prompt_too_large`（仓库版既有测试明确要求不截断） |
-| 思考块 | 归类为 `thinking_budget_exhausted`（预算问题，不是契约漂移） | 归类为 `schema_mismatch`（会误导人去核对 CLI 契约） |
+| 思考块 | `stop_reason=max_tokens` 且只有思考块时归类为 `thinking_budget_exhausted`（预算问题，不是契约漂移）；其他结束原因下没有正文记 `schema_mismatch`，附 `stop_reason` 与块类型（v2.7.0 起） | 一律归类为 `schema_mismatch`（会误导人去核对 CLI 契约） |
 | 错误回执 | 只输出分类、数值码与固定提示，不回显上游原文 | Windows 版的原文回显（需额外脱敏） |
 
 ## 跨平台要点
