@@ -202,9 +202,20 @@ function collectShardFiles(args) {
 
 const liveChildren = new Set();
 let cancelled = false;
+const cancelMarker = process.env.MMX_CANCEL_REQUEST_FILE;
+function cancellationRequested() {
+  // The durable supervisor owns the marker. Do not spawn additional paid
+  // requests after it appears; a wrapper already running polls it as well.
+  if (cancelMarker && fs.existsSync(cancelMarker)) cancelled = true;
+  return cancelled;
+}
 
 function runWrapperOnce(promptFile, fixedArgs) {
   return new Promise(resolve => {
+    if (cancellationRequested()) {
+      resolve({ receipt: { status: "cancelled", complete: false }, duration: 0 });
+      return;
+    }
     const wrapperPath = process.env.MMX_BATCH_WRAPPER || DEFAULT_WRAPPER;
     const args = ["--prompt-file", promptFile, ...fixedArgs];
     let child;
@@ -239,8 +250,8 @@ function runWrapperOnce(promptFile, fixedArgs) {
     child.on("close", (code, signal) => {
       liveChildren.delete(child);
       const duration = (Date.now() - started) / 1000;
-      if (cancelled) {
-        resolve({ receipt: { status: "cancelled", exit_code: code }, duration });
+      if (cancellationRequested()) {
+        resolve({ receipt: { status: "cancelled", complete: false, exit_code: code }, duration });
         return;
       }
       const outText = Buffer.concat(stdout).toString("utf8").trim();
@@ -299,7 +310,7 @@ async function runShardWithRetries(shard, fixedArgs, effectiveBudget, retryBudge
     retryReason = "budget_exhausted";
   }
 
-  if (retryReason === null || cancelled) {
+  if (retryReason === null || cancellationRequested()) {
     return { shard: shard.label, prompt_file: shard.file, retried: false, retry_reason: null,
       duration_seconds: first.duration, ...first.receipt };
   }
@@ -311,13 +322,17 @@ async function runShardWithRetries(shard, fixedArgs, effectiveBudget, retryBudge
     await new Promise(resolve => setTimeout(resolve, delayMs));
     backoffSeconds = delayMs / 1000;
     // A cancellation during the backoff must not spawn a new child.
-    if (cancelled) {
+    if (cancellationRequested()) {
       return { shard: shard.label, prompt_file: shard.file, retried: false, retry_reason: retryReason,
         retry_backoff_seconds: backoffSeconds, duration_seconds: first.duration + backoffSeconds,
         first_attempt: first.receipt, status: "cancelled", complete: false };
     }
     second = await runWrapperOnce(shard.file, fixedArgs);
   } else {
+    if (cancellationRequested()) {
+      return { shard: shard.label, prompt_file: shard.file, retried: false, retry_reason: retryReason,
+        first_attempt: first.receipt, status: "cancelled", complete: false };
+    }
     // Swap the caller budget for the profile budget on the retry attempt.
     const retryArgs = [...fixedArgs];
     const budgetIndex = retryArgs.indexOf("--max-tokens");
@@ -369,7 +384,7 @@ async function main() {
   let nextIndex = 0;
 
   async function worker() {
-    while (!cancelled) {
+    while (!cancellationRequested()) {
       const index = nextIndex++;
       if (index >= shards.length) return;
       results[index] = await runShardWithRetries(shards[index], fixedArgs, effectiveBudget, retryBudget);
@@ -390,10 +405,10 @@ async function main() {
     }
     if (result.retried) retriedCount++;
   }
-  const gate = transportOkCount === shards.length ? "PASS" : "NOT_EVALUATED";
+  const gate = !cancellationRequested() && transportOkCount === shards.length ? "PASS" : "NOT_EVALUATED";
   // Batch status follows transport-level usability, not raw API success: a
   // truncated reply is not a delivered shard even though status was "ok".
-  const batchStatus = transportOkCount === shards.length ? "ok" : (transportOkCount > 0 ? "partial" : "failed");
+  const batchStatus = cancelled ? "cancelled" : transportOkCount === shards.length ? "ok" : (transportOkCount > 0 ? "partial" : "failed");
 
   const envelope = {
     status: batchStatus,
