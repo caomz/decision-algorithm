@@ -12,6 +12,9 @@
 // <skills_root> is REQUIRED: it is the directory that holds agy/, mmx/ and
 // cross-validation/. The marker is written to
 // <skills_root>/.gstack-cross-validation-release.json.
+//
+// Only release file types are pinned (RELEASE_EXTENSIONS). Hidden entries,
+// cache directories and other file types are listed on stderr and left out.
 
 "use strict";
 
@@ -29,6 +32,14 @@ const REQUIRED_FILES = [
 // The wrapper rejects any path segment outside this set, so a file that does
 // not match can never be listed in a manifest it would accept.
 const SAFE_SEGMENT = /^[A-Za-z0-9_.-]+$/;
+// A release pins only these file types: the set the cross-validation installer
+// pins (install_release.py, exact case-sensitive suffix). Everything else under
+// the managed directories stays out of the marker, so files that change on
+// their own (Python bytecode, checksum lists, editor swap files) can never lock
+// the wrapper out with install_mismatch.
+const RELEASE_EXTENSIONS = new Set([".md", ".py", ".js", ".json", ".yaml"]);
+// Generated caches and dependency trees are never release content.
+const VOLATILE_DIRS = new Set(["__pycache__", "node_modules"]);
 
 function usageError(message) {
   process.stderr.write(`repin-release: ${message}\n`);
@@ -55,7 +66,7 @@ function parseArgs(argv) {
   return options;
 }
 
-function walk(root, relative, files, skipped) {
+function walk(root, relative, files, skipped, excluded) {
   const absolute = path.join(root, relative);
   let entries;
   try { entries = fs.readdirSync(absolute, { withFileTypes: true }); }
@@ -69,10 +80,19 @@ function walk(root, relative, files, skipped) {
       skipped.push(childRelative);
       continue;
     }
-    const childAbsolute = path.join(root, ...childRelative.split("/"));
-    if (entry.isDirectory()) walk(root, childRelative, files, skipped);
-    else if (entry.isFile()) files.push(childRelative);
-    else skipped.push(childRelative);
+    // Hidden entries are host metadata (.DS_Store, AppleDouble ._* files) or
+    // tool state (.git, .pytest_cache), never release content.
+    if (entry.name.startsWith(".")) {
+      excluded.push(childRelative);
+      continue;
+    }
+    if (entry.isDirectory()) {
+      if (VOLATILE_DIRS.has(entry.name)) excluded.push(childRelative);
+      else walk(root, childRelative, files, skipped, excluded);
+    } else if (entry.isFile()) {
+      if (RELEASE_EXTENSIONS.has(path.extname(entry.name))) files.push(childRelative);
+      else excluded.push(childRelative);
+    } else skipped.push(childRelative);
   }
 }
 
@@ -86,7 +106,8 @@ function main() {
 
   const files = [];
   const skipped = [];
-  for (const name of MANAGED_DIRS) walk(root, name, files, skipped);
+  const excluded = [];
+  for (const name of MANAGED_DIRS) walk(root, name, files, skipped, excluded);
 
   const digests = {};
   for (const relative of files.sort()) {
@@ -113,7 +134,12 @@ function main() {
 
   if (skipped.length) {
     process.stderr.write(`repin-release: skipped ${skipped.length} path(s) the wrapper cannot verify:\n`);
-    for (const relative of skipped) process.stderr.write(`  - ${relative}\n`);
+    for (const relative of skipped.sort()) process.stderr.write(`  - ${relative}\n`);
+  }
+  if (excluded.length) {
+    process.stderr.write(`repin-release: left ${excluded.length} path(s) out of the marker ` +
+      `(hidden entry, cache directory, or a type other than ${[...RELEASE_EXTENSIONS].join(" ")}):\n`);
+    for (const relative of excluded.sort()) process.stderr.write(`  - ${relative}\n`);
   }
   process.stdout.write(`files: ${Object.keys(digests).length}\n`);
   process.stdout.write(`release_id: ${manifest.release_id}\n`);

@@ -65,7 +65,7 @@ node /Volumes/WorkSSD/.claude/skills/mmx/scripts/repin-release.js \
   --root /Volumes/WorkSSD/.claude/skills
 ```
 
-脚本按 wrapper 的校验契约重建 `.gstack-cross-validation-release.json`；缺必需文件时拒绝写入并列出缺失项，`--dry-run` 只报告不写入。
+脚本按 wrapper 的校验契约重建 `.gstack-cross-validation-release.json`；缺必需文件时拒绝写入并列出缺失项，`--dry-run` 只报告不写入。清单只收 `.md`、`.py`、`.js`、`.json`、`.yaml` 五类发布文件（后缀集合与受管安装器相同，区分大小写）。隐藏条目（`.DS_Store`、`._*`、`.git` 等）、`__pycache__`、`node_modules` 和其他类型的文件不入清单，并在 stderr 逐条列出，所以 Python 重编译或 Finder 写元数据不会再让 wrapper 报 `install_mismatch`。
 
 ## 安装
 
