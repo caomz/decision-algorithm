@@ -584,7 +584,15 @@ test("managed release rejects mixed or interrupted installation before launching
   const slotHome = path.join(root, "managed-slot-home");
   fs.mkdirSync(slotHome, { recursive: true });
   const slotEnv = { MMX_GLOBAL_SLOT: "1", HOME: slotHome, USERPROFILE: slotHome };
-  assert.equal(run(slotEnv).status, "ok", "pinned slot helper remains usable");
+  const pinnedSlot = run(slotEnv);
+  if (process.platform === "win32") {
+    assert.equal(pinnedSlot.status, "slot_unavailable",
+      "Windows refuses an enabled global slot without verified descendant tracking");
+    assert.equal(pinnedSlot.code, "MMX_SLOT_WINDOWS_TREE_UNVERIFIED");
+    assert.equal(pinnedSlot.cli_invoked, false);
+  } else {
+    assert.equal(pinnedSlot.status, "ok", "pinned slot helper remains usable");
+  }
   fs.writeFileSync(marker, JSON.stringify({ ...manifest,
     files: { ...digests, "mmx/scripts/mmx-provider-slot.js": undefined } }));
   const unpinnedSlot = run(slotEnv);
@@ -977,6 +985,13 @@ test("opt-in provider slot is acquired and released after the CLI closes", () =>
   fs.mkdirSync(home, { recursive: true });
   const run = runChat([], { MMX_GLOBAL_SLOT: "1", HOME: home, USERPROFILE: home });
   const result = jsonResult(run);
+  if (process.platform === "win32") {
+    assert.equal(run.status, 1);
+    assert.equal(result.status, "slot_unavailable");
+    assert.equal(result.code, "MMX_SLOT_WINDOWS_TREE_UNVERIFIED");
+    assert.equal(result.cli_invoked, false);
+    return;
+  }
   assert.equal(result.status, "ok", JSON.stringify(result));
   assert.equal(result.provider_slot, "acquired");
   assert.equal(typeof result.provider_slot_wait_ms, "number");
@@ -993,6 +1008,13 @@ test("an unverified provider slot release reports a local recovery condition", (
   const result = jsonResult(run);
   assert.equal(run.status, 1);
   assert.equal(result.status, "slot_unavailable");
+  if (process.platform === "win32") {
+    assert.equal(result.code, "MMX_SLOT_WINDOWS_TREE_UNVERIFIED");
+    assert.equal(result.cli_invoked, false);
+    assert.equal(fs.existsSync(owner), false,
+      "blocked request must not create or modify an owner record");
+    return;
+  }
   assert.equal(result.code, "MMX_SLOT_UNSAFE");
   assert.equal(result.provider_slot, "release_unverified");
   assert.equal(result.cli_invoked, true);
