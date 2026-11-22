@@ -99,6 +99,11 @@ function verify(jobPath) {
         execution.receipt_exists !== true || !execution.outputs ||
         !(Number.isInteger(execution.exit_code) || execution.exit_code === null) ||
         !(execution.signal === null || typeof execution.signal === "string")) throw new Error("execution schema mismatch");
+    // A successfully published receipt cannot erase failed input delivery or
+    // a failed cancellation marker. Those runs stay inspect-only/unknown.
+    if (execution.stdin_error === true || execution.cancel_marker_write_error != null) {
+      throw new Error("input delivery or cancellation evidence is unverified");
+    }
     const stdoutBytes = checkedBytes(path.join(job, "stdout.json"), execution.outputs["stdout.json"]);
     checkedBytes(path.join(job, "stderr.log"), execution.outputs["stderr.log"]);
     const receiptBytes = checkedBytes(path.join(job, "run/receipt.json"), execution.outputs["run/receipt.json"]);
@@ -294,12 +299,17 @@ async function worker(job) {
     });
   } finally { fs.closeSync(out); fs.closeSync(err); }
   let reason = "child_exit";
-  // Subscribe to both child events BEFORE publishing started.json. Otherwise
-  // a disk-full/access-denied fault after spawn can strand the paid wrapper.
-  child.stdin?.on("error", () => { reason = "stdin_error"; });
+  let stdinError = false;
+  let childClosed = false;
+  // Input delivery and business outcome are independent: an EPIPE must never
+  // suppress a later cancellation or the supervisor's deadline.
+  child.stdin?.on("error", () => { stdinError = true; });
   child.once("error", () => { reason = "spawn_error"; });
   const closed = new Promise(resolve => {
-    child.once("close", (code, signal) => resolve({ code, signal }));
+    child.once("close", (code, signal) => {
+      childClosed = true;
+      resolve({ code, signal });
+    });
   });
   try {
     save(path.join(job, "started.json"), { supervisor_pid: process.pid, wrapper_pid: child.pid ?? null, started_at: new Date().toISOString() });
@@ -313,26 +323,62 @@ async function worker(job) {
   }
   // Only AFTER the durable started claim is published may the wrapper receive
   // the previously verified input bytes. A changed disk snapshot cannot slip in.
-  child.stdin?.end(sealedPayload);
+  try {
+    if (child.stdin) child.stdin.end(sealedPayload);
+    else stdinError = true;
+  } catch { stdinError = true; }
   let escalation;
+  let cleanupDeadline;
+  let cleanupStarted = false;
+  let cancelMarkerWriteError = null;
+  let resolveUnclosed;
+  const unclosed = new Promise(resolve => { resolveUnclosed = resolve; });
+  const forceOwned = () => {
+    // Only the ChildProcess returned by THIS worker is eligible for a signal.
+    // Failure cannot be interpreted as proof of process-tree cleanup.
+    try { signalChild(child, "SIGKILL"); } catch {}
+  };
   const stop = nextReason => {
-    if (reason !== "child_exit") return;
-    reason = nextReason;
-    writeCancel(job);
-    // The owned wrapper polls this marker on every platform. Sending SIGTERM
-    // can race its preflight or receipt cleanup even on POSIX. Allow the
-    // bounded 10s version probe plus cleanup to finish before escalation.
-    escalation = setTimeout(() => signalChild(child, "SIGKILL"), 15000);
+    if (cleanupStarted || childClosed || child.exitCode !== null || child.signalCode !== null) return;
+    cleanupStarted = true; // Separate from reason, which may already be spawn_error.
+    if (reason === "child_exit") reason = nextReason;
+    let markerWritten = false;
+    try { writeCancel(job); markerWritten = true; }
+    catch (error) { cancelMarkerWriteError = error?.code || "UNKNOWN"; }
+    // The wrapper normally gets a cooperative 15 s grace. If disk errors make
+    // the marker impossible, force our owned child immediately instead.
+    if (markerWritten) escalation = setTimeout(forceOwned, 15000);
+    else forceOwned();
+    // taskkill / process-group termination can fail or never close. Do not
+    // await the wrapper forever; leave a permanent claim and UNKNOWN evidence.
+    cleanupDeadline = setTimeout(() => resolveUnclosed(null), markerWritten ? 17000 : 2000);
   };
   const cancel = () => stop("cancelled");
   process.on("SIGTERM", cancel); process.on("SIGINT", cancel);
   const cancelPoll = setInterval(() => { if (fs.existsSync(cancelMarker)) cancel(); }, 75);
   // The wrapper owns the request deadline. This independent deadline also covers preflight and cleanup.
   const deadline = setTimeout(() => stop("supervisor_timeout"), (options.timeout + 45) * 1000);
-  const result = await closed;
-  clearTimeout(deadline); clearInterval(cancelPoll); if (escalation) clearTimeout(escalation);
-  if (reason === "child_exit" && fs.existsSync(cancelMarker)) reason = "cancelled";
+  const result = await Promise.race([closed, unclosed]);
+  clearTimeout(deadline); clearInterval(cancelPoll);
+  if (escalation) clearTimeout(escalation);
+  if (cleanupDeadline) clearTimeout(cleanupDeadline);
   process.removeListener("SIGTERM", cancel); process.removeListener("SIGINT", cancel);
+  if (result === null) {
+    // A still-running wrapper may have reached a paid provider. Never invent
+    // a terminal receipt or claim cancellation success.
+    try {
+      save(path.join(job, "cleanup-unverified.json"), { format: 2,
+        request_sha256: requestSha256, reason, stdin_error: stdinError,
+        cancel_marker_write_error: cancelMarkerWriteError, wrapper_started: Boolean(child.pid),
+        note: "Owned wrapper close unobserved after bounded cleanup; do not replay.",
+        observed_at: new Date().toISOString() });
+    } catch {}
+    try { child.stdin?.destroy(); } catch {}
+    child.unref();
+    return;
+  }
+  if (reason === "child_exit" && stdinError) reason = "stdin_error";
+  if (reason === "child_exit" && fs.existsSync(cancelMarker)) reason = "cancelled";
   // Preserve a real negative outcome even if the wrapper died before writing
   // its receipt, but NEVER publish completion or a PASS for a missing receipt.
   const receiptFile = path.join(job, "run/receipt.json");
@@ -345,8 +391,11 @@ async function worker(job) {
   const executionFile = path.join(job, "execution.json");
   save(executionFile, { format: 2, request_sha256: requestSha256, exit_code: result.code,
     signal: result.signal, reason, ended_at: new Date().toISOString(),
-    wrapper_started: Boolean(child.pid), receipt_exists: receiptExists, outputs: outputRecords });
-  if (receiptExists) {
+    wrapper_started: Boolean(child.pid), receipt_exists: receiptExists, outputs: outputRecords,
+    stdin_error: stdinError, cancel_marker_write_error: cancelMarkerWriteError });
+  // A completed wrapper receipt is never eligible for completion when stdin
+  // failed or we could not publish the cooperative cancellation marker.
+  if (receiptExists && !stdinError && cancelMarkerWriteError === null) {
     try {
       // Validate before the final publication; never bless truncated or
       // mismatched output, and never manufacture receipt data.

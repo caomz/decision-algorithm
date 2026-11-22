@@ -24,13 +24,27 @@ Set-Location 'D:\GitHub\decision-algorithm-win'
 }
 ```
 
-若有本地修改，先保留这些修改；不要使用 `reset --hard`、`clean -fd` 或强制切换。仅 Windows checkout 更新；不需要同步 Mac 安装位或 `main`。
+若有本地修改，先保留这些修改；不要使用 `reset --hard`、`clean -fd` 或强制切换。仅 Windows checkout 更新；不需要同步 Mac 安装位或 `main`。本机验收必须固定完整 SHA，并确认分支与所有未跟踪文件：
+
+```powershell
+$branch = (git branch --show-current).Trim()
+$sha = (git rev-parse HEAD).Trim()
+$remote = (git rev-parse origin/windows-zmx-validation-20261121).Trim()
+$changes = @(git status --porcelain --untracked-files=all)
+if ($branch -ne 'windows-zmx-validation-20261121' -or $sha -ne $remote -or $changes.Count -ne 0) {
+    throw 'Branch/SHA/worktree mismatch: stop and preserve the checkout.'
+}
+Write-Host "Exact acceptance SHA: $sha"
+```
 
 ## 2. 在目标电脑做离线验收
 
 ```powershell
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows-zmx-check.ps1 -Offline
 $LASTEXITCODE
+# -Offline 不运行仓库根目录的 Windows helper 单元测试；必须额外执行：
+node --test .\tests\windows-zmx-check.test.cjs
+if ($LASTEXITCODE -ne 0) { throw 'Root Windows helper tests failed.' }
 ```
 
 `-ExecutionPolicy Bypass` 只影响这一个子进程，不会运行 `Set-ExecutionPolicy`、修改注册表或用户配置。若组织策略禁止脚本执行，请遵守本机策略，不要全局降低策略。
@@ -158,6 +172,8 @@ Job 在独立监督进程中执行，查询与取消使用已有目录。取消�
 MMX Windows 监督进程保留约 7 秒协作取消宽限；batch 为 wrapper 预留约 4.5 秒以发布最终回执。前台 batch 的 Ctrl+C 也使用取消标志，保留已完成分片。`--receipt-file` 要使用已有可写目录中的全新文件；已存在或不可写的目标会在启动 wrapper 前拒绝，最终写入失败会返回 `receipt_error` 和非零退出码。
 
 ZCode 的监督进程和 batch 最多预留约 15 秒协作取消宽限，以覆盖最长 10 秒的 CLI 版本预检及清理。准备阶段取消也保留 `cancelled` 回执；不要因为取消没有立即返回，就另开一个相同请求。
+
+新格式 ZCode Job 的 `status=unknown` 或 `verify= incomplete` **也可能表示 worker 或 wrapper 仍在运行**，而不只是已经中断。取消标记写盘失败、stdin EPIPE 或强制结束未获确认时，不可依据 PID 消失、`unknown` 或未发布 completion 推断远端已停止；永久 `worker.lock` 与已有 Job 证据不得清理，不要从头执行同一请求。后台 Job 的 `request.json` 仍引用绝对 wrapper/CLI 路径和代码摘要：更新 Git 仓库或 CLI 前先核对所有 Job，**仍有运行中或未知任务引用的源码、安装与工具路径不得原地覆盖升级**，应保留旧路径、使用隔离的新 checkout，待任务确认完成后再清理。
 
 更新代码后，可继续只读查看已有 MMX Job；`runtime_code=changed_or_missing` 表示当前脚本与旧任务记录不同，不代表旧任务档案损坏。尚未开始的 worker 仍要求代码匹配，不会用新版脚本偷偷重发旧请求。文件系统不支持原子硬链接发布时，`MMX_JOB_PUBLICATION_UNAVAILABLE` 提示改用本地可写 NTFS。
 

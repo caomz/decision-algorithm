@@ -221,3 +221,159 @@ test("abnormal native wrapper exit without receipt stays unknown on all operatin
   assert.equal(supervisor.status(c.job).status, "unknown");
   assert.equal(fs.existsSync(path.join(c.job, "worker.lock")), true);
 });
+function controlledCancelFault(c, scenario, failureCode = null) {
+  const ready = path.join(c.dir, "wrapper-ready");
+  const wrapperExit = path.join(c.dir, "wrapper-failsafe-exit");
+  const stdinSeen = path.join(c.dir, "stdin-error-seen");
+  const deadlineSeen = path.join(c.dir, "supervisor-deadline-seen");
+  const markerErrorSeen = path.join(c.dir, "marker-error-seen");
+  const wrapper = path.join(c.dir, "held-wrapper.cjs");
+  const preload = path.join(c.dir, "worker-inject.cjs");
+  // Independently count receipt material arriving at the fake wrapper.
+  // It deliberately ignores cancellation, so only the worker's bounded
+  // owned-child cleanup can finish promptly. Failsafe prevents test leaks.
+  fs.writeFileSync(wrapper, [
+    'const fs=require("node:fs");',
+    'process.stdin.once("data",()=>{fs.appendFileSync(' + JSON.stringify(c.count) + ',"request\\n");',
+    '  fs.writeFileSync(' + JSON.stringify(ready) + ',"ready",{flag:"wx"});});',
+    'process.stdin.resume();',
+    'setInterval(()=>{},1000);',
+    'setTimeout(()=>{fs.writeFileSync(' + JSON.stringify(wrapperExit) + ',"natural failsafe");process.exit(89);},2500).unref();'
+  ].join("\n"));
+  fs.writeFileSync(preload, [
+    'if(process.argv[2]==="worker"){',
+    ' const fs=require("node:fs"),path=require("node:path"),cp=require("node:child_process");',
+    ' const scenario=' + JSON.stringify(scenario) + ',code=' + JSON.stringify(failureCode) + ';',
+    ' const ready=' + JSON.stringify(ready) + ',seen=' + JSON.stringify(stdinSeen) + ';',
+    ' const mark=' + JSON.stringify(markerErrorSeen) + ',deadline=' + JSON.stringify(deadlineSeen) + ';',
+    ' const wrapper=' + JSON.stringify(wrapper) + ',cancel=' + JSON.stringify(path.join(c.job, "cancel.request")) + ';',
+    ' const origTimeout=global.setTimeout;',
+    ' global.setTimeout=function(fn,ms,...args){',
+    '   const mapped=ms===15000?120:ms===17000?520:ms===2000?250:ms===46000?320:ms;',
+    '   if(ms===46000 && scenario==="epipe-deadline")',
+    '     return origTimeout(function(){fs.writeFileSync(deadline,"deadline",{flag:"wx"});fn();},mapped,...args);',
+    '   return origTimeout(fn,mapped,...args);',
+    ' };',
+    ' if(scenario==="marker-write-error"){',
+    '   const orig=fs.writeFileSync;',
+    '   fs.writeFileSync=function(file,...args){',
+    '     if(String(file)===cancel){orig.call(fs,mark,code,{flag:"wx"});',
+    '       throw Object.assign(new Error("synthetic cancellation marker error"),{code});}',
+    '     return orig.call(this,file,...args);',
+    '   };',
+    ' }',
+    ' if(scenario==="epipe-cancel" || scenario==="epipe-deadline"){',
+    '   const orig=cp.spawn;',
+    '   cp.spawn=function(...args){',
+    '     const child=orig.apply(this,args);',
+    '     if(args[1]?.[0]===wrapper){',
+    '       const poll=setInterval(()=>{',
+    '         if(!fs.existsSync(ready))return;',
+    '         clearInterval(poll);',
+    '         child.stdin.emit("error",Object.assign(new Error("synthetic EPIPE"),{code:"EPIPE"}));',
+    '         fs.writeFileSync(seen,"EPIPE",{flag:"wx"});',
+    '       },10);',
+    '     }',
+    '     return child;',
+    '   };',
+    ' }',
+    ' if(scenario==="force-ignored"){',
+    '   const origSync=cp.spawnSync;',
+    '   cp.spawnSync=function(command,...args){if(command==="taskkill.exe")return {status:0};',
+    '     return origSync.call(this,command,...args);};',
+    '   const origKill=process.kill;',
+    '   process.kill=function(pid,signal){if(pid<0 && signal==="SIGKILL")return true;',
+    '     return origKill.apply(this,arguments);};',
+    ' }',
+    '}',
+  ].join("\n"));
+  supervisor.start(c.job, ["--prompt-file", c.prompt, "--timeout-seconds",
+    scenario === "epipe-deadline" ? "1" : "600"], { wrapperPath: wrapper, spawnWorker: mockedWorker });
+  const child = spawn(process.execPath, ["--require", preload, program, "worker", c.job], {
+    stdio: ["ignore", "pipe", "pipe"], windowsHide: true,
+  });
+  let stderr = "";
+  child.stdout.resume();
+  child.stderr.on("data", chunk => { stderr += chunk; });
+  const closed = new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (code, signal) => resolve({ code, signal, stderr }));
+  });
+  return { child, closed, ready, wrapperExit, stdinSeen, deadlineSeen, markerErrorSeen };
+}
+
+async function boundedWorkerExit(control, ms = 1750) {
+  const outcome = await Promise.race([control.closed, wait(ms).then(() => null)]);
+  assert.ok(outcome, "worker must terminate within bounded cleanup, not wait for fake wrapper failsafe");
+  assert.equal(outcome.code, 0, outcome.stderr);
+  return outcome;
+}
+
+for (const code of ["EACCES", "ENOSPC"]) {
+  test("R53 runtime cancel marker " + code + " forces owned cleanup without replay", { timeout: 12000 }, async t => {
+    const c = fresh("cancel-" + code);
+    const f = controlledCancelFault(c, "marker-write-error", code);
+    t.after(() => { if (f.child.exitCode === null && f.child.signalCode === null) f.child.kill("SIGKILL"); });
+    await until(() => fs.existsSync(f.ready));
+    assert.equal(fs.readFileSync(c.count, "utf8"), "request\n", "one fake backend request");
+    supervisor.cancel(c.job);
+    await until(() => fs.existsSync(f.markerErrorSeen));
+    await boundedWorkerExit(f);
+    const execution = JSON.parse(fs.readFileSync(path.join(c.job, "execution.json"), "utf8"));
+    assert.equal(execution.cancel_marker_write_error, code);
+    assert.equal(execution.receipt_exists, false);
+    assert.equal(supervisor.status(c.job).status, "unknown");
+    assert.equal(supervisor.verify(c.job).integrity, "incomplete");
+    assert.equal(fs.existsSync(path.join(c.job, "completion.json")), false);
+    assert.equal(fs.existsSync(path.join(c.job, "worker.lock")), true);
+    assert.equal(fs.readFileSync(c.count, "utf8"), "request\n", "no second backend request");
+  });
+}
+for (const scenario of ["epipe-cancel", "epipe-deadline"]) {
+  test("R53 EPIPE cannot disable " + scenario + " cleanup or promote PASS", { timeout: 12000 }, async t => {
+    const c = fresh(scenario);
+    const f = controlledCancelFault(c, scenario);
+    t.after(() => { if (f.child.exitCode === null && f.child.signalCode === null) f.child.kill("SIGKILL"); });
+    await until(() => fs.existsSync(f.ready));
+    await until(() => fs.existsSync(f.stdinSeen));
+    if (scenario === "epipe-cancel") supervisor.cancel(c.job);
+    else await until(() => fs.existsSync(f.deadlineSeen));
+    await boundedWorkerExit(f);
+    const execution = JSON.parse(fs.readFileSync(path.join(c.job, "execution.json"), "utf8"));
+    assert.equal(execution.stdin_error, true);
+    assert.equal(execution.reason, scenario === "epipe-cancel" ? "cancelled" : "supervisor_timeout");
+    assert.equal(supervisor.verify(c.job).integrity, "incomplete");
+    assert.equal(supervisor.status(c.job).status, "unknown");
+    assert.equal(fs.existsSync(path.join(c.job, "completion.json")), false);
+    assert.equal(fs.readFileSync(c.count, "utf8"), "request\n");
+  });
+}
+test("R53 repeated cancel and ignored force remain bounded, permanently unknown", { timeout: 12000 }, async t => {
+  const c = fresh("force-failed");
+  const f = controlledCancelFault(c, "force-ignored");
+  t.after(() => { if (f.child.exitCode === null && f.child.signalCode === null) f.child.kill("SIGKILL"); });
+  await until(() => fs.existsSync(f.ready));
+  supervisor.cancel(c.job);
+  supervisor.cancel(c.job); // independent repeated cancellation, no restart
+  await boundedWorkerExit(f);
+  assert.equal(fs.existsSync(f.wrapperExit), false, "worker must not wait for the wrapper's natural exit");
+  assert.equal(fs.existsSync(path.join(c.job, "execution.json")), false);
+  assert.equal(fs.existsSync(path.join(c.job, "completion.json")), false);
+  const unknown = JSON.parse(fs.readFileSync(path.join(c.job, "cleanup-unverified.json"), "utf8"));
+  assert.equal(unknown.wrapper_started, true);
+  assert.equal(supervisor.status(c.job).status, "unknown");
+  assert.equal(fs.existsSync(path.join(c.job, "worker.lock")), true);
+  assert.equal(fs.readFileSync(c.count, "utf8"), "request\n");
+  await until(() => fs.existsSync(f.wrapperExit), 5000); // fixture failsafe cleanup, not a replay
+});
+test("R53 cancellation after child has exited never replays or overwrites completion", { timeout: 12000 }, async () => {
+  const c = fresh("already-exited");
+  const fake = fakeWrapper(c.dir, c.count);
+  supervisor.start(c.job, ["--prompt-file", c.prompt], { wrapperPath: fake, spawnWorker: mockedWorker });
+  assert.equal(await workerOnce(c.job), 0);
+  const completion = fs.readFileSync(path.join(c.job, "completion.json"));
+  assert.equal(supervisor.cancel(c.job).cancel_requested, false);
+  assert.equal(supervisor.cancel(c.job).cancel_requested, false);
+  assert.deepEqual(fs.readFileSync(path.join(c.job, "completion.json")), completion);
+  assert.equal(fs.readFileSync(c.count, "utf8"), "call;");
+});
