@@ -106,6 +106,39 @@ test("BOM/CRLF evidence ID snapshot cannot be rebound even when request digest i
   assert.equal(supervisor.status(c.job).status, "unknown");
 });
 
+
+test("status and verify consume a single hashed request and receipt snapshot", { timeout: 15000 }, async () => {
+  const c = fresh("verified-read-once");
+  const fake = fakeWrapper(c.dir, c.count);
+  supervisor.start(c.job, ["--prompt-file", c.prompt], { wrapperPath: fake });
+  await until(() => fs.existsSync(path.join(c.job, "completion.json")));
+  const request = path.join(c.job, "request.json");
+  const receipt = path.join(c.job, "run", "receipt.json");
+  const original = fs.readFileSync;
+  const counts = new Map([[request, 0], [receipt, 0]]);
+  fs.readFileSync = function(file, ...args) {
+    if (counts.has(file)) {
+      const count = counts.get(file) + 1;
+      counts.set(file, count);
+      // Simulate replacement after the authenticated first read. A second
+      // read would consume different evidence and MUST NOT be attempted.
+      if (count > 1) throw new Error("unsafe second read of verified path");
+    }
+    return original.call(this, file, ...args);
+  };
+  try {
+    const status = supervisor.status(c.job);
+    assert.equal(status.status, "finished");
+    assert.equal(status.integrity, "match");
+    assert.equal(status.receipt.status, "ok");
+    assert.deepEqual([...counts], [[request, 1], [receipt, 1]]);
+  } finally {
+    fs.readFileSync = original;
+  }
+  assert.equal(supervisor.verify(c.job).integrity, "match");
+  assert.equal(fs.readFileSync(c.count, "utf8"), "call;");
+});
+
 test("receipt truncation invalidates completion but never permits re-execution", { timeout: 15000 }, async () => {
   const c = fresh("receipt-truncation");
   const fake = fakeWrapper(c.dir, c.count);

@@ -44,8 +44,9 @@ function checkedBytes(file, expected) {
 }
 function readPinnedRequest(job, { requireRuntime = true } = {}) {
   const recorded = read(path.join(job, "request-digest.json"));
-  checkedBytes(path.join(job, "request.json"), recorded);
-  const request = read(path.join(job, "request.json"));
+  // Parse exactly the bytes whose raw hash was verified, never a second
+  // untrusted read of the same pathname (which could change in between).
+  const request = strictJson(checkedBytes(path.join(job, "request.json"), recorded).toString("utf8"));
   if (request.format !== 2 || !path.isAbsolute(request.wrapper) ||
       !Array.isArray(request.args) || request.args.some(v => typeof v !== "string") ||
       !Array.isArray(request.inputs) || request.inputs.length < 1 || request.inputs.length > 2) {
@@ -82,39 +83,44 @@ function readPinnedRequest(job, { requireRuntime = true } = {}) {
 function verify(jobPath) {
   const job = path.resolve(jobPath);
   try {
-    const { requestSha256, runtimeCode } = readPinnedRequest(job, { requireRuntime: false });
+    const { request, requestSha256, runtimeCode } = readPinnedRequest(job, { requireRuntime: false });
     if (!fs.existsSync(path.join(job, "completion.json"))) {
       return { integrity: "incomplete", job_dir: job, runtime_code: runtimeCode };
     }
     const completion = read(path.join(job, "completion.json"));
     if (completion.format !== 2 || completion.request_sha256 !== requestSha256) throw new Error("completion request mismatch");
-    for (const name of ["attempt.json", "started.json", "execution.json"]) {
-      checkedBytes(path.join(job, name), completion[name]);
-    }
-    const execution = read(path.join(job, "execution.json"));
+    const attemptBytes = checkedBytes(path.join(job, "attempt.json"), completion["attempt.json"]);
+    checkedBytes(path.join(job, "started.json"), completion["started.json"]);
+    const executionBytes = checkedBytes(path.join(job, "execution.json"), completion["execution.json"]);
+    const execution = strictJson(executionBytes.toString("utf8"));
     if (execution.format !== 2 || execution.request_sha256 !== requestSha256 ||
         !["child_exit", "cancelled", "spawn_error", "supervisor_timeout"].includes(execution.reason) ||
         typeof execution.wrapper_started !== "boolean" || typeof execution.receipt_exists !== "boolean" ||
         execution.receipt_exists !== true || !execution.outputs ||
         !(Number.isInteger(execution.exit_code) || execution.exit_code === null) ||
         !(execution.signal === null || typeof execution.signal === "string")) throw new Error("execution schema mismatch");
-    for (const name of ["stdout.json", "stderr.log", "run/receipt.json"]) {
-      checkedBytes(path.join(job, name), execution.outputs[name]);
-    }
-    const attempt = read(path.join(job, "attempt.json"));
+    const stdoutBytes = checkedBytes(path.join(job, "stdout.json"), execution.outputs["stdout.json"]);
+    checkedBytes(path.join(job, "stderr.log"), execution.outputs["stderr.log"]);
+    const receiptBytes = checkedBytes(path.join(job, "run/receipt.json"), execution.outputs["run/receipt.json"]);
+    const attempt = strictJson(attemptBytes.toString("utf8"));
     if (attempt.format !== 2 || attempt.request_sha256 !== requestSha256) throw new Error("attempt request mismatch");
-    const receipt = read(path.join(job, "run/receipt.json"));
-    const stdout = strictJson(fs.readFileSync(path.join(job, "stdout.json"), "utf8").trim());
+    const receipt = strictJson(receiptBytes.toString("utf8"));
+    const stdout = strictJson(stdoutBytes.toString("utf8").trim());
     if (receipt.job_request_sha256 !== requestSha256 ||
         !receipt.job_input_sha256 ||
-        !Array.isArray(read(path.join(job, "request.json")).inputs) ||
-        read(path.join(job, "request.json")).inputs.some(input =>
-          receipt.job_input_sha256[input.name] !== input.sha256) ||
+        !Array.isArray(request.inputs) ||
+        request.inputs.some(input => receipt.job_input_sha256[input.name] !== input.sha256) ||
         JSON.stringify(stdout) !== JSON.stringify(receipt) ||
         (receipt.status === "ok" && (execution.exit_code !== 0 || receipt.complete !== true))) {
       throw new Error("exit, wrapper stdout and receipt disagree");
     }
+    // PID is diagnostic only; no PID check proves remote completion or absence
+    // of billed work, especially on Windows where a PID may be reused.
+    const launch = read(path.join(job, "launch.json"));
+    if (launch.format !== 2 || launch.request_sha256 !== requestSha256 ||
+        launch.job_dir !== job) throw new Error("launch record request mismatch");
     return { integrity: "match", job_dir: job, runtime_code: runtimeCode,
+      supervisor_pid: launch.supervisor_pid ?? null, execution, receipt,
       note: "Only local records are consistent; provider billing and detached descendants are not independently verified." };
   } catch {
     if (!fs.existsSync(path.join(job, "request-digest.json"))) return { integrity: "legacy_unverified", job_dir: job };
@@ -425,8 +431,11 @@ function status(jobPath, { isAlive = alive } = {}) {
       ...(launchError ? { launch_error: launchError } : {}),
       note: "Missing, incomplete or changed job evidence: never resubmit automatically." };
   }
-  return { ...legacyStatus(job, { isAlive }), integrity: "match",
-    runtime_code: evidence.runtime_code };
+  // Reuse the objects parsed from verified buffers. Do not reopen a receipt
+  // after verify() or let a second path read silently promote altered bytes.
+  return { status: "finished", job_dir: job, supervisor_pid: evidence.supervisor_pid,
+    execution: evidence.execution, receipt: evidence.receipt,
+    integrity: "match", runtime_code: evidence.runtime_code };
 }
 
 if (require.main === module) {
