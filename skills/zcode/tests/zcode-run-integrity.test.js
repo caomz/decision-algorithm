@@ -266,7 +266,7 @@ function controlledCancelFault(c, scenario, failureCode = null) {
     '   const orig=cp.spawn;',
     '   cp.spawn=function(...args){',
     '     const child=orig.apply(this,args);',
-    '     if(args[1]?.[0]===wrapper){',
+    '     if(args[1]?.[0] && fs.realpathSync(args[1][0])===fs.realpathSync(wrapper)){',
     '       const poll=setInterval(()=>{',
     '         if(!fs.existsSync(ready))return;',
     '         clearInterval(poll);',
