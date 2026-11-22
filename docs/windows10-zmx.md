@@ -144,6 +144,7 @@ node .\skills\mmx\scripts\mmx-job.js verify $mmxJob
 $zcodeJob = Join-Path $jobs ('zcode-' + [Guid]::NewGuid().ToString('N'))
 node .\skills\zcode\scripts\zcode-run.js start $zcodeJob --prompt-file $prompt --timeout-seconds 600
 node .\skills\zcode\scripts\zcode-run.js status $zcodeJob
+node .\skills\zcode\scripts\zcode-run.js verify $zcodeJob
 ```
 
 需要取消该 ZCode 任务时：

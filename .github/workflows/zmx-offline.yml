@@ -61,6 +61,10 @@ jobs:
           node --check skills/mmx/scripts/mmx-provider-slot.js
           node --check skills/zcode-mmx-review/scripts/review-run.js
           node --check skills/zcode-mmx-review/scripts/shard-coverage.js
+      - name: ZCode release manifest repin consistency
+        run: |
+          node skills/zcode/scripts/repin-release.js
+          git diff --exit-code -- skills/zcode/.zcode-release.json
       - name: Windows operations helper regression
         run: node --test tests/windows-zmx-check.test.cjs
       - name: Windows PowerShell 5.1 acceptance in a space and Unicode path
