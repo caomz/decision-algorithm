@@ -617,6 +617,19 @@ function classifyReply(out, err, exitCode) {
     input_tokens: tokenCount(body.usage?.input_tokens), output_tokens: tokenCount(body.usage?.output_tokens),
   };
   const contentBlockTypes = body.content.map(block => block.type);
+  // An explicitly selected model is an execution contract, not a suggestion.
+  // A mismatched response might still be complete and billable, so preserve
+  // the actual model/text/usage while denying a usable success verdict.
+  // Check before the empty-text and budget branches: even a thinking-only
+  // or truncated response from the wrong model must never invite a retry.
+  if (requestedModel !== null && body.model !== requestedModel) {
+    return {
+      status: "model_mismatch", exit_code: exitCode, text,
+      ...responseMetadata, response_complete: !truncated, complete: false,
+      content_block_types: contentBlockTypes,
+      note: "Provider response model differs from the explicitly requested model; do not retry automatically.",
+    };
+  }
   if (!text.trim()) {
     // Server-side thinking counts against the output budget. A max_tokens stop
     // with thinking blocks and no answer text is a budget problem, not drift;
@@ -633,13 +646,7 @@ function classifyReply(out, err, exitCode) {
       content_block_types: contentBlockTypes,
     };
   }
-  const result = {
-    status: "ok", exit_code: exitCode, text, ...responseMetadata,
-  };
-  if (requestedModel && result.model !== requestedModel) {
-    result.warning = "requested model was not used; compare requested_model and model";
-  }
-  return result;
+  return { status: "ok", exit_code: exitCode, text, ...responseMetadata };
 }
 
 async function main() {

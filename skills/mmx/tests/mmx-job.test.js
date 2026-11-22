@@ -25,9 +25,13 @@ fs.writeFileSync(fakeBatch, [
   'if (!JSON.parse(fs.readFileSync(profile,"utf8")).format) throw new Error("profile not snapshotted");',
   'fs.appendFileSync(process.env.MMX_JOB_FAKE_COUNTER, "1\\n");',
   'const done = () => {',
-  '  const result = {status:"ok",gate:"PASS",batch:{shards:1},shards:[{status:"ok",complete:true,truncated:false}]};',
+  '  const mismatch = args.includes("--model") && args[args.indexOf("--model")+1] === "Expected-M3";',
+  '  const result = mismatch',
+  '    ? {status:"failed",gate:"NOT_EVALUATED",batch:{shards:1,retried:0},shards:[{status:"model_mismatch",complete:false,model:"Wrong-M3",requested_model:"Expected-M3",retried:false}]}',
+  '    : {status:"ok",gate:"PASS",batch:{shards:1},shards:[{status:"ok",complete:true,truncated:false}]};',
   '  fs.writeFileSync(receipt,JSON.stringify(result),{flag:"wx"});',
   '  process.stdout.write(JSON.stringify(result)+"\\n");',
+  '  if (mismatch) process.exitCode = 1;',
   '};',
   'if (process.env.MMX_JOB_TEST_HANG === "1") {',
   '  if (process.env.MMX_JOB_IGNORE_TERM === "1") process.on("SIGTERM",()=>{});',
@@ -64,6 +68,25 @@ test("persisted snapshots survive source changes and completed receipt is querya
   assert.equal(fs.readFileSync(path.join(launched.job_dir,"input/shard-0.txt"),"utf8"),"SYNTHETIC REQUEST A\n");
   fs.writeFileSync(prompt,"SYNTHETIC REQUEST A\n");
 });
+test("model mismatch persists as a failed job and inspection cannot replay it", async () => {
+  const job = start(path.join(root,"model-mismatch-job"),
+    ["--prompt-file",prompt,"--concurrency","1","--model","Expected-M3","--allow-paid-retry"],
+    {batchPath:fakeBatch}).job_dir;
+  const completed = await until(() => status(job).status==="finished" && status(job));
+  assert.equal(completed.execution.exit_code,1);
+  assert.equal(completed.receipt.status,"failed");
+  assert.equal(completed.receipt.gate,"NOT_EVALUATED");
+  assert.equal(completed.receipt.shards[0].status,"model_mismatch");
+  assert.equal(completed.receipt.shards[0].model,"Wrong-M3");
+  assert.equal(completed.receipt.shards[0].retried,false);
+  assert.equal(verify(job).integrity,"match");
+  const before=fs.readFileSync(counter,"utf8");
+  const resumed=spawnSync(process.execPath,[script,"resume",job],{encoding:"utf8"});
+  assert.equal(resumed.status,0);
+  assert.equal(JSON.parse(resumed.stdout).resume_policy,"inspect_only_no_automatic_replay");
+  assert.equal(fs.readFileSync(counter,"utf8"),before);
+});
+
 test("repeat start is rejected and does not spawn or spend a second request",async()=>{
   const first=startFake("duplicate");
   assert.throws(()=>startFake("duplicate"),/EEXIST/);

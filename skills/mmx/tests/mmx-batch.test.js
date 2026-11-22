@@ -43,6 +43,11 @@ if (prompt.includes("CHILD_ERR")) { process.stdout.write("definitely not json");
 if (prompt.includes("OK_BAD_EXIT")) { emit(ok()); process.exitCode = 9; return; }
 if (prompt.includes("OK_SIGNAL")) { process.stdout.write(JSON.stringify(ok()) + "\\n", () => process.kill(process.pid,"SIGTERM")); return; }
 if (prompt.includes("FAIL_SHARD")) { emit({ status: "api_error", error: "upstream failed", exit_code: 1 }); return; }
+if (prompt.includes("MODEL_MISMATCH")) {
+  emit(ok({ status: "model_mismatch", complete: false, model: "Wrong-M3",
+    requested_model: "Expected-M3", response_complete: true }));
+  process.exitCode = 1; return;
+}
 if (prompt.includes("TRUNCATE") && invocations === 0) { emit(ok({ stop_reason: "max_tokens", complete: false, truncated: true })); process.exitCode = 1; return; }
 if (prompt.includes("THINK") && invocations === 0) { emit({ status: "thinking_budget_exhausted", exit_code: 1, note: "budget consumed by thinking" }); process.exitCode = 1; return; }
 if (prompt.includes("QUOTA") && invocations === 0) { emit({ status: "quota_error", error: "rate limited", exit_code: 1 }); process.exitCode = 1; return; }
@@ -164,6 +169,21 @@ test("all shards ok: gate PASS, input order preserved", () => {
   assert.equal(receipt.status, "ok");
   assert.deepEqual(receipt.shards.map(s => s.shard), ["p2", "p1"]);
   assert.equal(receipt.batch.transport_ok, 2);
+});
+
+test("mismatched model cannot pass a batch or trigger even an authorized retry", () => {
+  const file = shardFile("model-mismatch.txt", "MODEL_MISMATCH synthetic");
+  const receipt = receiptOf(runBatch([
+    "--prompt-file", file, "--model", "Expected-M3", "--allow-paid-retry",
+  ]));
+  assert.equal(receipt.status, "failed");
+  assert.equal(receipt.gate, "NOT_EVALUATED");
+  assert.equal(receipt.shards[0].status, "model_mismatch");
+  assert.equal(receipt.shards[0].model, "Wrong-M3");
+  assert.equal(receipt.shards[0].requested_model, "Expected-M3");
+  assert.equal(receipt.shards[0].retried, false);
+  assert.equal(receipt.batch.retried, 0);
+  assert.equal(fs.readFileSync(path.join(stateDir, "model-mismatch.txt"), "utf8"), "1");
 });
 
 test("one truncated shard: gate NOT_EVALUATED and exit code 1", () => {

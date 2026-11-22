@@ -232,13 +232,35 @@ test("BOM, Chinese, shell metacharacters, system, and model are preserved withou
   assert.ok(args.includes("MiniMax-M2.7"));
 });
 
-test("requested model fallback adds a warning without changing ok status", () => {
+test("explicit model mismatch fails closed while preserving actual response evidence", () => {
   writeInputs("model test");
-  const result = jsonResult(runChat(["--model", "Unknown-Model"]));
-  assert.equal(result.status, "ok");
-  assert.match(result.warning, /requested model was not used/);
-  assert.equal(result.requested_model, "Unknown-Model");
-  assert.equal(result.model, "MiniMax-M3");
+  for (const [mode, expectedText, expectedStop, expectedTruncated] of [
+    ["success", "MMX_OK", "end_turn", false],
+    ["truncated", "MMX_OK", "max_tokens", true],
+    ["thinking_only_truncated", "", "max_tokens", true],
+  ]) {
+    const run = runChat(["--model", "Unknown-Model"], { FAKE_MODE: mode });
+    const result = jsonResult(run);
+    assert.equal(run.status, 1, mode);
+    assert.equal(result.status, "model_mismatch", mode);
+    assert.equal(result.complete, false, mode);
+    assert.equal(result.response_complete, !expectedTruncated, mode);
+    assert.equal(result.requested_model, "Unknown-Model", mode);
+    assert.equal(result.model, "MiniMax-M3", mode);
+    assert.equal(result.model_identity_source, "response.model", mode);
+    assert.equal(result.stop_reason, expectedStop, mode);
+    assert.equal(result.truncated, expectedTruncated, mode);
+    assert.equal(result.text, expectedText, mode);
+    assert.equal(result.input_tokens, 12, mode);
+    assert.equal(result.output_tokens, 3, mode);
+    assert.deepEqual(fs.readFileSync(invocationLog, "utf8").trim().split("\n"), ["text chat"], mode);
+  }
+  const matching = runChat(["--model", "MiniMax-M3"]);
+  assert.equal(matching.status, 0);
+  assert.equal(jsonResult(matching).status, "ok");
+  const unspecified = runChat([]);
+  assert.equal(unspecified.status, 0);
+  assert.equal(jsonResult(unspecified).status, "ok");
 });
 
 test("leading CLI noise is tolerated and max_tokens is marked truncated", () => {
