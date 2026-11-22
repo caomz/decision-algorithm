@@ -93,6 +93,7 @@ test("PowerShell entry is ASCII so Windows PowerShell 5.1 does not misdecode its
 test("Windows 11 explicit target accepts only reviewed x64 client builds", () => {
   const win = (build, product = 1, version = "10.0." + build, architecture = "64-bit") =>
     ({ windows: { version, build_number: String(build), product_type: product, os_architecture: architecture,
+      native_machine: 0x8664, process_machine: 0, processor_architecture_code: 9,
       caption: "Microsoft Windows 11 Home" } });
   assert.equal(targetMatch(win(19045), "windows10", "win32", "x64"), true);
   assert.equal(targetMatch(win(19045), "windows11", "win32", "x64"), false);
@@ -105,6 +106,7 @@ test("Windows 11 explicit target accepts only reviewed x64 client builds", () =>
   assert.equal(targetMatch(win(26000), "windows11", "win32", "x64"), false);
   assert.equal(targetMatch(win(22631, 1, "10.0.19045"), "windows11", "win32", "x64"), false);
   assert.equal(targetMatch(win(22631, 1, "10.0.22631", "32-bit"), "windows11", "win32", "x64"), false);
+  assert.equal(targetMatch(win(22631, 1, "10.0.22631", "ARM64"), "windows11", "win32", "x64"), false);
   assert.equal(targetMatch(win(22631), "windows11", "win32", "ia32"), false);
   assert.equal(targetMatch(win(22631), "windows11", "linux", "x64"), false);
 });
@@ -127,4 +129,50 @@ test("OS target defaults Windows 10, supports explicit Win11 and rejects invalid
   assert.equal(parseArgs([...base, "--target-os", "windows11"]).targetOs, "windows11");
   assert.throws(() => parseArgs([...base, "--target-os", "windows_server"]));
   assert.throws(() => parseArgs([...base, "--target-os", "windows11", "--target-os", "windows10"]));
+});
+test("native x64 proof rejects ARM64 emulation, missing API or WMI, and conflicts", () => {
+  const good = { windows: { version: "10.0.22631", build_number: "22631",
+    product_type: 1, os_architecture: "64-bit", native_machine: 0x8664,
+    process_machine: 0, processor_architecture_code: 9 } };
+  const accept = o => targetMatch(o, "windows11", "win32", "x64");
+  assert.equal(accept(good), true, "verified native AMD64 remains accepted");
+  const variants = [
+    ["ARM64 plus x64 emulated Node", { native_machine: 0xAA64, processor_architecture_code: 12 }],
+    ["ARM64 pretending 64-bit", { native_machine: 0xAA64, os_architecture: "64-bit" }],
+    ["API native evidence missing", { native_machine: undefined }],
+    ["API returned unknown", { native_machine: 0 }],
+    ["WMI evidence missing", { processor_architecture_code: undefined }],
+    ["WMI returned unknown", { processor_architecture_code: null }],
+    ["WMI disagrees with native API", { processor_architecture_code: 12 }],
+    ["native machine disagrees with WMI", { native_machine: 0xAA64 }],
+    ["PowerShell x86 emulated", { process_machine: 0x014c }],
+    ["PowerShell process probe missing", { process_machine: undefined }],
+    ["ARM64 label despite x64 claims", { os_architecture: "ARM64" }],
+  ];
+  for (const [name, patch] of variants) {
+    assert.equal(accept({ windows: { ...good.windows, ...patch } }), false, name);
+    assert.equal(targetMatch({ windows: { ...good.windows, ...patch } }, "windows10", "win32", "x64"), false, name + " win10");
+  }
+  assert.equal(targetMatch({ windows: { ...good.windows, native_machine: "34404" } }, "windows11", "win32", "x64"), false);
+  assert.equal(targetMatch(good, "windows11", "win32", "arm64"), false, "x64 Node required");
+});
+
+test("PowerShell captures separate native host and WMI architecture with failure-closed metadata", () => {
+  const ps = fs.readFileSync(path.join(__dirname, "../scripts/windows-zmx-check.ps1"), "utf8");
+  assert.match(ps, /IsWow64Process2/);
+  assert.match(ps, /Win32_Processor/);
+  assert.match(ps, /native_machine\s*=\s*\$nativeMachine/);
+  assert.match(ps, /processor_architecture_code\s*=\s*\$processorArchitectureCode/);
+  assert.doesNotMatch(ps, /PROCESSOR_ARCHITECTURE=\S+/);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "zmx-native-host-"));
+  try {
+    const file = path.join(root, "host.json");
+    fs.writeFileSync(file, JSON.stringify({ windows: { native_machine: 0xAA64, process_machine: 0x8664,
+      processor_architecture_code: 12, os_architecture: "ARM64", extra_secret: "do_not_forward" } }));
+    const safe = readHost(file).windows;
+    assert.equal(safe.native_machine, 0xAA64);
+    assert.equal(safe.process_machine, 0x8664);
+    assert.equal(safe.processor_architecture_code, 12);
+    assert.equal(safe.extra_secret, undefined);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

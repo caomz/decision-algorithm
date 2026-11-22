@@ -49,8 +49,15 @@ const WINDOWS11_EOL = {
 };
 function targetMatch(metadata, targetOs, platform = process.platform, nodeArch = process.arch) {
   const win = metadata?.windows;
+  // Three separate measurements are required: Node runtime architecture,
+  // the native host machine from IsWow64Process2, and WMI processor type.
+  // PowerShell itself must not be executing under WOW emulation. A string
+  // containing "64" (notably "ARM64") is never adequate evidence.
+  const osArch = String(win?.os_architecture || "");
   if (platform !== "win32" || nodeArch !== "x64" || !win || Number(win.product_type) !== 1 ||
-      !/64/.test(String(win.os_architecture || ""))) return false;
+      win.native_machine !== 0x8664 || win.process_machine !== 0 ||
+      win.processor_architecture_code !== 9 ||
+      !/64/.test(osArch) || /arm|32/i.test(osArch)) return false;
   const version = /^10\.0\.(\d+)$/.exec(String(win.version || ""));
   const build = Number(win.build_number);
   if (!version || !Number.isSafeInteger(build) || Number(version[1]) !== build) return false;
@@ -158,7 +165,8 @@ function readHost(file) {
   const host = JSON.parse(fs.readFileSync(file, "utf8").replace(/^\uFEFF/, ""));
   // Only accept the fields this script actually reports. Never forward arbitrary metadata.
   const safe = {};
-  for (const [section, keys] of Object.entries({ powershell: ["version", "edition"], windows: ["caption", "version", "build_number", "product_type", "os_architecture"], jobs_volume: ["file_system", "drive_type"] })) {
+  for (const [section, keys] of Object.entries({ powershell: ["version", "edition"], windows: ["caption", "version", "build_number", "product_type", "os_architecture",
+      "native_machine", "process_machine", "processor_architecture_code"], jobs_volume: ["file_system", "drive_type"] })) {
     if (!host[section]) continue;
     safe[section] = {};
     for (const key of keys) {
@@ -183,6 +191,17 @@ function run(options, root = ROOT) {
       node_arch: process.arch, npm: npmVersion() };
     report.requested_target = options.targetOs ?? "windows10";
     report.observed_host = report.environment.host_class;
+    const native = metadata.windows?.native_machine;
+    const powershellMachine = metadata.windows?.process_machine;
+    report.environment.architecture = {
+      native_machine: native ?? null,
+      powershell_machine: powershellMachine ?? null,
+      processor_architecture_code: metadata.windows?.processor_architecture_code ?? null,
+      node_arch: process.arch,
+      emulation: native === 0xAA64 && process.arch === "x64" ? "x64_on_arm64"
+        : native === 0x8664 && powershellMachine === 0 && process.arch === "x64" ? "none"
+        : "unknown_or_emulated",
+    };
     report.target_match = targetMatch(metadata, report.requested_target);
     report.support_status = supportStatus(metadata, report.requested_target);
     report.acceptance_scope = options.offline ? "offline_diagnostics_only" : "native_client_preflight";

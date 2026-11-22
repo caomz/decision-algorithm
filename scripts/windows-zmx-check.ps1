@@ -32,6 +32,43 @@ try {
     $JobsRoot = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($JobsRoot)
     $ReportPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($ReportPath)
     $windows = $null
+    # Read native host and WOW process machine from the Windows kernel.
+    # GetNativeSystemInfo alone is insufficient: on ARM64 under x64 emulation
+    # it can report the emulated x64 machine. Fail closed if this probe fails.
+    $nativeMachine = $null
+    $processMachine = $null
+    try {
+        if (-not ('ZmxNativeMachineProbe' -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+public static class ZmxNativeMachineProbe {
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr GetCurrentProcess();
+    [DllImport("kernel32.dll", SetLastError=true)]
+    private static extern bool IsWow64Process2(IntPtr process, out ushort processMachine, out ushort nativeMachine);
+    public static int[] Read() {
+        ushort processMachine;
+        ushort nativeMachine;
+        if (!IsWow64Process2(GetCurrentProcess(), out processMachine, out nativeMachine))
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        return new int[] { (int)processMachine, (int)nativeMachine };
+    }
+}
+'@ -ErrorAction Stop
+        }
+        $machines = [ZmxNativeMachineProbe]::Read()
+        $processMachine = [int]$machines[0]
+        $nativeMachine = [int]$machines[1]
+    } catch { }
+    # Independent WMI processor architecture corroboration (9=x64, 12=ARM64).
+    $processorArchitectureCode = $null
+    try {
+        $cpus = @(Get-CimInstance -ClassName Win32_Processor -ErrorAction Stop)
+        $codes = @($cpus | ForEach-Object { [int]$_.Architecture } | Sort-Object -Unique)
+        if ($codes.Count -eq 1) { $processorArchitectureCode = [int]$codes[0] }
+    } catch { }
     try {
         $osInfo = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop
         $windows = [ordered]@{
@@ -40,6 +77,9 @@ try {
             build_number = [string]$osInfo.BuildNumber
             product_type = [int]$osInfo.ProductType
             os_architecture = [string]$osInfo.OSArchitecture
+            native_machine = $nativeMachine
+            process_machine = $processMachine
+            processor_architecture_code = $processorArchitectureCode
         }
     } catch { }
     $volume = $null
