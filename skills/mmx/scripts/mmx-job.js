@@ -85,6 +85,7 @@ function makeBatchArgs(parsed, prompts, profileFile, receiptFile) {
   if (parsed.maxTokens !== null) args.push("--max-tokens", String(parsed.maxTokens));
   if (parsed.timeout !== null) args.push("--timeout", String(parsed.timeout));
   if (parsed.wrapTimeout !== null) args.push("--wrap-timeout", String(parsed.wrapTimeout));
+  if (parsed.allowPaidRetry === true) args.push("--allow-paid-retry");
   args.push("--profile-file", profileFile, "--receipt-file", receiptFile);
   return args;
 }
