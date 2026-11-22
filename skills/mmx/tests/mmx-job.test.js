@@ -443,7 +443,9 @@ for (const [code, simulateForceFailure] of [["EACCES", false], ["ENOSPC", true]]
     assert.equal(fs.readFileSync(count, "utf8"), before + "request\n", "exactly one fake batch launch");
 
     const failure = JSON.parse(fs.readFileSync(path.join(job, "failure.json"), "utf8"));
-    assert.equal(failure.original_error_code, "EACCES");
+    // writeOnce deliberately normalizes a hard-link EACCES into this stable
+    // publication error code; the distinct cancellation write error remains raw.
+    assert.equal(failure.original_error_code, "MMX_JOB_PUBLICATION_UNAVAILABLE");
     assert.equal(failure.cleanup_error_code, code);
     assert.equal(failure.batch_started, true);
     assert.equal(failure.termination_confirmed, null);
