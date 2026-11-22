@@ -305,6 +305,23 @@ async function runShardWithRetries(shard, fixedArgs) {
 // Gates — transport usability and content review_gate are separate verdicts.
 // ---------------------------------------------------------------------------
 
+// A wrapper's content verdict is only a vote if its independent execution
+// evidence is valid. In particular, Windows may report cleanup_confirmed=null
+// for a clean root exit: that is NOT proof that all CLI descendants exited.
+function reviewVoteEligible(result) {
+  return result.status === "ok" &&
+    result.cli_invoked === true &&
+    result.exit_code === 0 && result.signal === null &&
+    result.wrapper_exit_code === 0 && result.wrapper_signal === null &&
+    result.complete === true && result.truncated === false &&
+    typeof result.model === "string" && result.model.trim().length > 0 &&
+    typeof result.provider === "string" && result.provider.trim().length > 0 &&
+    result.model_identity_source === "runtime.model_request" &&
+    result.tool_calls === 0 && result.tool_requests === 0 &&
+    result.cleanup_confirmed === true &&
+    ["stop", "end_turn", "stop_sequence"].includes(result.stop_reason);
+}
+
 function aggregate(results, shards, args, started, { cancelled: interrupted = false } = {}) {
   let okCount = 0;
   let transportOkCount = 0;
@@ -319,9 +336,10 @@ function aggregate(results, shards, args, started, { cancelled: interrupted = fa
       okCount++;
       if (result.complete === true && result.truncated !== true) {
         transportOkCount++;
-        // Only a fully delivered shard may contribute to the content gate: a
-        // truncated reply must not vote on the review verdict.
-        if (result.review_gate === "PASS") reviewPass++;
+        // Transport completeness is separate from review eligibility. A claimed
+        // PASS or FAIL without valid model/process/cleanup evidence cannot vote.
+        if (!reviewVoteEligible(result)) reviewNotEvaluated++;
+        else if (result.review_gate === "PASS") reviewPass++;
         else if (result.review_gate === "FAIL") reviewFail++;
         else reviewNotEvaluated++;
       } else truncatedCount++;

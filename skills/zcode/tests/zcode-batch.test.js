@@ -40,7 +40,8 @@ fs.writeFileSync(counterFile, String(invocations + 1));
 if (process.env.FAKE_ARGS_DUMP) fs.appendFileSync(process.env.FAKE_ARGS_DUMP, argv.join(" ") + "\\n");
 const ok = extra => Object.assign({
   status: "ok", cli_invoked: true, exit_code: 0, signal: null, complete: true,
-  model: "Fake-GLM", stop_reason: "stop", truncated: false,
+  model: "GLM-5.3-Flash", provider: "ZCode", model_identity_source: "runtime.model_request",
+  tool_calls: 0, tool_requests: 0, stop_reason: "stop", truncated: false,
   usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 },
   review_gate: "NOT_EVALUATED", artifacts_dir: "C:\\\\fake\\\\zcode-text-fake",
   cleanup_confirmed: true, text: "REPLY:" + prompt.trim().slice(0, 30),
@@ -56,6 +57,7 @@ if (prompt.includes("CONC_PROBE")) {
 }
 if (prompt.includes("CHILD_ERR")) { process.stdout.write("definitely not json"); process.exitCode = 1; return; }
 if (prompt.includes("OK_NONZERO")) { emit(ok({ review_gate: "PASS" })); process.exitCode = 2; return; }
+if (prompt.includes("REVIEW_UNCONFIRMED")) { emit(ok({ review_gate: "PASS", cleanup_confirmed: null })); return; }
 if (prompt.includes("REVIEW_PASS")) { emit(ok({ review_gate: "PASS" })); return; }
 if (prompt.includes("REVIEW_FAIL")) { emit(ok({ review_gate: "FAIL" })); return; }
 if (prompt.includes("AUTH_ERR")) { emit({ status: "auth_error", cli_invoked: false, complete: false, review_gate: "NOT_EVALUATED", error: "auth failed" }); return; }
@@ -185,6 +187,59 @@ test("all shards PASS: content and transport gates PASS, input order preserved",
   assert.equal(receipt.status, "ok");
   assert.deepEqual(receipt.shards.map(s => s.shard), ["r2", "r1"]);
   assert.equal(receipt.batch.review_pass, 2);
+});
+
+test("independent vote truth table: missing cleanup, identity or tool evidence cannot PASS or FAIL", () => {
+  const { aggregate } = require("../scripts/zcode-batch.js");
+  const valid = {
+    status: "ok", cli_invoked: true, exit_code: 0, signal: null,
+    wrapper_exit_code: 0, wrapper_signal: null, complete: true, truncated: false,
+    model: "GLM-5.3-Flash", provider: "ZCode",
+    model_identity_source: "runtime.model_request", tool_calls: 0, tool_requests: 0,
+    cleanup_confirmed: true, stop_reason: "stop", review_gate: "PASS",
+  };
+  const verdict = receipt => aggregate([receipt], [{ label: "one" }], { mode: "review" }, Date.now());
+  assert.equal(verdict(valid).gate, "PASS", "a fully eligible verdict remains valid");
+  assert.equal(verdict({ ...valid, review_gate: "FAIL" }).gate, "FAIL", "eligible FAIL remains authoritative");
+  const invalid = [
+    ["cleanup null", { cleanup_confirmed: null }],
+    ["cleanup false", { cleanup_confirmed: false }],
+    ["cleanup missing", { cleanup_confirmed: undefined }],
+    ["not invoked", { cli_invoked: false }],
+    ["model identity missing", { model_identity_source: undefined }],
+    ["wrong identity provenance", { model_identity_source: "environment" }],
+    ["provider missing", { provider: undefined }],
+    ["model missing", { model: undefined }],
+    ["tool call", { tool_calls: 1 }],
+    ["tool request", { tool_requests: 1 }],
+    ["tool count missing", { tool_calls: undefined }],
+    ["CLI exit nonzero", { exit_code: 1 }],
+    ["wrapper exit nonzero", { wrapper_exit_code: 1 }],
+    ["wrapper signal", { wrapper_signal: "SIGTERM" }],
+    ["CLI signal", { signal: "SIGTERM" }],
+    ["nonfinal stop reason", { stop_reason: "length" }],
+    ["truncated", { truncated: true }],
+  ];
+  for (const [label, patch] of invalid) {
+    for (const claimed of ["PASS", "FAIL"]) {
+      const actual = verdict({ ...valid, ...patch, review_gate: claimed });
+      assert.equal(actual.gate, "NOT_EVALUATED", label + " " + claimed);
+      assert.equal(actual.batch.review_not_evaluated, patch.truncated ? 0 : 1, label);
+    }
+  }
+});
+
+test("a clean root exit with unconfirmed descendants never becomes a batch PASS", () => {
+  const file = shardFile("unconfirmed-review.txt", "REVIEW_UNCONFIRMED");
+  const receipt = receiptOf(runBatch([
+    "--prompt-file", file, "--mode", "review", "--evidence-ids-file", idsFile,
+  ]));
+  assert.equal(receipt.status, "ok", "wrapper may have returned a complete response");
+  assert.equal(receipt.transport_gate, "PASS", "transport completion is not cleanup proof");
+  assert.equal(receipt.gate, "NOT_EVALUATED");
+  assert.equal(receipt.batch.review_pass, 0);
+  assert.equal(receipt.batch.review_not_evaluated, 1);
+  assert.equal(receipt.shards[0].cleanup_confirmed, null, "keep the real cleanup evidence");
 });
 
 test("PASS plus FAIL: content gate FAIL but the batch still exits 0", () => {
