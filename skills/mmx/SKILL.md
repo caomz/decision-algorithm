@@ -119,7 +119,7 @@ stdout 恒为单个 JSON，字段与 `mmx-chat.js` 对齐，多出 `effort` 与 
 
 - **300 秒响应头上限**（2026-11-19 macOS 实测）：Node 内置 fetch 等响应头最多 300 秒，非流式回复生成完才发响应头。wrapper 能预加载防护时（`fetch_timeout_guard=preloaded`）不受影响；代理（非空的代理环境变量，或 mmx 配置中以 `http` 开头的 `proxy`，回执记 `proxy_limited`）或自定义启动入口下上限仍在，超时表现为 `api_error`、退出码 6，回执附 `hint`。Windows 尚未实测。
 
-- **裸 CLI 截断陷阱**（2026-11-18 实证）：绕过 wrapper 直接 `mmx text chat` 时 CLI 默认 `--max-tokens 4096`，服务端默认思考计入输出预算，6 断言级评审即可吃光预算出现截断或纯思考回执。所有评审调用必须经 `mmx-chat.js` / `mmx-batch.js`；分片预算自愈由 `mmx-batch.js` 承担。
+- **裸 CLI 截断陷阱**（2026-11-18 实证）：绕过 wrapper 直接 `mmx text chat` 时 CLI 默认 `--max-tokens 4096`，服务端默认思考计入输出预算，6 断言级评审即可吃光预算出现截断或纯思考回执。所有评审调用必须经 `mmx-chat.js` / `mmx-batch.js`；`mmx-batch.js` 默认不自动补发；只有本次用户明确授权且调用方显式传入 `--allow-paid-retry` 时，才允许最多一次额外请求，首轮回执必须保留。
 
 - 服务端**默认就开启思考**（响应含 `{"type":"thinking",...}` 内容块且 `usage.thinking_tokens` 非零），代价是慢且吃 token：一次 `input_tokens 504` 的 prompt 实测 `output_tokens 8732`（几乎全是思考）；一次 10 断言设计评审 prompt 实测 `output_tokens 25793`、耗时超 240s。复杂评审类 prompt 会撞穿默认时限返回 `api_error`(code 5)，这类错误会附 `note` 提示重试或加超时；仍不够时用 `--timeout` / `--wrap-timeout` 调大。
 - wrapper 在 `--output json` 非流式路径只拼接 `type=="text"` 块，**思考块不进 `text`**（返回文本不含推理痕迹），但 `output_tokens` 仍包含 thinking token，做算术前别把两者混为一谈。
@@ -127,6 +127,13 @@ stdout 恒为单个 JSON，字段与 `mmx-chat.js` 对齐，多出 `effort` 与 
 - prompt 与 system 只经临时文件 + JSON encoder 传递，NEVER 出现在 `ps` argv。wrapper 内部临时文件在成功与失败路径都逐个清理；目录内出现非预期文件时保留目录交由系统处理，NEVER 递归删除。外层临时目录留给系统回收，代价是**prompt 与被审内容会以明文残留在系统临时目录**（0600/0700 权限，暴露有界）。
 - **Windows 上 `%TEMP%` 不会主动回收**（macOS/Linux 才有该语义），`mmx` 形态的外层目录会持续积累（含各会话即兴暂存的 `mmxP1.*`、`mmxA.*`、`mmxrun.*`、`mmxdbg3.*` 等）。用 `node scripts/mmx-clean-temp.js` 清理（默认 dry-run 只列清单，`--apply` 才删除；只清理 `os.tmpdir()` 直接子目录中名称匹配 `mmx` + 可选字母数字标签 + 点 + 6–12 位后缀、目录龄超过 24h 的目录；`mmx-chat-*`（wrapper 内部）与 `mcv.*`（mcode 自清）显式豁免，`zcode-text-*` 永不匹配；拒绝 reparse point，删除失败保留并告警）。
 - `mcode-verify.js` 需要在临时目录生成一份含明文 apiKey 的 Runtime 配置（mcode 运行时不支持用环境变量提供 custom provider 的 apiKey），它已做 ACL 收紧 / 即刻删除 / 残留清扫，但 SIGKILL 或断电仍可能留下残留。排查密钥泄漏时优先怀疑本机 `~/.minimax/config.yaml` 与 `%TEMP%\mcv.*`。
+
+## Mac 修复分支安全边界
+
+- 单次 `mmx-chat.js` 仅在用户明确授权下调用；`mmx-batch.js` 默认每片只请求一次，截断、纯思考、配额错误不自动增预算重发。传输 `gate=PASS` 不等于审核内容 `PASS`。
+- `mmx-job.js` 对新任务绑定输入快照、Batch 脚本、Node 版本、wrapper、fetch guard、slot helper 和能够解析到的 CLI 入口身份。旧任务与运行时不匹配的任务只检查，不允许自动重放。`finished` 只代表观察到本地任务结束，须再验证归档与单侧模型回执。
+- 代理路径出现 `fetch_timeout_guard=proxy_limited` 时不得宣称已解除 300 秒限制；315 秒真实 CLI + 回环服务验收仍须由 Mac 本机完成。不要禁用代理、TLS 或改系统配置。
+- 当前 `review-run.js --backend real` 仍禁用。两侧独立调用成功并不等于已实现统一真实双模型审核。Mac 隔离验收参见仓库 `docs/mac-zmx-acceptance.md`；不得自动替换已安装正本。
 
 ## 文本之外的 CLI 能力
 

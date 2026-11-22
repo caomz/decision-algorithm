@@ -1,10 +1,10 @@
 # zcode skill
 
-ZCode CLI 的文本复核封装：单轮 chat、review、challenge。当前版本 **1.4.0**，适配 CLI `0.17.1`。
+ZCode CLI 的文本复核封装：单轮 chat、review、challenge。当前 SKILL / wrapper 版本 **1.5.1**，目标 ZCode runtime CLI `0.17.1`。
 
 > **1.4.0 修复**：`--prompt` 走 argv 撞 Windows 命令行 ~32 KiB 上限会 `spawn ENAMETOOLONG`（大材料复核直接失败）。超过 24 KiB 的 prompt 改为 `--attach` 传私有文件，argv 只保留短指令。
 >
-> **1.3.0 新增** `scripts/zcode-batch.js` 分片批量入口：有界并发池并行执行多片 `zcode-chat.js`，聚合传输层与内容级（review_gate）双 gate，quota/timeout 一次退避重试。单片与易断线场景仍用 `zcode-run.js`。
+> **1.3.0 新增** `scripts/zcode-batch.js` 分片批量入口：有界并发池并行执行多片 `zcode-chat.js`，聚合传输层与内容级（review_gate）双 gate；默认每片最多一次请求，只有当次显式传入 `--allow-paid-retry` 才可能发生第二次收费调用。单片与易断线场景仍用 `zcode-run.js`。
 
 ## 合并来源
 

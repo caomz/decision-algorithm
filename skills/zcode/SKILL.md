@@ -51,6 +51,13 @@ node <ZCODE_SKILL_DIR>/scripts/zcode-batch.js --prompt-file <f1> [--prompt-file 
 - `--concurrency` 默认 2（上限 8，不声称已标定账号限流阈值）；分片目录按 `pN.txt` 自然序整批读取。外层工具超时按 `ceil(片数/并发) × (2×(timeout-seconds+45s) + 30s) + 60s` 预留（两次尝试 + 每试监督余量 + 退避 + 批级余量）。
 - 单片或易断线场景仍用上面的 `zcode-run.js` 持久 job；批量入口面向持续会话的一次宿主工具调用，不宣称自身具备跨终端持久恢复能力。
 
+## Mac 独立安全验收与失败处理
+
+- Mac Batch 默认每片最多一次请求；quota、timeout 等未知状态不能自动重发。只有本次明确授权且显式传入 `--allow-paid-retry` 才可能发生第二次收费调用。审查票必须核对 wrapper 实际退出、原生模型身份、零工具、`cleanup_confirmed=true`、原文与 evidence IDs，不能信任声称的 `review_gate`。
+- 持久 Job 先在私有目录固定 prompt 与 IDs 的原始字节、SHA256 和请求角色；worker 只接受校验通过的已密封输入。`status=unknown` 或 `verify=corrupt/incomplete` 不授权重发；`finished` 不是模型成功的同义词。
+- `--prompt-file` 是包装器接口。**已知原生 ZCode CLI 对较小材料仍通过 argv `--prompt` 传输**；MAC-08 的真正私有文件输入通道未经目标 Mac 证实，严禁将此路径当作敏感材料安全通道。
+- 此代码分支不代表已更新 WorkSSD 受管安装或各个 harness。请按仓库 `docs/mac-zmx-acceptance.md` 先完成隔离验收，不自动改安装树或 Keychain。
+
 ## 执行与结果
 
 默认运行时限 1200 秒（与 MMX `local.json` 1200/1260 对齐）；`--timeout-seconds` 可在本次授权内调整，更大的评审事实包建议显式放宽。宿主前台同步调用仍受宿主工具时限约束，评审规模请求走持久后台 job 或 batch 入口。`--output-dir` 指向一个尚不存在的目录，用于保存输入、完整原始运行流、stderr、启动指纹与 `receipt.json`；省略时在系统临时目录创建并保留私有目录。
