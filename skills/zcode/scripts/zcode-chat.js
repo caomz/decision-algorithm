@@ -44,10 +44,58 @@ function atomicJson(file, value) {
   privateWrite(temporary, JSON.stringify(value, null, 2) + "\n");
   fs.renameSync(temporary, file);
 }
-function readUtf8(file) {
-  const bytes = fs.readFileSync(file);
+function decodeInputBytes(bytes) {
   if (!bytes.length || bytes.includes(0)) fail("input_error");
-  return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  try { return new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
+  catch { fail("input_error"); }
+}
+function readUtf8(file) { return decodeInputBytes(fs.readFileSync(file)); }
+
+// The durable worker sends the SAME verified raw byte buffers through stdin.
+// Never reread a mutable job input path after request verification. Missing,
+// altered or truncated handoff data fails before version probing or CLI launch.
+async function readSealedJobInputs(args) {
+  if (process.env.ZCODE_JOB_SEALED_INPUT_V1 !== "1") return null;
+  const expected = process.env.ZCODE_JOB_REQUEST_SHA256;
+  if (typeof expected !== "string" || !/^[0-9a-f]{64}$/.test(expected)) fail("input_error");
+  const chunks = [];
+  let length = 0;
+  for await (const chunk of process.stdin) {
+    length += chunk.length;
+    if (length > 48 * 1024 * 1024) fail("input_error");
+    chunks.push(chunk);
+  }
+  if (!length) fail("input_error");
+  let message;
+  try {
+    message = strictJson(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks)));
+  } catch { fail("input_error"); }
+  if (!message || message.format !== 1 || message.request_sha256 !== expected ||
+      !Array.isArray(message.inputs) || message.inputs.length !== (args.ids ? 2 : 1)) fail("input_error");
+  const load = (name, file) => {
+    const entries = message.inputs.filter(item => item && item.name === name);
+    if (entries.length !== 1) fail("input_error");
+    const item = entries[0];
+    if (item.file !== file || typeof item.data_base64 !== "string" ||
+        !/^(?:[a-zA-Z0-9+/]{4})*(?:[a-zA-Z0-9+/]{2}==|[a-zA-Z0-9+/]{3}=)?$/.test(item.data_base64) ||
+        !Number.isSafeInteger(item.bytes) || item.bytes < 1 ||
+        typeof item.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(item.sha256)) fail("input_error");
+    const bytes = Buffer.from(item.data_base64, "base64");
+    if (bytes.toString("base64") !== item.data_base64 || bytes.length !== item.bytes ||
+        createHash("sha256").update(bytes).digest("hex") !== item.sha256) fail("input_error");
+    return { bytes, sha256: item.sha256 };
+  };
+  const prompt = load("prompt.txt", args.prompt);
+  const ids = args.ids ? load("evidence-ids.json", args.ids) : null;
+  return {
+    material: decodeInputBytes(prompt.bytes),
+    ids: ids ? validateIds(strictJson(decodeInputBytes(ids.bytes))) : null,
+    request_sha256: expected,
+    input_sha256: {
+      "prompt.txt": prompt.sha256,
+      ...(ids ? { "evidence-ids.json": ids.sha256 } : {}),
+    },
+  };
 }
 // Hash the file with CRLF normalized to LF. Repositories checked out on Windows
 // carry CRLF line endings while the same file checked out on macOS carries LF;
@@ -291,11 +339,23 @@ async function main(argv, deps = {}) {
   const receipt = { status: "input_error", cli_invoked: false, exit_code: null, signal: null, complete: false, model: null, stop_reason: null, truncated: null, usage: null, review_gate: "NOT_EVALUATED" };
   let child;
   let directory;
+  let signalCancelled = false;
+  const onEarlySignal = () => { signalCancelled = true; };
+  process.on("SIGINT", onEarlySignal);
+  process.on("SIGTERM", onEarlySignal);
   try {
     try { checkInstall(); } catch { fail("install_mismatch"); }
     const args = parseArgs(argv);
-    const material = readUtf8(args.prompt);
-    const ids = args.ids ? validateIds(strictJson(readUtf8(args.ids))) : null;
+    const sealed = await readSealedJobInputs(args);
+    const material = sealed ? sealed.material : readUtf8(args.prompt);
+    const ids = sealed ? sealed.ids : (args.ids ? validateIds(strictJson(readUtf8(args.ids))) : null);
+    if (sealed) {
+      receipt.job_request_sha256 = sealed.request_sha256;
+      receipt.job_input_sha256 = sealed.input_sha256;
+    }
+    const cancelMarker = process.env.ZCODE_CANCEL_REQUEST_FILE;
+    const cancellationRequested = () => signalCancelled || Boolean(cancelMarker && fs.existsSync(cancelMarker));
+    if (cancellationRequested()) fail("cancelled");
     const prompt = buildPrompt(material, args.mode, ids);
     const cli = findCli(args.cli);
     const launch = resolveLaunch(cli);
@@ -306,6 +366,8 @@ async function main(argv, deps = {}) {
     // the supported contract is the runtime version, which may be on the second line.
     const runtimeVersion = typeof receipt.cli_version === "string" ? receipt.cli_version.match(/(?:^|\n)zcode-runtime\s+(\S+)/)?.[1] : null;
     if (runtimeVersion) receipt.cli_version = runtimeVersion;
+    await new Promise(resolve => setImmediate(resolve));
+    if (cancellationRequested()) fail("cancelled");
     if (version.status !== 0 || receipt.cli_version !== SUPPORTED_CLI) fail("unsupported_cli");
     if (args.output) {
       const candidate = path.resolve(args.output);
@@ -343,6 +405,7 @@ async function main(argv, deps = {}) {
     const cliArgs = promptBytes > ARGV_PROMPT_LIMIT
       ? [...launch.prefix, "--prompt", ATTACHED_PROMPT, "--attach", attachedFile, "--cwd", work, "--mode", mode, "--output-format", "stream-json", "--workflow-mode", "disabled", "--toolsearch-mode", "off", "--disallowed-tools", DENIED_TOOLS.join(","), "--no-color"]
       : [...launch.prefix, "--prompt", prompt, "--cwd", work, "--mode", mode, "--output-format", "stream-json", "--workflow-mode", "disabled", "--toolsearch-mode", "off", "--disallowed-tools", DENIED_TOOLS.join(","), "--no-color"];
+    if (cancellationRequested()) fail("cancelled");
     child = spawn(launch.command, cliArgs, { cwd: work, env: isolatedEnv(home), shell: false, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });    receipt.cli_invoked = Boolean(child.pid);
     progress("running");
     const stop = status => { if (!problem) { problem = status; termination = terminateTree(child); } };
@@ -414,6 +477,8 @@ async function main(argv, deps = {}) {
     }
     catch { receipt.status = "io_error"; receipt.complete = false; receipt.review_gate = "NOT_EVALUATED"; }
   }
+  process.removeListener("SIGINT", onEarlySignal);
+  process.removeListener("SIGTERM", onEarlySignal);
   return receipt;
 }
 
