@@ -456,9 +456,10 @@ for (const [code, simulateForceFailure] of [["EACCES", false], ["ENOSPC", true]]
     assert.equal(fs.readFileSync(count, "utf8"), before + "request\n", "inspection must not replay");
 
     if (simulateForceFailure) {
-      // A deliberately unkillable fake batch still exits by its own short
-      // failsafe, so this test cannot leave a running fixture after teardown.
-      await until(() => fs.existsSync(failsafe), 7000);
+      // The Windows CI host may terminate the deliberately orphaned fake
+      // along with its worker, before the fake's self-exit sentinel can be
+      // written. The sentinel is fixture housekeeping, NOT proof of cleanup.
+      // The recorded unobserved close and missing completion remain mandatory.
       assert.equal(failure.batch_close_observed, false, "no fabricated termination proof");
     }
   });
