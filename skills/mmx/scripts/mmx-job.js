@@ -8,6 +8,9 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { spawn, spawnSync } = require("node:child_process");
 const { parseArgs, collectShardFiles, readProfileBudget } = require("./mmx-batch.js");
+// Reuse the wrapper's own CLI resolvers so the runtime binding and the child
+// launch agree on which mmx-cli package is "the CLI".
+const { mmxPackageEntry, npmShimEntry } = require("./mmx-chat.js");
 
 const BATCH = path.join(__dirname, "mmx-batch.js");
 const EXIT_UNKNOWN = 2;
@@ -69,21 +72,61 @@ function cliLauncher() {
   }
   return null;
 }
-function cliPackage(file) {
-  let dir = path.dirname(file);
-  for (let i=0;i<12;i++) {
-    const pkg = path.join(dir, "package.json");
-    try {
-      const meta = JSON.parse(fs.readFileSync(pkg,"utf8"));
-      if (meta.name === "mmx-cli" && typeof meta.version === "string") {
-        return { file: pkg, version: meta.version, ...fingerprint(pkg) };
-      }
-    } catch {}
-    const parent = path.dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
+// Resolve the mmx-cli package that a launcher finally executes. The wrapper
+// verifies a package by the same rule (mmxPackageEntry), so the binding and
+// the runtime agree on what "the CLI" means. A same-named package in an
+// unrelated directory is never a binding: the package must own the entry.
+function cliPackageEntry(launcher) {
+  if (!launcher) return null;
+  let real;
+  try { real = fs.realpathSync(launcher); } catch { return null; }
+  // A Windows npm shim declares the package entry in its own body.
+  if (/\.(?:cmd|bat)$/i.test(real)) {
+    const entry = npmShimEntry(real);
+    return entry ? mmxPackageEntry(entry) : null;
   }
-  return null;
+  // The launcher is the package entry itself, or links to it.
+  const direct = mmxPackageEntry(real);
+  if (direct) return direct;
+  // A POSIX launcher may be a shell wrapper that execs the real CLI. Follow
+  // that indirection so the binding pins the CLI that actually runs. Only
+  // absolute paths are inspected; the launcher is never executed and no shell
+  // is ever evaluated, so a hostile PATH entry cannot run anything.
+  let text;
+  try { text = fs.readFileSync(real, "utf8"); } catch { return null; }
+  if (!text.startsWith("#!")) return null;
+  const roots = new Map();
+  // Tokenise the launcher text on shell-like separators and keep only
+  // absolute-looking tokens that name an mmx entry. The launcher is never
+  // executed and no shell is ever evaluated.
+  for (const token of text.split(/[\s"'`;|&()<>]+/)) {
+    if (!/^(?:[A-Za-z]:[\\/]|[\\/]|~[\\/])/.test(token)) continue;
+    if (!/(?:^|[\\/])mmx(?:\.(?:cmd|exe|mjs|cjs|js))?$/.test(token)) continue;
+    // Resolve the candidate first: a package owns its entry, not the shim
+    // directory that may sit outside the package tree.
+    let resolved;
+    try { resolved = fs.realpathSync(token); } catch { continue; }
+    const pkg = mmxPackageEntry(resolved);
+    if (pkg) roots.set(pkg.root, pkg);
+  }
+  // An ambiguous chain is reported as unknown rather than guessed.
+  if (roots.size !== 1) return null;
+  return [...roots.values()][0];
+}
+function cliPackage(file) {
+  const pkg = cliPackageEntry(file);
+  if (!pkg) return null;
+  const meta = path.join(pkg.root, "package.json");
+  try {
+    const data = JSON.parse(fs.readFileSync(meta, "utf8"));
+    if (!data || data.name !== "mmx-cli" || typeof data.version !== "string") return null;
+    return { file: meta, version: data.version, ...fingerprint(meta) };
+  } catch { return null; }
+}
+function cliEntryBinding(file) {
+  const pkg = cliPackageEntry(file);
+  if (!pkg) return null;
+  try { return { file: pkg.entry, ...fingerprint(pkg.entry) }; } catch { return null; }
 }
 function runtimeBinding() {
   const components = [
@@ -94,12 +137,18 @@ function runtimeBinding() {
   ];
   const files = components.map(file=>({file:fs.realpathSync(file),...fingerprint(file)}));
   const cli = cliLauncher();
+  const pkg = cli ? cliPackage(cli) : null;
+  const entry = cli ? cliEntryBinding(cli) : null;
   return {
     format:1,
     node_version:process.version,
     node_executable:fs.realpathSync(process.execPath),
     files,
-    cli:cli?{file:cli,...fingerprint(cli),package:cliPackage(cli)}:null,
+    // resolution is explicit: "resolved" when the executed CLI package is
+    // pinned, "unresolved" when the chain could not be determined. An
+    // unresolved chain is reported as unknown, never as a fabricated binding.
+    cli:cli?{file:cli,...fingerprint(cli),package:pkg,entry,
+             resolution:(pkg&&entry)?"resolved":"unresolved"}:null,
   };
 }
 

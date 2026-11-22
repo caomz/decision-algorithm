@@ -161,6 +161,128 @@ test("MAC-10 verified runtime binds Node, MMX wrapper, guard and CLI before work
     assert.equal(invocationCount(),count,name+" may not call provider");
   }
 });
+// Build a macOS-shaped launcher sandbox: a shell wrapper on PATH that execs a
+// real mmx-cli package entry, so the package is not reachable by walking up
+// from the launcher directory.
+function launcherSandbox(label, version) {
+  const sandbox = fs.mkdtempSync(path.join(root, label + "-"));
+  const binDir = path.join(sandbox, "bin");
+  const pkgDir = path.join(sandbox, "npm", "node_modules", "mmx-cli");
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.mkdirSync(path.join(pkgDir, "dist"), { recursive: true });
+  fs.writeFileSync(path.join(pkgDir, "package.json"), JSON.stringify({
+    name: "mmx-cli", version: version || "9.9.9", bin: { mmx: "dist/mmx.mjs" },
+  }));
+  const entry = path.join(pkgDir, "dist", "mmx.mjs");
+  fs.writeFileSync(entry, "// synthetic CLI entry\n");
+  // The npm .bin shim is a symlink on POSIX. Where a symlink cannot be created
+  // the wrapper references the package entry directly, which resolves to the
+  // same owning package.
+  const shim = path.join(sandbox, "npm", "node_modules", ".bin", "mmx");
+  fs.mkdirSync(path.dirname(shim), { recursive: true });
+  let target = entry;
+  try {
+    fs.symlinkSync(entry, shim);
+    target = shim;
+  } catch { target = entry; }
+  const wrapper = path.join(binDir, "mmx");
+  fs.writeFileSync(wrapper, ["#!/bin/bash", `exec env "${target}" "$@"`, ""].join("\n"));
+  fs.chmodSync(wrapper, 0o755);
+  return { sandbox, binDir, pkgDir, entry, shim, wrapper };
+}
+function withPath(binDir, run) {
+  const saved = process.env.PATH;
+  process.env.PATH = binDir + path.delimiter + saved;
+  try { return run(); } finally { process.env.PATH = saved; }
+}
+test("MAC-10 a PATH launcher that shadows the npm shim still pins the CLI version", () => {
+  // Reproduces the macOS layout where ~/.local/bin/mmx is a shell wrapper that
+  // execs the real CLI, so the npm package is not reachable by walking up from
+  // the launcher directory. The version must still be bound.
+  const box = launcherSandbox("wrapper-path", "9.9.9");
+  withPath(box.binDir, () => {
+    const runtime = runtimeBinding();
+    assert.ok(runtime.cli, "the CLI launcher must stay bound");
+    assert.equal(runtime.cli.file, fs.realpathSync(box.wrapper));
+    assert.equal(runtime.cli.resolution, "resolved");
+    assert.ok(runtime.cli.package, "the CLI package version must stay bound");
+    assert.equal(runtime.cli.package.version, "9.9.9");
+    assert.equal(runtime.cli.package.file, fs.realpathSync(path.join(box.pkgDir, "package.json")));
+    assert.ok(runtime.cli.entry, "the executed CLI entry must stay bound");
+    assert.equal(runtime.cli.entry.file, fs.realpathSync(box.entry));
+  });
+});
+test("MAC-10 a same-named package in an unrelated directory is not a binding", () => {
+  // An mmx-cli package.json that exists somewhere else on disk must never be
+  // accepted as the binding for a launcher that does not execute it.
+  const box = launcherSandbox("unrelated-pkg", "9.9.9");
+  const decoy = path.join(box.sandbox, "elsewhere");
+  fs.mkdirSync(decoy, { recursive: true });
+  fs.writeFileSync(path.join(decoy, "package.json"), JSON.stringify({
+    name: "mmx-cli", version: "0.0.1-decoy",
+  }));
+  withPath(box.binDir, () => {
+    const runtime = runtimeBinding();
+    assert.ok(runtime.cli.package, "the executed package must stay bound");
+    assert.equal(runtime.cli.package.version, "9.9.9", "a decoy package must not win");
+    assert.notEqual(runtime.cli.package.file, fs.realpathSync(path.join(decoy, "package.json")));
+  });
+});
+test("MAC-10 an undeterminable execution chain is reported as unknown", () => {
+  // A launcher that executes no resolvable mmx-cli entry leaves the binding
+  // explicitly unresolved instead of fabricating a package identity.
+  const sandbox = fs.mkdtempSync(path.join(root, "unresolved-"));
+  const binDir = path.join(sandbox, "bin");
+  fs.mkdirSync(binDir, { recursive: true });
+  const wrapper = path.join(binDir, "mmx");
+  fs.writeFileSync(wrapper, ["#!/bin/bash", "exec /usr/bin/true \"$@\"", ""].join("\n"));
+  fs.chmodSync(wrapper, 0o755);
+  withPath(binDir, () => {
+    const runtime = runtimeBinding();
+    assert.ok(runtime.cli, "the launcher must stay bound");
+    assert.equal(runtime.cli.resolution, "unresolved");
+    assert.equal(runtime.cli.package, null, "no package identity may be invented");
+    assert.equal(runtime.cli.entry, null, "no entry identity may be invented");
+  });
+});
+test("MAC-10 a package upgrade is a runtime drift that refuses to launch", () => {
+  const box = launcherSandbox("pkg-upgrade", "9.9.9");
+  const job = withPath(box.binDir, () => preparedJob("runtime-drift-package-upgrade"));
+  // The package is upgraded in place after the job was recorded.
+  fs.writeFileSync(path.join(box.pkgDir, "package.json"), JSON.stringify({
+    name: "mmx-cli", version: "9.9.10", bin: { mmx: "dist/mmx.mjs" },
+  }));
+  const count = invocationCount();
+  withPath(box.binDir, () => {
+    assert.equal(verify(job).integrity, "corrupt");
+    assert.equal(runWorker(job).status, 2);
+  });
+  assert.equal(invocationCount(), count, "a package upgrade may not call the provider");
+});
+test("MAC-10 a changed CLI entry is a runtime drift that refuses to launch", () => {
+  const box = launcherSandbox("entry-change", "9.9.9");
+  const job = withPath(box.binDir, () => preparedJob("runtime-drift-entry-change"));
+  // The executed entry changes while the declared version stays the same.
+  fs.writeFileSync(box.entry, "// synthetic CLI entry, changed\n");
+  const count = invocationCount();
+  withPath(box.binDir, () => {
+    assert.equal(verify(job).integrity, "corrupt");
+    assert.equal(runWorker(job).status, 2);
+  });
+  assert.equal(invocationCount(), count, "a changed entry may not call the provider");
+});
+test("MAC-10 a PATH drift is a runtime drift that refuses to launch", () => {
+  const first = launcherSandbox("path-drift-a", "9.9.9");
+  const second = launcherSandbox("path-drift-b", "9.9.9");
+  const job = withPath(first.binDir, () => preparedJob("runtime-drift-path"));
+  const count = invocationCount();
+  // The same job is verified against a different launcher on PATH.
+  withPath(second.binDir, () => {
+    assert.equal(verify(job).integrity, "corrupt");
+    assert.equal(runWorker(job).status, 2);
+  });
+  assert.equal(invocationCount(), count, "a PATH drift may not call the provider");
+});
 test("legacy MMX jobs without runtime identity remain inspect-only and cannot execute", () => {
   const job=preparedJob("legacy-runtime");
   const reqFile=path.join(job,"request.json");
