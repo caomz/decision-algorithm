@@ -4,6 +4,7 @@
 // Local preflight only. Never logs environment values or auth records, logs
 // in, installs dependencies, changes policy, or invokes a provider request.
 const fs = require("node:fs");
+const crypto = require("node:crypto");
 const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
@@ -247,14 +248,20 @@ function runOfflineTests(root, reportPath) {
   });
 }
 
-function readHost(file) {
-  if (!file) return {};
-  const host = JSON.parse(fs.readFileSync(file, "utf8").replace(/^\uFEFF/, ""));
-  // Only accept the fields this script actually reports. Never forward arbitrary metadata.
+
+function parseHostJson(text) {
+  const host = JSON.parse(String(text).replace(/^\uFEFF/, ""));
+  if (!host || typeof host !== "object" || Array.isArray(host)) throw new Error("invalid_host_json");
+  // Never forward self-reported trusted/source/hash fields, secrets, or
+  // arbitrary environment values. A whitelist is NOT host authentication.
   const safe = {};
-  for (const [section, keys] of Object.entries({ powershell: ["version", "edition"], windows: ["caption", "version", "build_number", "product_type", "os_architecture",
-      "native_machine", "process_machine", "processor_architecture_code", "operating_system_sku"], jobs_volume: ["file_system", "drive_type"] })) {
-    if (!host[section]) continue;
+  for (const [section, keys] of Object.entries({
+    powershell: ["version", "edition"],
+    windows: ["caption", "version", "build_number", "product_type", "os_architecture",
+      "native_machine", "process_machine", "processor_architecture_code", "operating_system_sku"],
+    jobs_volume: ["file_system", "drive_type"],
+  })) {
+    if (!host[section] || typeof host[section] !== "object" || Array.isArray(host[section])) continue;
     safe[section] = {};
     for (const key of keys) {
       const value = host[section][key];
@@ -264,7 +271,56 @@ function readHost(file) {
   }
   return safe;
 }
-
+function readHost(file) {
+  if (!file) return {};
+  return parseHostJson(fs.readFileSync(file, "utf8"));
+}
+// This is a fixed system executable, NOT PATH resolution or user-provided
+// launcher. Nonstandard Windows installation paths fail closed pending review.
+const SYSTEM_POWERSHELL = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
+function acquireHost(options, root, runSpawn = spawnSync) {
+  const provenance = (source, status, sha256 = null) => ({
+    source, status, collector: "WindowsPowerShell5.1-CollectHostOnly",
+    sha256, authenticated: false,
+    note: "Source is recorded by control flow; a digest and any input-provided claims are not attestation.",
+  });
+  if (options.hostFile) {
+    if (!options.offline) return { metadata: {}, provenance: provenance("external_file_rejected", "blocked") };
+    try {
+      const raw = fs.readFileSync(options.hostFile, "utf8");
+      return { metadata: parseHostJson(raw), provenance: provenance("offline_external_file", "diagnostic_untrusted",
+        crypto.createHash("sha256").update(raw).digest("hex")) };
+    } catch {
+      return { metadata: {}, provenance: provenance("offline_external_file", "invalid_diagnostic") };
+    }
+  }
+  if (process.platform !== "win32") {
+    return { metadata: {}, provenance: provenance("non_windows", options.offline ? "offline_only" : "unsupported_platform") };
+  }
+  const args = ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+    "-File", path.join(root, "scripts", "windows-zmx-check.ps1"), "-CollectHostOnly", "-JobsRoot", options.jobsRoot];
+  let result;
+  try {
+    result = runSpawn(SYSTEM_POWERSHELL, args,
+      { encoding: "utf8", timeout: 15000, maxBuffer: 32768, shell: false, windowsHide: true });
+  } catch {
+    return { metadata: {}, provenance: provenance("internal_fixed_powershell", "collector_failed") };
+  }
+  if (result?.error || result?.status !== 0) {
+    return { metadata: {}, provenance: provenance("internal_fixed_powershell",
+      result?.error?.code === "ETIMEDOUT" ? "collector_timeout" : "collector_failed") };
+  }
+  try {
+    const raw = String(result.stdout || "");
+    const metadata = parseHostJson(raw);
+    if (!metadata.windows || !metadata.powershell || !metadata.jobs_volume)
+      return { metadata: {}, provenance: provenance("internal_fixed_powershell", "incomplete_collector_data") };
+    return { metadata, provenance: provenance("internal_fixed_powershell", "collected",
+      crypto.createHash("sha256").update(raw).digest("hex")) };
+  } catch {
+    return { metadata: {}, provenance: provenance("internal_fixed_powershell", "invalid_collector_data") };
+  }
+}
 function run(options, root = ROOT) {
   // Reserve a NEW destination before running anything; an old report is evidence.
   fs.mkdirSync(path.dirname(options.report), { recursive: true });
@@ -278,7 +334,9 @@ function run(options, root = ROOT) {
     readiness: "blocked", provider_auth: "not_run", real_provider_requests: 0, real_provider_acceptance: "not_run",
     checks: [], tests: [], cli: { zcode: { status: "not_probed" }, mmx: { status: "not_probed" } } };
   try {
-    const metadata = readHost(options.hostFile);
+    const hostAcquisition = acquireHost(options, root);
+    const metadata = hostAcquisition.metadata;
+    report.host_provenance = hostAcquisition.provenance;
     report.environment = { ...metadata, host_class: hostClass(metadata), platform: process.platform,
       os_release: os.release(), machine: os.machine(), node_version: process.versions.node, node_exec_path: process.execPath,
       node_arch: process.arch, npm: npmVersion() };
@@ -325,6 +383,8 @@ function run(options, root = ROOT) {
     const dirty = git(["status", "--porcelain", "--untracked-files=all"]);
     if (dirty.status === 0) report.source.working_tree_dirty = Boolean(dirty.stdout.trim());
     const add = (name, ok, detail, applicable = true) => report.checks.push({ name, ok, detail, applicable });
+    add("host_collection", options.offline || hostAcquisition.provenance.status === "collected",
+      hostAcquisition.provenance.status, !options.offline);
     add("evaluation_clock", options.offline || clockVerdict === "plausible_unverified",
       "Only a plausible local clock is usable for non-offline preflight; time is never authenticated.", !options.offline);
     add("node_22_x64", process.versions.node.split(".")[0] === "22" && process.arch === "x64", "Supported Windows acceptance target is Node.js 22 x64.");
@@ -399,4 +459,5 @@ if (require.main === module) {
 }
 
 module.exports = { parseArgs, hostClass, targetMatch, supportStatus, WINDOWS11_SUPPORT_TABLE,
-  validateSupportTable, clockStatus, hardlinkProbe, versionToken, probeVersion, testFiles, readHost, run };
+  validateSupportTable, clockStatus, hardlinkProbe, versionToken, probeVersion, testFiles,
+  parseHostJson, readHost, acquireHost, run };

@@ -91,6 +91,9 @@ jobs:
           $report = Get-Content -LiteralPath $reportPath -Raw -Encoding UTF8 | ConvertFrom-Json
           if ($report.readiness -ne 'offline_pass' -or $report.real_provider_requests -ne 0) { throw 'Unexpected acceptance scope' }
           if ($report.environment.powershell.version -notlike '5.1.*') { throw 'PowerShell 5.1 evidence is missing' }
+          if ($report.host_provenance.source -ne 'internal_fixed_powershell' -or $report.host_provenance.status -ne 'collected' -or !$report.host_provenance.sha256) {
+            throw 'Windows diagnostics must use the internal read-only PowerShell collector'
+          }
           Write-Host "Observed host: $($report.environment.host_class); this does not constitute Windows 10 native acceptance."
           # Hosted Windows Server is NOT a Windows 11 client, even when its
           # offline diagnostics succeed.

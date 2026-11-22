@@ -66,7 +66,7 @@ powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\window
 $LASTEXITCODE
 ```
 
-默认模式只执行已解析 CLI 的 `--version`，不登录、不查询账号额度、不发起模型请求。报告会记录实际启动器和 JS 入口，便于确认多个 Node/CLI 安装是否选中了预期版本。npm 版本从已安装包元数据读取。
+默认模式经固定系统 PowerShell 只读采集 Windows 宿主证据并通过所有门禁后，才执行已解析 CLI 的 `--version`；外部 `--host-file` 仅供离线诊断，不能使预检放行，不登录、不查询账号额度、不发起模型请求。报告会记录实际启动器和 JS 入口，便于确认多个 Node/CLI 安装是否选中了预期版本。npm 版本从已安装包元数据读取。
 
 | 结果 | 含义 | 退出码 |
 |---|---|---:|

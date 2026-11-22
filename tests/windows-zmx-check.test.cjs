@@ -237,8 +237,9 @@ test("real preflight run() is fail-closed before CLI lookup and launch; fake com
   const source = fs.readFileSync(path.join(__dirname, "../scripts/windows-zmx-check.cjs"), "utf8").replace(/^#![^\n]*\n/, "");
   const checkoutDir = path.join(__dirname, "../scripts");
   function inspect(name, winOverrides = {}, envOverrides = {}, doctorOk = true,
-    clockIso = "2026-11-22T12:00:00.000Z", offline = false) {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "zmx-preflight-" + name + "-"));
+    clockIso = "2026-11-22T12:00:00.000Z", offline = false,
+    collectorMode = "ok", simulatedPlatform = "win32", external = false) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "zmx 中文 path " + name + "-"));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const host = path.join(root, "host.json");
     const report = path.join(root, "report.json");
@@ -247,9 +248,11 @@ test("real preflight run() is fail-closed before CLI lookup and launch; fake com
       product_type: 1, os_architecture: "64-bit", native_machine: 0x8664,
       process_machine: 0, processor_architecture_code: 9, operating_system_sku: 101,
     };
-    fs.writeFileSync(host, JSON.stringify({ windows: { ...baseWindows, ...winOverrides },
-      powershell: { version: "5.1.26100.1" }, jobs_volume: { file_system: "NTFS", drive_type: 3 } }));
+    fs.writeFileSync(host, JSON.stringify({ windows: { ...baseWindows, ...winOverrides, secret: "api-secret-sentinel" },
+      powershell: { version: "5.1.26100.1" }, jobs_volume: { file_system: "NTFS", drive_type: 3 },
+      trusted: true, source: "fake_attested_live", digest: "fake_attestation", secret: "api-secret-sentinel" }));
     const lookup = { zcode: 0, mmx: 0 }, requests = { zcode: 0, mmx: 0 };
+    let collectorCalls = 0;
     let liveClockReads = 0, doctorCalls = 0;
     class FixedDate extends Date {
       constructor(...args) {
@@ -257,7 +260,20 @@ test("real preflight run() is fail-closed before CLI lookup and launch; fake com
         else { super(clockIso === "invalid" ? NaN : clockIso); liveClockReads++; }
       }
     }
-    const fakeSpawnSync = (command, args) => {
+    const fakeSpawnSync = (command, args, launchOptions) => {
+      if (command === "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe") {
+        collectorCalls++;
+        assert.ok(args.includes("-CollectHostOnly"), "only the no-Node collector branch is allowed");
+        assert.ok(args.includes("-JobsRoot"));
+        assert.equal(launchOptions.shell, false);
+        assert.equal(launchOptions.timeout, 15000);
+        if (collectorMode === "failed") return { status: 1, stderr: "api-secret-sentinel" };
+        if (collectorMode === "timeout") return { status: null, error: Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }) };
+        if (collectorMode === "bad-json") return { status: 0, stdout: "{invalid-json-secret" };
+        const data = JSON.parse(fs.readFileSync(host, "utf8"));
+        if (collectorMode === "conflict") data.windows.native_machine = 0xAA64;
+        return { status: 0, stdout: (collectorMode === "bom" ? "\uFEFF" : "") + JSON.stringify(data) };
+      }
       if (command === "git") {
         const operation = args.slice(2).join(" ");
         return { status: 0, stdout: operation === "rev-parse HEAD" ? "a".repeat(40) + "\n"
@@ -293,14 +309,14 @@ test("real preflight run() is fail-closed before CLI lookup and launch; fake com
       throw new Error("unexpected import in fake preflight: " + id);
     };
     const moduleUnderTest = { exports: {} };
-    const fakeProcess = { platform: "win32", arch: "x64",
+    const fakeProcess = { platform: simulatedPlatform, arch: "x64",
       versions: { node: "22.23.5" }, execPath: "fake-node", env: envOverrides };
     vm.runInNewContext(source, {
       require: fakeRequire, module: moduleUnderTest, __dirname: checkoutDir,
       process: fakeProcess, Date: FixedDate, Buffer, console, setTimeout, clearTimeout,
     }, { filename: "windows-zmx-check.fake-preflight.cjs" });
     const actual = moduleUnderTest.exports.run({
-      offline, targetOs: "windows11", hostFile: host,
+      offline, targetOs: "windows11", hostFile: (offline && simulatedPlatform !== "linux") || external ? host : null,
       report, jobsRoot: path.join(root, "jobs"),
     }, offline ? path.resolve(__dirname, "..") : root);
     assert.deepEqual(JSON.parse(fs.readFileSync(report, "utf8")).cli, JSON.parse(JSON.stringify(actual.report.cli)),
@@ -309,13 +325,58 @@ test("real preflight run() is fail-closed before CLI lookup and launch; fake com
     assert.equal(actual.report.checked_at, actual.report.clock.evaluated_at, "report and support use same instant");
     assert.equal(actual.report.clock.source, "local_system_clock");
     assert.equal(actual.report.clock.authenticated, false);
-    return { actual, lookup, requests, doctorCalls };
+    return { actual, lookup, requests, doctorCalls, collectorCalls };
   }
   const valid = inspect("compliant");
   assert.equal(valid.actual.exitCode, 0, JSON.stringify(valid.actual.report.failed));
   assert.equal(valid.actual.report.readiness, "preflight_ready");
   assert.deepEqual(valid.lookup, { zcode: 1, mmx: 1 });
   assert.deepEqual(valid.requests, { zcode: 1, mmx: 1 });
+  assert.equal(valid.collectorCalls, 1);
+  assert.equal(valid.actual.report.host_provenance.source, "internal_fixed_powershell");
+  assert.equal(valid.actual.report.host_provenance.status, "collected");
+  assert.equal(valid.actual.report.host_provenance.authenticated, false);
+  assert.match(valid.actual.report.host_provenance.sha256, /^[a-f0-9]{64}$/);
+  assert.doesNotMatch(JSON.stringify(valid.actual.report), /api-secret-sentinel|fake_attested_live/);
+  const bom = inspect("collector-bom", {caption: "Microsoft Windows 11 家庭版"}, {}, true,
+    "2026-11-22T12:00:00.000Z", false, "bom");
+  assert.equal(bom.actual.report.readiness, "preflight_ready");
+  assert.equal(bom.collectorCalls, 1);
+  const rejected = inspect("forged-external-file", {}, {}, true,
+    "2026-11-22T12:00:00.000Z", false, "ok", "win32", true);
+  assert.equal(rejected.actual.report.readiness, "blocked");
+  assert.ok(rejected.actual.report.failed.includes("host_collection"));
+  assert.equal(rejected.actual.report.host_provenance.source, "external_file_rejected");
+  assert.equal(rejected.collectorCalls, 0, "never fall back from external data to a collector");
+  assert.deepEqual(rejected.lookup, {zcode:0, mmx:0});
+  assert.deepEqual(rejected.requests, {zcode:0, mmx:0});
+  for (const mode of ["failed","timeout","bad-json","conflict"]) {
+    const bad = inspect("collector-" + mode, {}, {}, true,
+      "2026-11-22T12:00:00.000Z", false, mode);
+    assert.equal(bad.actual.report.readiness, "blocked", mode);
+    assert.equal(bad.collectorCalls, 1, mode);
+    assert.deepEqual(bad.lookup, {zcode:0, mmx:0}, mode);
+    assert.deepEqual(bad.requests, {zcode:0, mmx:0}, mode);
+    assert.equal(bad.actual.report.cli.zcode.status, "not_probed", mode);
+    assert.equal(bad.actual.report.cli.mmx.status, "not_probed", mode);
+    assert.doesNotMatch(JSON.stringify(bad.actual.report), /api-secret-sentinel/, mode);
+  }
+  const nonWindows = inspect("non-windows-offline", {}, {}, true, "invalid", true, "ok", "linux", false);
+  assert.equal(nonWindows.actual.report.readiness, "offline_pass");
+  assert.equal(nonWindows.actual.report.observed_host, "non_windows");
+  assert.equal(nonWindows.collectorCalls, 0);
+  assert.equal(nonWindows.actual.report.host_provenance.source, "non_windows");
+  const noFileNonWindows = inspect("non-windows-no-file", {}, {}, true,
+    "invalid", true, "ok", "linux", false);
+  assert.equal(noFileNonWindows.actual.report.readiness, "offline_pass");
+  assert.equal(noFileNonWindows.collectorCalls, 0);
+  const offlineExternal = inspect("offline-forged-json", {}, {}, true, "invalid", true);
+  assert.equal(offlineExternal.actual.report.readiness, "offline_pass");
+  assert.equal(offlineExternal.actual.report.host_provenance.source, "offline_external_file");
+  assert.equal(offlineExternal.actual.report.host_provenance.authenticated, false);
+  assert.match(offlineExternal.actual.report.host_provenance.sha256, /^[a-f0-9]{64}$/);
+  assert.equal(offlineExternal.collectorCalls, 0);
+  assert.doesNotMatch(JSON.stringify(offlineExternal.actual.report), /api-secret-sentinel|fake_attested_live/);
   for (const iso of ["invalid", "2020-01-01T00:00:00.000Z", "2099-01-01T00:00:00.000Z"]) {
     const result = inspect("badclock-" + iso.slice(0, 4), {}, {}, true, iso);
     assert.equal(result.actual.exitCode, 2);
@@ -400,4 +461,30 @@ test("single local clock status is explicitly unauthenticated and fails closed o
   assert.equal(clockStatus(new Date("2099-01-01T00:00:00.000Z")), "implausible_future");
   assert.equal(clockStatus(new Date(NaN)), "invalid");
   assert.throws(() => parseArgs(["--jobs-root","jobs","--report","report.json","--date","2029-01-01"]));
+});
+
+test("PowerShell host collection is separate from Node and never lends trust to JSON claims", () => {
+  const ps = fs.readFileSync(path.join(__dirname, "../scripts/windows-zmx-check.ps1"), "utf8");
+  assert.match(ps, /\[switch\]\$CollectHostOnly/);
+  assert.match(ps, /if \(\$CollectHostOnly\)/);
+  assert.match(ps, /ConvertTo-Json -Depth 5 -Compress/);
+  assert.doesNotMatch(ps, /--host-file/);
+  const collectorBranch = ps.slice(ps.indexOf("if ($CollectHostOnly) {"), ps.indexOf("    } else {"));
+  assert.doesNotMatch(collectorBranch, /Get-Command node\.exe|& \$node/);
+  const helper = fs.readFileSync(path.join(__dirname, "../scripts/windows-zmx-check.cjs"), "utf8");
+  assert.match(helper, /SYSTEM_POWERSHELL/);
+  assert.match(helper, /-CollectHostOnly/);
+  assert.match(helper, /timeout: 15000/);
+  assert.match(helper, /shell: false/);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "zmx-host-bom-中文 "));
+  try {
+    const host = path.join(root, "host BOM 中文.json");
+    fs.writeFileSync(host, "\ufeff" + JSON.stringify({ windows: { caption: "Windows 11 家庭版",
+      native_machine: 0x8664, extra_secret: "api-secret-sentinel" },
+      trusted: true, source: "fake_live", sha256: "forged" }), "utf8");
+    const safe = readHost(host);
+    assert.equal(safe.windows.caption, "Windows 11 家庭版");
+    assert.equal(safe.windows.native_machine, 0x8664);
+    assert.doesNotMatch(JSON.stringify(safe), /api-secret-sentinel|fake_live|forged/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

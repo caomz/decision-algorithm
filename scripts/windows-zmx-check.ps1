@@ -1,36 +1,36 @@
-# ASCII source is intentional: Windows PowerShell 5.1 reads BOM-less scripts
-# using the active ANSI code page. Chinese paths are passed as .NET strings.
+# ASCII source is intentional: Windows PowerShell 5.1 decodes BOM-less
+# scripts using the active ANSI page. Chinese paths are .NET string arguments.
 #Requires -Version 5.1
 [CmdletBinding()]
 param(
     [switch]$Offline,
+    [switch]$CollectHostOnly,
     [string]$JobsRoot,
     [string]$ReportPath,
     [ValidateSet('windows10','windows11')][string]$TargetOs = 'windows10'
 )
-
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
 $helperExit = 2
-$hostFile = $null
 $oldOutputEncoding = $OutputEncoding
 $oldConsoleEncoding = [Console]::OutputEncoding
 try {
     if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
-        throw 'This entry point requires native Windows PowerShell; use Node for the offline helper on other platforms.'
+        throw 'Native Windows PowerShell is required.'
     }
-    $node = Get-Command node.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1
-    $repo = Split-Path -Parent $PSScriptRoot
     if ([string]::IsNullOrWhiteSpace($JobsRoot)) {
         $JobsRoot = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Zmx\jobs'
     }
-    if ([string]::IsNullOrWhiteSpace($ReportPath)) {
-        $reportName = 'check-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [Guid]::NewGuid().ToString('N') + '.json'
-        $ReportPath = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) ('Zmx\checks\' + $reportName)
-    }
-    # Resolve relative arguments against the caller's directory, never the script directory.
     $JobsRoot = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($JobsRoot)
-    $ReportPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($ReportPath)
+    $utf8 = New-Object System.Text.UTF8Encoding($false)
+    $OutputEncoding = $utf8
+    [Console]::OutputEncoding = $utf8
+    if ($CollectHostOnly) {
+        # This branch is an independent, read-only OS/CIM collector. It MUST
+        # NEVER invoke Node, look up a provider CLI, or consume a report file.
+        if ($Offline -or -not [string]::IsNullOrWhiteSpace($ReportPath)) {
+            throw 'Collector accepts no offline mode or report path.'
+        }
     $windows = $null
     # Read native host and WOW process machine from the Windows kernel.
     # GetNativeSystemInfo alone is insufficient: on ARM64 under x64 emulation
@@ -96,22 +96,29 @@ public static class ZmxNativeMachineProbe {
         windows = $windows
         jobs_volume = $volume
     }
-    $hostFile = [IO.Path]::GetTempFileName()
-    $utf8 = New-Object System.Text.UTF8Encoding($false)
-    [IO.File]::WriteAllText($hostFile, ($hostMetadata | ConvertTo-Json -Depth 5), $utf8)
-    $OutputEncoding = $utf8
-    [Console]::OutputEncoding = $utf8
-    $helperArgs = @((Join-Path $repo 'scripts\windows-zmx-check.cjs'), '--host-file', $hostFile, '--jobs-root', $JobsRoot, '--report', $ReportPath)
-    $helperArgs += @('--target-os', $TargetOs)
-    if ($Offline) { $helperArgs += '--offline' }
-    & $node.Source @helperArgs
-    $helperExit = $LASTEXITCODE
+        [Console]::Out.WriteLine(($hostMetadata | ConvertTo-Json -Depth 5 -Compress))
+        $helperExit = 0
+    } else {
+        # Normal entry delegates host acquisition to the Node helper. It does
+        # not create or pass any host JSON file, trusted marker or path.
+        $node = Get-Command node.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1
+        $repo = Split-Path -Parent $PSScriptRoot
+        if ([string]::IsNullOrWhiteSpace($ReportPath)) {
+            $reportName = 'check-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [Guid]::NewGuid().ToString('N') + '.json'
+            $ReportPath = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) ('Zmx\checks\' + $reportName)
+        }
+        $ReportPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($ReportPath)
+        $helperArgs = @((Join-Path $repo 'scripts\windows-zmx-check.cjs'), '--jobs-root', $JobsRoot, '--report', $ReportPath, '--target-os', $TargetOs)
+        if ($Offline) { $helperArgs += '--offline' }
+        & $node.Source @helperArgs
+        $helperExit = $LASTEXITCODE
+    }
 } catch {
-    # Do not serialize exception objects or environment variables into diagnostics.
-    Write-Host 'Windows check could not start. Confirm native Windows PowerShell 5.1+, Node.js 22 x64, and writable local paths.'
+    # Neither collector stdout nor diagnostics contain exception messages,
+    # API keys, ambient environment, or raw file paths.
+    Write-Host 'Windows host collection or ZMX check failed. Inspect the new JSON report if one was created.'
     $helperExit = 2
 } finally {
-    if ($hostFile -and [IO.File]::Exists($hostFile)) { [IO.File]::Delete($hostFile) }
     $OutputEncoding = $oldOutputEncoding
     [Console]::OutputEncoding = $oldConsoleEncoding
 }

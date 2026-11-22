@@ -5,6 +5,7 @@
 ## 必须明确的事实
 
 - PowerShell 入口新参数：-TargetOs windows11；Node helper 新参数：--target-os windows11；默认仍为 windows10。
+- Node 在 Windows 上通过固定系统路径 C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe（shell:false、15 秒超时）调用同仓库脚本的只读 -CollectHostOnly 分支。常规 ps1 入口不再创建或传入外部 host JSON。--host-file 仅能用于 --offline 的非可信诊断，非离线一律记录 blocked，CLI 双侧 not_probed 且不查找/启动；采集失败/超时/冲突不回退放行。报告 host_provenance 的 source/collector/sha256 由控制流产生，摘要不是认证，不接受输入自报的 trusted/source/hash。
 - 新报告独立记录 requested_target、observed_host、target_match、support_status、acceptance_scope。离线 offline_pass 只说明离线诊断成功，不等于平台兼容或安全支持通过。
 - 支持快照内置于 Node helper（数据版 ms-windows11-ga-2026-11-22-v1，2026-11-22 人工核对）。仅 General Availability Channel，来源为 [微软受支持版本表](https://learn.microsoft.com/en-us/windows/release-health/supported-versions-windows-client) 与 [Windows 11 发布信息](https://learn.microsoft.com/en-us/windows/release-health/windows11-release-information)。报告列出实际查表版本、Build、可用日期、两类截止日期；未知/无效数据和未到可用日期不放行。不会联网刷新，不给 LTSC 自动套用 GA 周期，26300/28000 保留。
 - 每次运行只采样一次本地系统时间，报告字段 checked_at 与 clock.evaluated_at 一致；clock.source=local_system_clock、authenticated=false，绝非可信时间服务。若时钟无效、早于支持表核对日期或远超现有数据跨度，预检先 blocked 且 CLI 双侧 not_probed；offline 仍能诊断。支持截止按“结束日次日 UTC 00:00:00.000”不含上界计算，保留结束日最后 999 毫秒。无日期覆盖参数，不联网校时。
