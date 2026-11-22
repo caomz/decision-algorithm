@@ -582,6 +582,7 @@ test("post-spawn started.json EACCES/ENOSPC/EEXIST failures cancel the owned wra
     const preload = path.join(directory, "inject-started-failure.cjs");
     const invocationLog = path.join(directory, "wrapper-calls.log");
     const childEnded = path.join(directory, "child-ended");
+    const workerEnded = path.join(directory, "worker-ended");
     const job = path.join(directory, "job");
     fs.writeFileSync(prompt, "SYNTHETIC POST SPAWN\r\n");
     fs.writeFileSync(wrapperScript, `
@@ -599,6 +600,7 @@ test("post-spawn started.json EACCES/ENOSPC/EEXIST failures cancel the owned wra
     fs.writeFileSync(preload, `
       if (process.argv[2] === "worker" && /zcode-run\\.js$/.test(process.argv[1])) {
         const fs = require("node:fs"), path = require("node:path");
+        process.on("exit", () => fs.writeFileSync(${JSON.stringify(workerEnded)}, "finished"));
         const rename = fs.renameSync;
         fs.renameSync = function(from, to) {
           if (path.basename(to) === "started.json") {
@@ -620,6 +622,7 @@ test("post-spawn started.json EACCES/ENOSPC/EEXIST failures cancel the owned wra
     assert.equal(launch.status, "started");
     await waitUntil(() => fs.existsSync(path.join(job, "cancel.request")));
     await waitUntil(() => fs.existsSync(path.join(job, "worker.lock")));
+    await waitUntil(() => fs.existsSync(workerEnded), 8000);
     assert.equal(supervisor.status(job).status, "unknown", code);
     assert.equal(fs.existsSync(path.join(job, "execution.json")), false, code);
     const before = fs.existsSync(invocationLog) ? fs.readFileSync(invocationLog,"utf8") : "";
@@ -628,7 +631,7 @@ test("post-spawn started.json EACCES/ENOSPC/EEXIST failures cancel the owned wra
     const after = fs.existsSync(invocationLog) ? fs.readFileSync(invocationLog,"utf8") : "";
     assert.equal(after, before, code);
     assert.equal(fs.existsSync(path.join(job, "worker.lock")), true, code);
-    if (before) await waitUntil(() => fs.existsSync(childEnded), 5000);
+    if (before) assert.equal(fs.existsSync(childEnded), true, "owned child observed cooperative cancellation");
   }
 });
 test("missing worker lock but existing execution evidence blocks replay", () => {
