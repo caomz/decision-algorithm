@@ -364,7 +364,11 @@ test("R53 repeated cancel and ignored force remain bounded, permanently unknown"
   assert.equal(supervisor.status(c.job).status, "unknown");
   assert.equal(fs.existsSync(path.join(c.job, "worker.lock")), true);
   assert.equal(fs.readFileSync(c.count, "utf8"), "request\n");
-  await until(() => fs.existsSync(f.wrapperExit), 5000); // fixture failsafe cleanup, not a replay
+  // A synthetic wrapper can be terminated by the Windows process/job host when
+  // its parent exits. Its optional natural-exit sentinel is NOT evidence of
+  // provider cancellation, so do not gate the safety contract on that marker.
+  // The bounded worker exit, permanent claim, incomplete status and one
+  // independently counted request above remain mandatory on every platform.
 });
 test("R53 cancellation after child has exited never replays or overwrites completion", { timeout: 12000 }, async () => {
   const c = fresh("already-exited");

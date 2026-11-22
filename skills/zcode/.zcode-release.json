@@ -17,7 +17,7 @@
     "tests/review-golden.test.js": "e36ffebea6e6456f6b3c6362eab3429e43fa4beac9cf91e61e9155792ce6d04e",
     "tests/zcode-batch.test.js": "c4662f2239ecc1b52ec44b5a4d73c0aebc7b95e06aae4984647d3b508f2ab1d4",
     "tests/zcode-chat.test.js": "69e16f7810c9758d0aa855bb17be2a545167c40315e79da56d389c2ccf7fba4d",
-    "tests/zcode-run-integrity.test.js": "8e06b114b23d289956bf99da239fafd301cad17cf1258db6d1232835ac77e6aa"
+    "tests/zcode-run-integrity.test.js": "cf5ed0c70c673dbb8fe5b040d92b6b15fde8dfb6d9e6b7690d750a2848f4dc68"
   },
   "review_sha256": "f4a6a4522bb5d07d48db6b3ac83bda25a08dff5bbd0cde7b05618d54520c9c83"
 }
