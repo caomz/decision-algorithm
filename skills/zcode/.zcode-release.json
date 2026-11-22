@@ -12,11 +12,11 @@
     "scripts/zcode-batch.js": "b1b831a4ac82ebaec13fbab0518296565cacd22c0c8a6dc678b66d8c4fa7247f",
     "scripts/zcode-chat.js": "ca9d0cef9735e6ccde98489a05be2c97a93c36a378a21193bd979ffbd879067b",
     "scripts/zcode-run.js": "b83d579ca20c07fb5f9b038e440f3ec90e88ace06e6bbf8c6d9d5dfb84005aa8",
-    "tests/fixtures/fake-zcode.cjs": "a44c6f103052f1fd0c1d2f2382e3cf5200a8c49cc6990afb3c49cb07ff98be3c",
+    "tests/fixtures/fake-zcode.cjs": "a66ef1ee2e5c78642a2fb0d2d000daed8deb207cc02f86d48564e8f5410ffd03",
     "tests/repin-release.test.js": "04c9eb364d50693732a619f3cda7c2dde58bb1f28103a40bb406301acb7e8320",
     "tests/review-golden.test.js": "e36ffebea6e6456f6b3c6362eab3429e43fa4beac9cf91e61e9155792ce6d04e",
     "tests/zcode-batch.test.js": "00dee2e4cdb57682958d43c20a47d6df6972a199bbd56692f747ac28ca8b476f",
-    "tests/zcode-chat.test.js": "4d20ccc499d41b2c4741a5c33d18401e58ceab83dfde300b03db1f9a2e81a97b",
+    "tests/zcode-chat.test.js": "8f86284801978b952d0d5edcda44ddba99a73251824eb5175a65a75a9202665d",
     "tests/zcode-run-integrity.test.js": "1db4930613ad3411d5d99c716ba383b9932da17012a956f6a7b3bb617af3597c"
   },
   "review_sha256": "f4a6a4522bb5d07d48db6b3ac83bda25a08dff5bbd0cde7b05618d54520c9c83"
