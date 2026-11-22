@@ -177,6 +177,45 @@ test("MAC-04 double SIGINT preserves ZCode completed shard and never starts queu
     if(child.exitCode===null&&child.signalCode===null)try{child.kill("SIGKILL");}catch{}
   }
 });
+
+test("MAC-03 default batches have durable private receipts without an explicit output path", () => {
+  const file = shardFile("zcode-default-evidence.txt", "hello stable archive");
+  const envelope = receiptOf(runBatch(["--prompt-file", file]));
+  assert.equal(typeof envelope.receipt_file, "string");
+  assert.equal(fs.existsSync(envelope.receipt_file),true);
+  assert.deepEqual(JSON.parse(fs.readFileSync(envelope.receipt_file,"utf8")).shards,envelope.shards);
+  assert.equal(fs.existsSync(path.join(envelope.receipt_file+".shards","000.json")),true);
+  if(process.platform !== "win32") {
+    assert.equal(fs.statSync(path.dirname(envelope.receipt_file)).mode & 0o077,0);
+    assert.equal(fs.statSync(envelope.receipt_file).mode & 0o077,0);
+  }
+});
+
+test("MAC-03 post-request EIO fails closed without replay or lost initial call count", () => {
+  const file=shardFile("zcode-post-eio.txt", "EIO must be reported");
+  const archive=path.join(root,"zcode-post-eio-final.json");
+  const preload=path.join(root,"zcode-fault-open.cjs");
+  fs.writeFileSync(preload, [
+    "const fs=require('node:fs');",
+    "const open=fs.openSync;",
+    "fs.openSync=function(file,flags,mode) {",
+    "if(typeof file==='string' && file.includes('.shards') && file.endsWith('000.json')) {",
+    "const e=new Error('synthetic post-request I/O failure'); e.code='EIO'; throw e; }",
+    "return open.call(this,file,flags,mode); };"
+  ].join("\n"));
+  const run=spawnSync(process.execPath,["--require",preload,batch,"--prompt-file",file,"--receipt-file",archive],{
+    encoding:"utf8",shell:false,windowsHide:true,
+    env:{...process.env,MMX_BATCH_WRAPPER:fakeWrapper,FAKE_STATE_DIR:stateDir,
+      MMX_BATCH_QUOTA_RETRY_MS:"10"},
+  });
+  const receipt=receiptOf(run);
+  assert.equal(run.status,1);
+  assert.equal(receipt.status,"archive_error");
+  assert.equal(receipt.gate,"NOT_EVALUATED");
+  assert.equal(receipt.archive_error,"EIO");
+  assert.equal(fs.readFileSync(path.join(stateDir,path.basename(file)),"utf8"),"1");
+  assert.equal(JSON.parse(fs.readFileSync(archive,"utf8")).status,"archive_error");
+});
 test("usage: rejects a request with no shard source", () => {
   assert.equal(receiptOf(runBatch([])).status, "usage_error");
 });

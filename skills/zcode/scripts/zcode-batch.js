@@ -16,6 +16,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
 const { spawn } = require("child_process");
 const { strictJson, validateReview, validateIds } = require("./review.js");
 
@@ -55,7 +56,12 @@ function fail(result) {
 
 
 function claimArchive(file) {
-  if (file === null) return null;
+  // Even callers without --receipt-file get a private, crash-retained archive.
+  // Never silently run an unarchived billed request.
+  if (file === null) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "zcode-batch-evidence-"));
+    file = path.join(root, "receipt.json");
+  }
   // O_EXCL prevents following symlinks and overwriting existing evidence.
   // The reserved file is intentionally left in place after any failure.
   const fd = fs.openSync(file, "wx", 0o600);

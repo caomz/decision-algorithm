@@ -17,6 +17,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
 const { spawn } = require("child_process");
 const { randomInt } = require("node:crypto");
 const { terminateChildTree } = require("./mmx-chat.js");
@@ -56,7 +57,12 @@ function fail(result) {
 
 
 function claimArchive(file) {
-  if (file === null) return null;
+  // Even callers without --receipt-file get a private, crash-retained archive.
+  // Never silently run an unarchived billed request.
+  if (file === null) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "mmx-batch-evidence-"));
+    file = path.join(root, "receipt.json");
+  }
   // O_EXCL prevents following symlinks and overwriting existing evidence.
   // The reserved file is intentionally left in place after any failure.
   const fd = fs.openSync(file, "wx", 0o600);
