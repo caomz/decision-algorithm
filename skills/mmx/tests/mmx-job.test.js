@@ -367,3 +367,97 @@ setInterval(()=>{},100);
     if(job && status(job).status!=="finished") cancel(job);
   }
 });
+for (const [code, simulateForceFailure] of [["EACCES", false], ["ENOSPC", true]]) {
+  test("Windows worker preserves publication + " + code + " marker faults and attempts owned force", {
+    skip: process.platform !== "win32" ? "native Windows cancellation publication" : false,
+    timeout: 15000,
+  }, async () => {
+    const tag = "marker-failure-" + code.toLowerCase();
+    const job = preparedJob(tag);
+    const ready = path.join(root, tag + ".ready");
+    const sent = path.join(root, tag + ".marker-fault");
+    const forced = path.join(root, tag + ".force-attempted");
+    const count = path.join(root, tag + ".fake-calls");
+    const failsafe = path.join(root, tag + ".batch-failsafe");
+    const hungBatch = path.join(root, tag + ".batch.cjs");
+    const preload = path.join(root, tag + ".preload.cjs");
+
+    fs.writeFileSync(hungBatch, [
+      '"use strict";',
+      'const fs=require("node:fs");',
+      'fs.appendFileSync(' + JSON.stringify(count) + ',"request\\n");',
+      'fs.writeFileSync(' + JSON.stringify(ready) + ',"ready",{flag:"wx"});',
+      'setInterval(()=>{},100);',
+      'setTimeout(()=>{fs.writeFileSync(' + JSON.stringify(failsafe) + ',"self-exit");process.exit(89)},4500).unref();',
+    ].join("\n"));
+
+    // The job is created but unlaunched. The only executable is the fake batch
+    // above. Rebind the pinned request and independently count its invocations.
+    const requestFile = path.join(job, "request.json");
+    const request = JSON.parse(fs.readFileSync(requestFile, "utf8"));
+    request.batch_script = fs.realpathSync(hungBatch);
+    request.batch_script_digest = fileDigest(hungBatch);
+    fs.writeFileSync(requestFile, JSON.stringify(request));
+    fs.writeFileSync(path.join(job, "request-digest.json"), JSON.stringify(fileDigest(requestFile)));
+
+    fs.writeFileSync(preload, [
+      '"use strict";',
+      'const fs=require("node:fs"),path=require("node:path"),cp=require("node:child_process");',
+      'if(path.resolve(process.argv[1]||"")===' + JSON.stringify(path.resolve(script)) + '&&process.argv[2]==="worker"){',
+      'const realLink=fs.linkSync,realWrite=fs.writeFileSync,realSpawnSync=cp.spawnSync;',
+      'const ready=' + JSON.stringify(ready) + ',sent=' + JSON.stringify(sent) +
+        ',forced=' + JSON.stringify(forced) + ';',
+      'fs.linkSync=function(from,to){',
+      ' if(path.basename(String(to))==="started.json"){',
+      '   const deadline=Date.now()+3000, barrier=new Int32Array(new SharedArrayBuffer(4));',
+      '   while(!fs.existsSync(ready)&&Date.now()<deadline) Atomics.wait(barrier,0,0,10);',
+      '   if(!fs.existsSync(ready)) throw new Error("fake batch did not start");',
+      '   throw Object.assign(new Error("synthetic started publication failure"),{code:"EACCES"});',
+      ' } return realLink.apply(this,arguments);',
+      '};',
+      'fs.writeFileSync=function(file){',
+      ' if(path.basename(String(file))==="cancel.request"){',
+      '   realWrite(sent,' + JSON.stringify(code) + ',{flag:"wx"});',
+      '   throw Object.assign(new Error("synthetic cancel marker failure"),{code:' + JSON.stringify(code) + '});',
+      ' } return realWrite.apply(this,arguments);',
+      '};',
+      'cp.spawnSync=function(command){',
+      ' if(command==="taskkill.exe"){',
+      '   fs.appendFileSync(forced,"force\\n");',
+      simulateForceFailure
+        ? '   return {status:1,error:Object.assign(new Error("synthetic taskkill failure"),{code:"EPERM"})};'
+        : '   return realSpawnSync.apply(this,arguments);',
+      ' } return realSpawnSync.apply(this,arguments);',
+      '};',
+      '}',
+    ].join("\n"));
+
+    const before = fs.existsSync(count) ? fs.readFileSync(count, "utf8") : "";
+    const execution = spawnSync(process.execPath, [
+      "--require", preload, script, "worker", job,
+    ], { encoding: "utf8", timeout: 11000, windowsHide: true });
+    assert.equal(execution.status, 2, execution.stderr + execution.stdout);
+    assert.equal(fs.existsSync(ready), true, "batch must have started before publication failure");
+    assert.equal(fs.readFileSync(sent, "utf8"), code, "cancel write fault must be injected");
+    assert.equal(fs.existsSync(forced), true, "owned-child force must be attempted despite marker fault");
+    assert.equal(fs.readFileSync(count, "utf8"), before + "request\n", "exactly one fake batch launch");
+
+    const failure = JSON.parse(fs.readFileSync(path.join(job, "failure.json"), "utf8"));
+    assert.equal(failure.original_error_code, "EACCES");
+    assert.equal(failure.cleanup_error_code, code);
+    assert.equal(failure.batch_started, true);
+    assert.equal(failure.termination_confirmed, null);
+    assert.equal(fs.existsSync(path.join(job, "worker.lock")), true);
+    assert.equal(fs.existsSync(path.join(job, "completion.json")), false);
+    assert.equal(status(job).status, "unknown");
+    assert.equal(verify(job).integrity, "incomplete");
+    assert.equal(fs.readFileSync(count, "utf8"), before + "request\n", "inspection must not replay");
+
+    if (simulateForceFailure) {
+      // A deliberately unkillable fake batch still exits by its own short
+      // failsafe, so this test cannot leave a running fixture after teardown.
+      await until(() => fs.existsSync(failsafe), 7000);
+      assert.equal(failure.batch_close_observed, false, "no fabricated termination proof");
+    }
+  });
+}

@@ -252,21 +252,28 @@ function signalBatch(child, force) {
 }
 async function stopBatch(child, closed, job) {
   if (!child) return;
+  let markerError = null;
   if (process.platform === "win32") {
-    // This path also runs after internal errors, so publish the cooperative
-    // cancellation request even if the user did not call 'cancel'.
+    // A disk-full/access-denied marker must not short-circuit cleanup of the
+    // ChildProcess THIS worker owns. No cooperative wait is possible without
+    // the marker, so escalate immediately and observe a bounded close window.
     try { fs.writeFileSync(path.join(job, "cancel.request"), "cancel\n", { flag: "wx", mode: 0o600 }); }
-    catch (error) { if (error.code !== "EEXIST") throw error; }
+    catch (error) { if (error.code !== "EEXIST") markerError = error; }
   }
-  signalBatch(child, false);
-  const deadline = Date.now() + CANCEL_GRACE_MS;
-  while (Date.now() < deadline && (!closed() || groupGone(child) === false)) await pause(25);
+  if (!markerError) {
+    signalBatch(child, false);
+    const deadline = Date.now() + CANCEL_GRACE_MS;
+    while (Date.now() < deadline && (!closed() || groupGone(child) === false)) await pause(25);
+  }
   if (!closed() || groupGone(child) === false) {
     signalBatch(child, true);
     const killDeadline = Date.now() + CANCEL_KILL_WAIT_MS;
     while (!closed() && Date.now() < killDeadline) await pause(25);
   }
   if (!closed()) child.unref();
+  // Preserve the original cancellation publication error only AFTER the
+  // bounded owned-child cleanup attempt. This is never proof of remote stop.
+  if (markerError) throw markerError;
 }
 async function worker(jobPath) {
   const job = canonicalJob(jobPath);
@@ -283,6 +290,7 @@ async function worker(jobPath) {
   try { err = fs.openSync(path.join(job, "stderr.log"), "wx", 0o600); }
   catch (error) { fs.closeSync(out); throw error; }
   let child = null, reason = "child_exit", closed = null, spawnError = null, exited;
+  let cleanupAttempted = false;
   let requested = fs.existsSync(path.join(job, "cancel.request"));
   let notifyCancel;
   const cancellation = new Promise(resolve => { notifyCancel = resolve; });
@@ -322,13 +330,30 @@ async function worker(jobPath) {
       if (fs.existsSync(path.join(job, "cancel.request"))) requestCancel();
       if (requested) {
         reason = "cancelled";
+        cleanupAttempted = true;
         await stopBatch(child, () => closed !== null, job);
       } else if (spawnError) reason = "spawn_error";
     }
   } catch (error) {
-    // A record-write failure after spawn must still initiate cleanup; there is
-    // no verified terminal record and callers must treat the job as unknown.
-    await stopBatch(child, () => closed !== null, job);
+    // Publication can fail after spawn, and cancellation publication can fail
+    // independently. Preserve BOTH error codes without hiding the first one,
+    // even when force cannot prove the batch or provider has terminated.
+    let cleanupError = cleanupAttempted ? error : null;
+    if (!cleanupAttempted) {
+      cleanupAttempted = true;
+      try { await stopBatch(child, () => closed !== null, job); }
+      catch (next) { cleanupError = next; }
+    }
+    const safeCode = issue => /^[A-Z][A-Z0-9_]{1,50}$/.test(issue?.code || "") ? issue.code : "UNKNOWN";
+    try {
+      writeOnce(path.join(job, "failure.json"), {
+        format: 1, original_error_code: safeCode(error),
+        cleanup_error_code: cleanupError ? safeCode(cleanupError) : null,
+        batch_started: child !== null, batch_close_observed: closed !== null,
+        termination_confirmed: null,
+        note: "Incomplete evidence. An owned-child cleanup attempt does not prove provider cancellation. Never replay.",
+      });
+    } catch { /* A second write fault cannot authorize replay or overwrite evidence. */ }
     throw error;
   } finally {
     clearInterval(polling);
