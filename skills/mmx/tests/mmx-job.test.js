@@ -6,7 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { createHash } = require("node:crypto");
 const { spawnSync } = require("node:child_process");
-const { start, status, cancel, verify } = require("../scripts/mmx-job.js");
+const { start, status, cancel, verify, runtimeBinding } = require("../scripts/mmx-job.js");
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "mmx-durable-job-"));
 after(() => { try { fs.rmSync(root, { recursive: true, force: true }); } catch {} });
@@ -126,6 +126,7 @@ function preparedJob(name) {
   const request={format:2,created_at:new Date().toISOString(),
     prompts:[{file,...fileDigest(file)}],profile:{file:profileFile,...fileDigest(profileFile)},
     batch_script:fs.realpathSync(fakeBatch),batch_script_digest:fileDigest(fakeBatch),
+    runtime:runtimeBinding(),
     batch_args:["--prompt-file",file,"--concurrency","1","--profile-file",profileFile,"--receipt-file",path.join(job,"receipt.json")]};
   fs.writeFileSync(path.join(job,"request.json"),JSON.stringify(request));
   fs.writeFileSync(path.join(job,"request-digest.json"),JSON.stringify(fileDigest(path.join(job,"request.json"))));
@@ -135,6 +136,43 @@ function runWorker(job) {
   return spawnSync(process.execPath,[script,"worker",job],{encoding:"utf8",timeout:12000});
 }
 
+
+test("MAC-10 verified runtime binds Node, MMX wrapper, guard and CLI before worker launch", () => {
+  const runtime=runtimeBinding();
+  assert.equal(runtime.format,1);
+  assert.equal(runtime.node_version,process.version);
+  assert.equal(runtime.files.length,4);
+  assert.ok(runtime.files.some(v=>v.file.endsWith("fetch-timeout-guard.js")));
+  for(const record of runtime.files)assert.equal(record.sha256,fileDigest(record.file).sha256);
+  for(const [name,mutate]of [
+    ["node-version", req=>{req.runtime.node_version="v0.0.0";}],
+    ["guard-digest", req=>{req.runtime.files.find(f=>f.file.endsWith("fetch-timeout-guard.js")).sha256="a".repeat(64);}],
+    ["cli-entry", req=>{req.runtime.cli={file:"/fake/mmx",sha256:"a".repeat(64),bytes:4,package:null};}],
+  ]) {
+    const job=preparedJob("runtime-drift-"+name);
+    const reqFile=path.join(job,"request.json");
+    const req=JSON.parse(fs.readFileSync(reqFile,"utf8"));
+    mutate(req);
+    fs.writeFileSync(reqFile,JSON.stringify(req));
+    fs.writeFileSync(path.join(job,"request-digest.json"),JSON.stringify(fileDigest(reqFile)));
+    const count=invocationCount();
+    assert.equal(verify(job).integrity,"corrupt",name);
+    assert.equal(runWorker(job).status,2,name);
+    assert.equal(invocationCount(),count,name+" may not call provider");
+  }
+});
+test("legacy MMX jobs without runtime identity remain inspect-only and cannot execute", () => {
+  const job=preparedJob("legacy-runtime");
+  const reqFile=path.join(job,"request.json");
+  const req=JSON.parse(fs.readFileSync(reqFile,"utf8"));
+  delete req.runtime;
+  fs.writeFileSync(reqFile,JSON.stringify(req));
+  fs.writeFileSync(path.join(job,"request-digest.json"),JSON.stringify(fileDigest(reqFile)));
+  const count=invocationCount();
+  assert.equal(status(job).status,"unknown");
+  assert.equal(runWorker(job).status,2);
+  assert.equal(invocationCount(),count);
+});
 test("a cancel marker published before worker start never invokes the batch",()=>{
   const job=preparedJob("pre-cancelled");
   const count=invocationCount();

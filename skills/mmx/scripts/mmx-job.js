@@ -53,6 +53,56 @@ function matchesFingerprint(file, expected) {
   const actual = fingerprint(file);
   if (actual.bytes !== expected.bytes || actual.sha256 !== expected.sha256) throw new Error("record digest mismatch");
 }
+// Pin the actual local runtime used by the detached job. Do not record keys,
+// model credentials, proxy addresses, or arbitrary environment contents.
+function cliLauncher() {
+  const names = process.platform === "win32" ? ["mmx.cmd", "mmx.exe", "mmx"] : ["mmx"];
+  for (const dir of (process.env.PATH || "").split(path.delimiter)) {
+    if (!dir) continue;
+    for (const name of names) {
+      try {
+        const file = fs.realpathSync(path.resolve(dir, name));
+        if (!fs.statSync(file).isFile()) continue;
+        return file;
+      } catch {}
+    }
+  }
+  return null;
+}
+function cliPackage(file) {
+  let dir = path.dirname(file);
+  for (let i=0;i<12;i++) {
+    const pkg = path.join(dir, "package.json");
+    try {
+      const meta = JSON.parse(fs.readFileSync(pkg,"utf8"));
+      if (meta.name === "mmx-cli" && typeof meta.version === "string") {
+        return { file: pkg, version: meta.version, ...fingerprint(pkg) };
+      }
+    } catch {}
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+function runtimeBinding() {
+  const components = [
+    path.join(__dirname, "mmx-chat.js"),
+    path.join(__dirname, "fetch-timeout-guard.js"),
+    path.join(__dirname, "mmx-provider-slot.js"),
+    __filename,
+  ];
+  const files = components.map(file=>({file:fs.realpathSync(file),...fingerprint(file)}));
+  const cli = cliLauncher();
+  return {
+    format:1,
+    node_version:process.version,
+    node_executable:fs.realpathSync(process.execPath),
+    files,
+    cli:cli?{file:cli,...fingerprint(cli),package:cliPackage(cli)}:null,
+  };
+}
+
 function snapshot(job, input, target) {
   const bytes = regularBytes(fs.realpathSync(input));
   const dst = path.join(job, "input", target);
@@ -98,6 +148,15 @@ function readRequest(job) {
   if (JSON.stringify(canonical) !== JSON.stringify(request.batch_args)) throw new Error("arguments do not bind snapshots");
   readProfileBudget(request.profile.file);
   matchesFingerprint(request.batch_script, request.batch_script_digest);
+  // An old request without the runtime contract can still be inspected, but
+  // must never be promoted to a new executable request by the worker.
+  if (!request.runtime || request.runtime.format !== 1 ||
+      JSON.stringify(request.runtime) !== JSON.stringify(runtimeBinding())) {
+    throw new Error("Node, wrapper, guard or CLI runtime changed; do not launch");
+  }
+  if (request.batch_script === fs.realpathSync(BATCH) && !request.runtime.cli) {
+    throw new Error("real MMX batch requires a verified CLI launcher on PATH");
+  }
   return { request, requestDigest: recorded.sha256 };
 }
 function start(jobPath, argv, overrides = {}) {
@@ -113,6 +172,7 @@ function start(jobPath, argv, overrides = {}) {
   const batchScript = fs.realpathSync(overrides.batchPath ?? BATCH);
   const request = { format: FORMAT, created_at: new Date().toISOString(), prompts, profile,
     batch_script: batchScript, batch_script_digest: fingerprint(batchScript),
+    runtime: runtimeBinding(),
     batch_args: makeBatchArgs(parsed, prompts, profile.file, path.join(job, "receipt.json")) };
   writeOnce(path.join(job, "request.json"), request);
   writeOnce(path.join(job, "request-digest.json"), fingerprint(path.join(job, "request.json")));
@@ -337,4 +397,4 @@ if (require.main === module) {
     process.exitCode = EXIT_UNKNOWN;
   });
 }
-module.exports = { start, status, cancel, verify, resolveArgs };
+module.exports = { start, status, cancel, verify, resolveArgs, runtimeBinding };
