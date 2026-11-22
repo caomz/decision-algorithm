@@ -19,7 +19,7 @@ fs.writeFileSync(driver, `require(${JSON.stringify(wrapper)}).main(process.argv.
 let counter = 0;
 
 function run(scenario = "ok", options = {}) {
-  const directory = path.join(root, String(counter++));
+  const directory = path.join(root, (options.directoryPrefix ?? "") + String(counter++));
   fs.mkdirSync(directory, { mode: 0o700 });
   const cli = path.join(directory, "fake cli.cjs");
   fs.writeFileSync(cli, `require(${JSON.stringify(fixture)}).run(${JSON.stringify(scenario)});`);
@@ -41,6 +41,79 @@ function run(scenario = "ok", options = {}) {
   const receipt = JSON.parse(result.stdout);
   return { result, receipt, output };
 }
+
+
+function mac08Hash(data) { return createHash("sha256").update(data).digest("hex"); }
+
+function mac08CheckAttachment(output, original, marker) {
+  const observed = JSON.parse(fs.readFileSync(path.join(output, "attachment-observed.json"), "utf8"));
+  const rendered = fs.readFileSync(path.join(output, "prompt.txt"));
+  const metadata = JSON.parse(fs.readFileSync(path.join(output, "launch.json"), "utf8"));
+  assert.equal(observed.attached, true, "complete rendered prompt must travel through --attach");
+  assert.equal(observed.argv_contains_sentinel, false, "material appears in argv");
+  assert.equal(observed.env_contains_sentinel, false, "material appears in child env");
+  assert.equal(observed.attachment_bytes, rendered.length);
+  assert.equal(observed.attachment_sha256, mac08Hash(rendered));
+  assert.deepEqual(fs.readFileSync(path.join(output, "work/attached-material.txt")), rendered);
+  assert.equal(metadata.material_bytes, original.length);
+  assert.equal(metadata.material_sha256, mac08Hash(original));
+  assert.equal(metadata.rendered_prompt_bytes, rendered.length);
+  assert.equal(metadata.rendered_prompt_sha256, mac08Hash(rendered));
+  assert.ok(rendered.toString("utf8").includes(marker));
+  assert.equal(JSON.stringify(metadata).includes(marker), false, "launch metadata includes private body");
+  assert.ok(observed.denied_tools.includes("Read") && observed.denied_tools.includes("Bash"));
+  assert.equal(observed.mode, process.platform === "win32" ? "guarded" : "plan");
+  assert.ok(observed.argv_prompt_bytes < 256, "argv must contain a fixed short public instruction");
+  return rendered.toString("utf8");
+}
+
+test("MAC-08 short chat: child argv/env do not contain the rendered prompt", () => {
+  const marker = "MAC08_SENTINEL_short_1";
+  const original = Buffer.from("中文🌟 /Users/中文 空格\n" + marker + " literal $(do-not-run)", "utf8");
+  const { result, receipt, output } = run("ok", { bytes: original, directoryPrefix: "中文 空格 " });
+  assert.equal(result.status, 0);
+  assert.equal(receipt.status, "ok");
+  assert.equal(receipt.text, original.toString("utf8"));
+  assert.ok(mac08CheckAttachment(output, original, marker).includes("Answer the question in request."));
+});
+
+for (const mode of ["review", "challenge"]) {
+  test("MAC-08 " + mode + " preserves complete review schema and evidence IDs in attachment", () => {
+    const marker = "MAC08_SENTINEL_" + mode;
+    const original = Buffer.from("证据材料中文🌟 " + marker, "utf8");
+    const { result, receipt, output } = run("ok", { bytes: original, review: mode });
+    assert.equal(result.status, 0);
+    assert.equal(receipt.review_gate, "PASS");
+    const rendered = mac08CheckAttachment(output, original, marker);
+    assert.ok(rendered.includes("REVIEW_SCHEMA\n"));
+    assert.ok(rendered.includes("EVIDENCE_IDS\n"));
+    assert.ok(rendered.includes('["E1"]'));
+    assert.ok(rendered.includes("MATERIAL_JSON\n"));
+  });
+}
+
+for (const length of [24 * 1024 - 1, 24 * 1024, 24 * 1024 + 1, 128 * 1024]) {
+  test("MAC-08 " + length + "-byte input never falls back to inline argv", () => {
+    const marker = "MAC08_SENTINEL_size_" + length;
+    const original = Buffer.from(marker + "中" + "x".repeat(length - Buffer.byteLength(marker + "中")));
+    assert.equal(original.length, length);
+    const { result, receipt, output } = run("ok", { bytes: original });
+    assert.equal(result.status, 0);
+    assert.equal(receipt.text, original.toString("utf8"));
+    mac08CheckAttachment(output, original, marker);
+  });
+}
+
+test("MAC-08 missing attachment fails without falling back to paid argv retry", () => {
+  const marker = "MAC08_SENTINEL_missing";
+  const { result, receipt, output } = run("attachment_missing", { prompt: marker });
+  assert.equal(result.status, 1);
+  assert.notEqual(receipt.status, "ok");
+  assert.equal(receipt.complete, false);
+  assert.equal(receipt.review_gate, "NOT_EVALUATED");
+  assert.equal(JSON.stringify(JSON.parse(fs.readFileSync(path.join(output, "launch.json"), "utf8"))).includes(marker), false);
+  assert.equal(JSON.stringify(receipt).includes(marker), false);
+});
 
 test("UTF-8, literal shell syntax and slash commands remain data; isolation is effective", () => {
   const { result, receipt, output } = run();

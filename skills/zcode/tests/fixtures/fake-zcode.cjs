@@ -2,6 +2,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
+const { createHash } = require("node:crypto");
 
 exports.run = scenario => {
   const args = process.argv.slice(2);
@@ -14,8 +15,22 @@ exports.run = scenario => {
     return;
   }
   const value = name => args[args.indexOf(name) + 1];
-  const prompt = value("--prompt");
+  const argvPrompt = value("--prompt");
+  const attachmentPath = args.includes("--attach") ? value("--attach") : null;
   const work = value("--cwd");
+  let prompt = argvPrompt;
+  let attachedBytes = null;
+  if (attachmentPath) {
+    try {
+      if (scenario === "attachment_missing") fs.rmSync(attachmentPath);
+      attachedBytes = fs.readFileSync(attachmentPath);
+      prompt = new TextDecoder("utf-8", { fatal: true }).decode(attachedBytes);
+    } catch {
+      process.stderr.write("synthetic attachment read failure");
+      process.exitCode = 9;
+      return;
+    }
+  }
   const home = process.env.HOME;
   const config = JSON.parse(fs.readFileSync(path.join(home, ".zcode/cli/config.json"), "utf8"));
   const denied = value("--disallowed-tools").split(",");
@@ -31,6 +46,18 @@ exports.run = scenario => {
     config.memory.use === false && config.skills.enabled === false &&
     ["Bash", "Read", "Write", "Edit", "Agent", "Task", "Skill", "js", "CreateSession", "CreateWorkflow", "ToolSearch", "SendMessage"].every(name => denied.includes(name));
   if (!isolated) { process.stderr.write("isolation failed"); process.exitCode = 8; return; }
+  const marker = prompt.match(/MAC08_SENTINEL_[A-Za-z0-9_]+/)?.[0] ?? null;
+  const observed = {
+    attached: Boolean(attachmentPath),
+    attachment_bytes: attachedBytes?.length ?? null,
+    attachment_sha256: attachedBytes ? createHash("sha256").update(attachedBytes).digest("hex") : null,
+    argv_contains_sentinel: Boolean(marker && args.some(arg => arg.includes(marker))),
+    env_contains_sentinel: Boolean(marker && Object.values(process.env).some(value => value.includes(marker))),
+    argv_prompt_bytes: Buffer.byteLength(argvPrompt ?? "", "utf8"),
+    mode: value("--mode"),
+    denied_tools: denied,
+  };
+  fs.writeFileSync(path.join(path.dirname(work), "attachment-observed.json"), JSON.stringify(observed), { flag: "wx", mode: 0o600 });
   if (scenario === "kill_wrapper") { process.kill(process.ppid, "SIGKILL"); return; }
   if (scenario === "hang" || scenario === "tree") {
     if (scenario === "tree") {
