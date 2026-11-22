@@ -9,7 +9,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { spawnSync } = require("node:child_process");
+const { spawnSync, spawn } = require("node:child_process");
 
 const skillRoot = path.resolve(__dirname, "..");
 const batch = path.join(skillRoot, "scripts", "zcode-batch.js");
@@ -135,6 +135,47 @@ test("MAC-03 stores every completed shard as a write-once private receipt", () =
   assert.deepEqual(JSON.parse(fs.readFileSync(dest,"utf8")).shards,x.shards);
   const repeat = receiptOf(runBatch(["--prompt-file",files[0],"--receipt-file",dest]));
   assert.equal(repeat.status,"archive_error");
+});
+
+test("MAC-04 double SIGINT preserves ZCode completed shard and never starts queued work", { skip: process.platform === "win32", timeout: 20000 }, async () => {
+  const first = shardFile("cancel-z-first.txt", "first done");
+  const second = shardFile("cancel-z-second.txt", "CONC_PROBE in progress");
+  const third = shardFile("cancel-z-third.txt", "queued only");
+  const receipt = path.join(root, "cancel-z-final.json");
+  const child = spawn(process.execPath, [batch,
+    "--prompt-file", first, "--prompt-file", second, "--prompt-file", third,
+    "--concurrency", "1", "--receipt-file", receipt], {
+    stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, ZCODE_BATCH_WRAPPER: fakeWrapper, FAKE_STATE_DIR: stateDir,
+      FAKE_ARGS_DUMP: argsDump, FAKE_CONC_LOG: concLog, ZCODE_BATCH_RETRY_MS: "10" },
+  });
+  let stdout = "";
+  child.stdout.on("data", c=>{ stdout += c.toString(); });
+  child.stderr.resume();
+  const closed = new Promise(resolve=>child.once("close",(code,signal)=>resolve({code,signal})));
+  try {
+    let started = false;
+    for(let i=0;i<150;i++) {
+      started = fs.existsSync(path.join(stateDir,path.basename(second)));
+      if(started)break;
+      await new Promise(resolve=>setTimeout(resolve,20));
+    }
+    assert.equal(started,true,"second shard already started");
+    child.kill("SIGINT"); child.kill("SIGINT");
+    const result = await Promise.race([closed,new Promise((_,reject)=>setTimeout(()=>reject(new Error("batch did not stop")),16000))]);
+    assert.equal(result.code,1);
+    const out = JSON.parse(stdout.trim());
+    assert.equal(out.status,"cancelled");
+    assert.equal(out.gate,"NOT_EVALUATED");
+    assert.equal(out.transport_gate,"NOT_EVALUATED");
+    assert.equal(out.shards[0].status,"ok");
+    assert.equal(out.shards[2],null);
+    assert.equal(fs.existsSync(path.join(stateDir,path.basename(third))),false);
+    assert.equal(JSON.parse(fs.readFileSync(receipt,"utf8")).status,"cancelled");
+    assert.equal(fs.existsSync(path.join(receipt+".shards","000.json")),true);
+  } finally {
+    if(child.exitCode===null&&child.signalCode===null)try{child.kill("SIGKILL");}catch{}
+  }
 });
 test("usage: rejects a request with no shard source", () => {
   assert.equal(receiptOf(runBatch([])).status, "usage_error");

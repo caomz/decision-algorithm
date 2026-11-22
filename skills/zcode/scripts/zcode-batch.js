@@ -205,6 +205,8 @@ function collectShardFiles(args) {
 
 const liveChildren = new Set();
 let cancelled = false;
+let signalRequested = false;
+let cancellationEscalation = null;
 
 function runWrapperOnce(promptFile, fixedArgs) {
   return new Promise(resolve => {
@@ -438,9 +440,16 @@ async function main() {
       catch (error) { archiveFailure = archiveFailure || archiveErrorCode(error); }
     }
   }
-  await Promise.all(Array.from({ length: Math.min(concurrency, shards.length) }, worker));
+  try { await Promise.all(Array.from({ length: Math.min(concurrency, shards.length) }, worker)); }
+  finally { if (cancellationEscalation) clearTimeout(cancellationEscalation); }
 
   const envelope = { ...aggregate(results, shards, args, started), shards: results };
+  if (cancelled) {
+    envelope.status = "cancelled";
+    envelope.gate = "NOT_EVALUATED";
+    envelope.transport_gate = "NOT_EVALUATED";
+    envelope.note = "Completed shards retained; uncertain requests must not be replayed.";
+  }
   if (archive) envelope.receipt_file = archive.file;
   if (archiveFailure) {
     envelope.status = "archive_error";
@@ -462,12 +471,20 @@ async function main() {
 }
 
 function onSignal(code) {
-  if (emitted) process.exit(code);
+  if (emitted || signalRequested) return;
+  signalRequested = true;
   cancelled = true;
-  // Ask each wrapper to stop; the wrapper owns CLI cleanup and receipt writes.
+  // Signal owned wrappers cooperatively but let main publish the COMPLETE
+  // batch receipt after all in-flight shards settle. Never emit from here.
   for (const child of liveChildren) { try { child.kill("SIGTERM"); } catch {} }
-  fail({ status: "cancelled", transport_gate: "NOT_EVALUATED", gate: "NOT_EVALUATED",
-    note: "batch interrupted; shard receipts up to this point are lost" });
+  cancellationEscalation = setTimeout(() => {
+    for (const child of liveChildren) {
+      try { child.kill("SIGKILL"); } catch {}
+      try { child.stdout?.destroy(); } catch {}
+      try { child.stderr?.destroy(); } catch {}
+    }
+  }, 12000);
+  cancellationEscalation.unref();
 }
 process.on("SIGTERM", () => onSignal(143));
 process.on("SIGINT", () => onSignal(130));
