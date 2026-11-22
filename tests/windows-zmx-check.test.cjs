@@ -5,7 +5,8 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const vm = require("node:vm");
-const { parseArgs, hostClass, targetMatch, supportStatus, hardlinkProbe, versionToken, probeVersion, testFiles, readHost, run } = require("../scripts/windows-zmx-check.cjs");
+const { parseArgs, hostClass, targetMatch, supportStatus, WINDOWS11_SUPPORT_TABLE,
+  validateSupportTable, hardlinkProbe, versionToken, probeVersion, testFiles, readHost, run } = require("../scripts/windows-zmx-check.cjs");
 
 test("host classification distinguishes Windows 10, Windows 11 and Server on the same NT major", () => {
   const win = (build, product = 1) => ({ windows: { version: `10.0.${build}`, build_number: String(build), product_type: product } });
@@ -322,4 +323,34 @@ test("real preflight run() is fail-closed before CLI lookup and launch; fake com
     assert.equal(result.actual.report.cli.zcode.status, "not_probed", name);
     assert.equal(result.actual.report.cli.mmx.status, "not_probed", name);
   }
+});
+
+test("GA table is a single versioned official snapshot, including released 26300 and 28000", () => {
+  assert.equal(validateSupportTable(), true);
+  assert.equal(WINDOWS11_SUPPORT_TABLE.verified_date, "2026-11-22");
+  assert.equal(WINDOWS11_SUPPORT_TABLE.channel, "General Availability Channel");
+  assert.match(WINDOWS11_SUPPORT_TABLE.source, /^https:\/\/learn\.microsoft\.com\//);
+  assert.deepEqual(WINDOWS11_SUPPORT_TABLE.rows.map(r => r.build),
+    [22000, 22621, 22631, 26100, 26200, 26300, 28000]);
+  assert.equal(WINDOWS11_SUPPORT_TABLE.rows.find(r => r.build === 26300).available_date, "2026-09-29");
+  assert.equal(WINDOWS11_SUPPORT_TABLE.rows.find(r => r.build === 28000).available_date, "2026-02-10");
+  const sku101 = build => ({ windows: { build_number: String(build), caption: "Windows 11 Home", operating_system_sku: 101 } });
+  assert.equal(supportStatus(sku101(26300), "windows11", new Date("2026-09-28T23:59:59.999Z")), "not_yet_available");
+  assert.equal(supportStatus(sku101(26300), "windows11", new Date("2026-09-29T00:00:00.000Z")), "supported");
+  assert.equal(supportStatus(sku101(28000), "windows11", new Date("2026-02-09T23:59:59.999Z")), "not_yet_available");
+  assert.equal(supportStatus(sku101(28000), "windows11", new Date("2026-11-22T00:00:00.000Z")), "supported");
+});
+test("invalid or contradictory GA table cannot authorize additional OS support", () => {
+  const base = structuredClone(WINDOWS11_SUPPORT_TABLE);
+  const alter = change => { const copy = structuredClone(base); change(copy); return validateSupportTable(copy); };
+  assert.equal(alter(v => { v.rows[0].available_date = "2023-02-29"; }), false);
+  assert.equal(alter(v => { v.rows[0].enterprise_end = "invalid"; }), false);
+  assert.equal(alter(v => { v.rows[0].consumer_end = "2020-01-01"; }), false);
+  assert.equal(alter(v => { v.rows.push({...v.rows[0]}); }), false);
+  assert.equal(alter(v => { v.channel = "LTSC"; }), false);
+  assert.equal(alter(v => { v.source = "https://unverified.invalid/"; }), false);
+  assert.equal(alter(v => { delete v.rows; }), false);
+  assert.equal(alter(v => { v.rows[2].available_date = "2030-01-01"; }), false);
+  assert.equal(supportStatus({windows:{build_number:"30000",caption:"Windows 11 Home",operating_system_sku:101}},
+    "windows11", new Date("2026-11-22T00:00:00Z")), "unknown_build");
 });

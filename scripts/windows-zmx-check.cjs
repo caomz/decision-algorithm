@@ -35,18 +35,54 @@ function hostClass(metadata, platform = process.platform) {
 }
 
 
-// Reviewed Windows client OS build families only. Never assume a higher or
-// unknown build is a compatible Windows 11 client.
-const WINDOWS11_KNOWN = new Set([22000, 22621, 22631, 26100, 26200, 26300, 28000]);
-const WINDOWS11_EOL = {
-  22000: ["2023-10-10", "2024-10-08"],
-  22621: ["2024-10-08", "2025-10-14"],
-  22631: ["2025-11-11", "2026-11-10"],
-  26100: ["2026-10-13", "2027-10-12"],
-  26200: ["2027-10-12", "2028-10-10"],
-  26300: ["2028-10-10", "2029-10-09"],
-  28000: ["2028-03-14", "2029-03-13"],
-};
+// A static, manually reviewed snapshot. This is NOT a remote refresh or a
+// grant of compatibility to unseen builds/channels. Official source checked:
+// https://learn.microsoft.com/en-us/windows/release-health/supported-versions-windows-client
+// https://learn.microsoft.com/en-us/windows/release-health/windows11-release-information
+const WINDOWS11_SUPPORT_TABLE = Object.freeze({
+  data_version: "ms-windows11-ga-2026-11-22-v1",
+  verified_date: "2026-11-22",
+  channel: "General Availability Channel",
+  source: "https://learn.microsoft.com/en-us/windows/release-health/supported-versions-windows-client",
+  release_source: "https://learn.microsoft.com/en-us/windows/release-health/windows11-release-information",
+  rows: Object.freeze([
+    [22000, "21H2", "2021-10-04", "2023-10-10", "2024-10-08"],
+    [22621, "22H2", "2022-09-20", "2024-10-08", "2025-10-14"],
+    [22631, "23H2", "2023-10-31", "2025-11-11", "2026-11-10"],
+    [26100, "24H2", "2024-10-01", "2026-10-13", "2027-10-12"],
+    [26200, "25H2", "2025-09-30", "2027-10-12", "2028-10-10"],
+    [26300, "26H2", "2026-09-29", "2028-10-10", "2029-10-09"],
+    [28000, "26H1", "2026-02-10", "2028-03-14", "2029-03-13"],
+  ].map(([build, version, available_date, consumer_end, enterprise_end]) =>
+    Object.freeze({ build, version, available_date, consumer_end, enterprise_end }))),
+});
+function utcDay(value) {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const ms = Date.parse(value + "T00:00:00.000Z");
+  return Number.isFinite(ms) && new Date(ms).toISOString().slice(0, 10) === value ? ms : null;
+}
+function validateSupportTable(table = WINDOWS11_SUPPORT_TABLE) {
+  if (!table || table.data_version !== "ms-windows11-ga-2026-11-22-v1" ||
+      table.verified_date !== "2026-11-22" ||
+      table.channel !== "General Availability Channel" ||
+      table.source !== "https://learn.microsoft.com/en-us/windows/release-health/supported-versions-windows-client" ||
+      table.release_source !== "https://learn.microsoft.com/en-us/windows/release-health/windows11-release-information" ||
+      utcDay(table.verified_date) === null || !Array.isArray(table.rows) || !table.rows.length) return false;
+  const seen = new Set();
+  for (const r of table.rows) {
+    const available = utcDay(r?.available_date), shortEnd = utcDay(r?.consumer_end), longEnd = utcDay(r?.enterprise_end);
+    if (!Number.isSafeInteger(r?.build) || r.build < 22000 || seen.has(r.build) ||
+        !/^\d{2}H[12]$/.test(String(r.version || "")) ||
+        available === null || shortEnd === null || longEnd === null ||
+        available > shortEnd || shortEnd > longEnd || available > utcDay(table.verified_date)) return false;
+    seen.add(r.build);
+  }
+  return true;
+}
+function supportRow(build) {
+  if (!validateSupportTable()) return null;
+  return WINDOWS11_SUPPORT_TABLE.rows.find(row => row.build === build) ?? null;
+}
 function targetMatch(metadata, targetOs, platform = process.platform, nodeArch = process.arch) {
   const win = metadata?.windows;
   // Three separate measurements are required: Node runtime architecture,
@@ -62,7 +98,7 @@ function targetMatch(metadata, targetOs, platform = process.platform, nodeArch =
   const build = Number(win.build_number);
   if (!version || !Number.isSafeInteger(build) || Number(version[1]) !== build) return false;
   if (targetOs === "windows10") return build >= 10240 && build < 22000;
-  return targetOs === "windows11" && WINDOWS11_KNOWN.has(build);
+  return targetOs === "windows11" && supportRow(build) !== null;
 }
 // Windows client identity and security support are independent. Unknown OS
 // edition is never silently treated as supported.
@@ -98,8 +134,11 @@ function captionEdition(value) {
 }
 function supportStatus(metadata, targetOs, at = new Date()) {
   if (targetOs !== "windows11") return "not_assessed";
-  const win = metadata?.windows, periods = WINDOWS11_EOL[Number(win?.build_number)];
-  if (!periods) return "unknown_build";
+  const win = metadata?.windows, row = supportRow(Number(win?.build_number));
+  if (!row) return "unknown_build";
+  const atMs = at instanceof Date ? at.getTime() : NaN;
+  if (!Number.isFinite(atMs)) return "invalid_evaluation_time";
+  if (atMs < utcDay(row.available_date)) return "not_yet_available";
   const sku = win?.operating_system_sku;
   const skuEdition = Number.isInteger(sku) ? SKU_EDITION.get(sku) : null;
   const declaredEdition = captionEdition(win?.caption);
@@ -107,8 +146,8 @@ function supportStatus(metadata, targetOs, at = new Date()) {
   if (!skuEdition || !declaredEdition) return "unknown_edition";
   if (skuEdition !== declaredEdition) return "conflicting_edition";
   const longServicing = ["enterprise", "education", "iot_enterprise"].includes(skuEdition);
-  const end = longServicing ? periods[1] : periods[0];
-  return at.getTime() <= Date.parse(end + "T23:59:59Z") ? "supported" : "out_of_support";
+  const end = longServicing ? row.enterprise_end : row.consumer_end;
+  return atMs <= Date.parse(end + "T23:59:59Z") ? "supported" : "out_of_support";
 }
 
 function hardlinkProbe(root, fsApi = fs) {
@@ -238,6 +277,19 @@ function run(options, root = ROOT) {
     };
     report.target_match = targetMatch(metadata, report.requested_target);
     report.support_status = supportStatus(metadata, report.requested_target);
+    const evaluatedRow = supportRow(Number(metadata.windows?.build_number));
+    report.support_table = {
+      data_version: WINDOWS11_SUPPORT_TABLE.data_version,
+      verified_date: WINDOWS11_SUPPORT_TABLE.verified_date,
+      channel: WINDOWS11_SUPPORT_TABLE.channel,
+      source: WINDOWS11_SUPPORT_TABLE.source,
+      release_source: WINDOWS11_SUPPORT_TABLE.release_source,
+      valid: validateSupportTable(),
+      selected_build: evaluatedRow?.build ?? null,
+      available_date: evaluatedRow?.available_date ?? null,
+      consumer_end: evaluatedRow?.consumer_end ?? null,
+      enterprise_end: evaluatedRow?.enterprise_end ?? null,
+    };
     report.acceptance_scope = options.offline ? "offline_diagnostics_only" : "native_client_preflight";
     report.target = { os: report.requested_target === "windows11" ? "Windows 11" : "Windows 10", arch: "x64", node_major: 22, powershell_minimum: "5.1" };
     report.source = { root, head: null, branch: null, working_tree_dirty: null };
@@ -313,4 +365,5 @@ if (require.main === module) {
   } catch { process.stderr.write("Local check refused. Use --jobs-root DIRECTORY --report NEW_FILE [--offline] [--target-os windows10|windows11]; existing reports are never replaced.\n"); process.exitCode = 2; }
 }
 
-module.exports = { parseArgs, hostClass, targetMatch, supportStatus, hardlinkProbe, versionToken, probeVersion, testFiles, readHost, run };
+module.exports = { parseArgs, hostClass, targetMatch, supportStatus, WINDOWS11_SUPPORT_TABLE,
+  validateSupportTable, hardlinkProbe, versionToken, probeVersion, testFiles, readHost, run };
