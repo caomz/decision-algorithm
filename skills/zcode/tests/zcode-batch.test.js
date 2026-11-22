@@ -205,8 +205,8 @@ test("MAC-03 post-request EIO fails closed without replay or lost initial call c
   ].join("\n"));
   const run=spawnSync(process.execPath,["--require",preload,batch,"--prompt-file",file,"--receipt-file",archive],{
     encoding:"utf8",shell:false,windowsHide:true,
-    env:{...process.env,MMX_BATCH_WRAPPER:fakeWrapper,FAKE_STATE_DIR:stateDir,
-      MMX_BATCH_QUOTA_RETRY_MS:"10"},
+    env:{...process.env,ZCODE_BATCH_WRAPPER:fakeWrapper,FAKE_STATE_DIR:stateDir,
+      ZCODE_BATCH_RETRY_MS:"10"},
   });
   const receipt=receiptOf(run);
   assert.equal(run.status,1);
