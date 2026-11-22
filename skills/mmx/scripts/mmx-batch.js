@@ -237,6 +237,8 @@ function collectShardFiles(args) {
 
 const liveChildren = new Set();
 let cancelled = false;
+let signalRequested = false;
+let cancellationEscalation = null;
 
 function runWrapperOnce(promptFile, fixedArgs) {
   return new Promise(resolve => {
@@ -419,7 +421,8 @@ async function main() {
       catch (error) { archiveFailure = archiveFailure || archiveErrorCode(error); }
     }
   }
-  await Promise.all(Array.from({ length: Math.min(concurrency, shards.length) }, worker));
+  try { await Promise.all(Array.from({ length: Math.min(concurrency, shards.length) }, worker)); }
+  finally { if (cancellationEscalation) clearTimeout(cancellationEscalation); }
 
   let okCount = 0;
   let transportOkCount = 0;
@@ -451,6 +454,11 @@ async function main() {
     },
     shards: results,
   };
+  if (cancelled) {
+    envelope.status = "cancelled";
+    envelope.gate = "NOT_EVALUATED";
+    envelope.note = "Completed shards retained; uncertain requests must not be replayed.";
+  }
   if (archive) envelope.receipt_file = archive.file;
   if (archiveFailure) {
     envelope.status = "archive_error";
@@ -472,17 +480,23 @@ async function main() {
 }
 
 function onSignal(code) {
-  if (emitted) process.exit(code);
+  if (emitted || signalRequested) return;
+  signalRequested = true;
   cancelled = true;
+  // Do not emit from a signal handler. Let the main worker pool publish the
+  // completed shard receipts and cancellation marker in one final envelope.
   for (const child of liveChildren) {
-    // The wrapper owns a detached CLI group. Let its signal handler clean that
-    // group before escalating: killing the wrapper first strands the CLI.
-    terminateChildTree(child, false, false);
-    const escalation = setTimeout(() => terminateChildTree(child, true, false), 4500);
-    escalation.unref();
-    child.once("close", () => clearTimeout(escalation));
+    try { terminateChildTree(child, false, false); } catch {}
   }
-  fail({ status: "cancelled", exit_code: code, note: "batch interrupted; shard receipts up to this point are lost" });
+  cancellationEscalation = setTimeout(() => {
+    for (const child of liveChildren) {
+      try { terminateChildTree(child, true, false); } catch {}
+      // Descendant pipe handles must never make cancellation hang forever.
+      try { child.stdout?.destroy(); } catch {}
+      try { child.stderr?.destroy(); } catch {}
+    }
+  }, 12000);
+  cancellationEscalation.unref();
 }
 if (require.main === module) {
   // Importing the parser in the durable supervisor must not also install a
