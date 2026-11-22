@@ -783,6 +783,51 @@ test("pinned input, request digest and role edits prevent worker execution", () 
   }
 });
 
+test("changing a job snapshot after worker verification cannot change bytes consumed by wrapper", { timeout: 20000 }, async () => {
+  const directory = path.join(root, "sealed-toctou-" + counter++);
+  fs.mkdirSync(directory);
+  const prompt = path.join(directory, "prompt.txt"), cli = path.join(directory, "fake.cjs");
+  const mutatingWrapper = path.join(directory, "mutating-driver.cjs"), job = path.join(directory, "job");
+  fs.writeFileSync(prompt, "ORIGINAL VERIFIED BYTES\r\n", "utf8");
+  fs.writeFileSync(cli, `require(${JSON.stringify(fixture)}).run("network_events");`);
+  fs.writeFileSync(mutatingWrapper, `
+    const fs = require("node:fs");
+    const args = process.argv.slice(2);
+    const input = args[args.indexOf("--prompt-file") + 1];
+    fs.writeFileSync(input, "TAMPERED AFTER WORKER HASH");
+    require(${JSON.stringify(wrapper)}).main(args,{setupMacKeychain:()=>null}).then(result=>{
+      process.stdout.write(JSON.stringify(result)+"\\n");
+      process.exitCode=['ok','usage','version'].includes(result.status)?0:1;
+    });
+  `);
+  supervisor.start(job,["--prompt-file",prompt,"--cli-path",cli],{wrapperPath:mutatingWrapper});
+  await waitUntil(() => fs.existsSync(path.join(job,"execution.json")), 15000);
+  const receipt=JSON.parse(fs.readFileSync(path.join(job,"run/receipt.json"),"utf8"));
+  assert.equal(receipt.status,"ok");
+  assert.equal(receipt.text,"ORIGINAL VERIFIED BYTES\r\n");
+  assert.equal(receipt.job_request_sha256,JSON.parse(fs.readFileSync(path.join(job,"request-digest.json"))).sha256);
+  assert.equal(fs.readFileSync(path.join(job,"inputs/prompt.txt"),"utf8"),"TAMPERED AFTER WORKER HASH");
+  assert.equal(supervisor.verify(job).integrity,"corrupt");
+  assert.equal(supervisor.status(job).status,"unknown");
+});
+
+test("invalid or forged sealed stdin cannot invoke the CLI", () => {
+  const directory=path.join(root,"sealed-invalid-"+counter++);
+  fs.mkdirSync(directory);
+  const prompt=path.join(directory,"prompt.txt"),cli=path.join(directory,"fake.cjs");
+  fs.writeFileSync(prompt,"ORIGINAL");
+  fs.writeFileSync(cli,`require(${JSON.stringify(fixture)}).run("network_events");`);
+  const run=spawnSync(process.execPath,[driver,"--prompt-file",prompt,"--cli-path",cli],{
+    input:JSON.stringify({format:1,request_sha256:"0".repeat(64),inputs:[]}),
+    env:{...process.env,ZCODE_JOB_SEALED_INPUT_V1:"1",ZCODE_JOB_REQUEST_SHA256:"1".repeat(64)},
+    encoding:"utf8",timeout:12000
+  });
+  assert.equal(run.status,1);
+  const receipt=JSON.parse(run.stdout);
+  assert.equal(receipt.status,"input_error");
+  assert.equal(receipt.cli_invoked,false);
+});
+
 test("completed job remains locally verifiable but detects receipt replacement", async () => {
   const {result,job}=await runSupervised("network_events");
   assert.equal(result.status,"finished");

@@ -95,7 +95,12 @@ function verify(jobPath) {
     if (attempt.format !== 2 || attempt.request_sha256 !== requestSha256) throw new Error("attempt request mismatch");
     const receipt = read(path.join(job, "run/receipt.json"));
     const stdout = strictJson(fs.readFileSync(path.join(job, "stdout.json"), "utf8").trim());
-    if (JSON.stringify(stdout) !== JSON.stringify(receipt) ||
+    if (receipt.job_request_sha256 !== requestSha256 ||
+        !receipt.job_input_sha256 ||
+        !Array.isArray(read(path.join(job, "request.json")).inputs) ||
+        read(path.join(job, "request.json")).inputs.some(input =>
+          receipt.job_input_sha256[input.name] !== input.sha256) ||
+        JSON.stringify(stdout) !== JSON.stringify(receipt) ||
         (receipt.status === "ok" && (execution.exit_code !== 0 || receipt.complete !== true))) {
       throw new Error("exit, wrapper stdout and receipt disagree");
     }
@@ -217,6 +222,13 @@ async function worker(job) {
   // Even a lost worker.lock cannot turn this attempt into permission to replay.
   save(path.join(job, "attempt.json"), { format: 2, request_sha256: requestSha256,
     worker_pid: process.pid, claimed_at: new Date().toISOString() });
+  // Read and verify the snapshots a second time into immutable local buffers.
+  // After this point the handoff never consults the input files again.
+  const sealedInputs = request.inputs.map(input => ({
+    name: input.name, file: input.file, bytes: input.bytes, sha256: input.sha256,
+    data_base64: checkedBytes(input.file, input).toString("base64"),
+  }));
+  const sealedPayload = JSON.stringify({ format: 1, request_sha256: requestSha256, inputs: sealedInputs });
   const cancelMarker = path.join(job, "cancel.request");
   if (fs.existsSync(cancelMarker)) {
     save(path.join(job, "execution.json"), { format: 2, request_sha256: requestSha256,
@@ -231,12 +243,15 @@ async function worker(job) {
   try {
     child = spawn(process.execPath, [request.wrapper, ...request.args], {
       cwd: job, detached: process.platform !== "win32", shell: false, windowsHide: true,
-      env: { ...process.env, ZCODE_CANCEL_REQUEST_FILE: cancelMarker }, stdio: ["ignore", out, err],
+      env: { ...process.env, ZCODE_CANCEL_REQUEST_FILE: cancelMarker,
+        ZCODE_JOB_SEALED_INPUT_V1: "1", ZCODE_JOB_REQUEST_SHA256: requestSha256 },
+      stdio: ["pipe", out, err],
     });
   } finally { fs.closeSync(out); fs.closeSync(err); }
   let reason = "child_exit";
   // Subscribe to both child events BEFORE publishing started.json. Otherwise
   // a disk-full/access-denied fault after spawn can strand the paid wrapper.
+  child.stdin?.on("error", () => { reason = "stdin_error"; });
   child.once("error", () => { reason = "spawn_error"; });
   const closed = new Promise(resolve => {
     child.once("close", (code, signal) => resolve({ code, signal }));
@@ -244,10 +259,16 @@ async function worker(job) {
   try {
     save(path.join(job, "started.json"), { supervisor_pid: process.pid, wrapper_pid: child.pid ?? null, started_at: new Date().toISOString() });
   } catch (error) {
+    // Do not send any request material if publication failed. Close stdin to
+    // unblock the wrapper's sealed-input preflight before cooperative cancel.
+    try { child.stdin?.end(); } catch {}
     await stopOwnedAfterPublicationFailure(child, closed, job);
     // Preserve unknown and permanent claim. No fabricated execution receipt.
     throw error;
   }
+  // Only AFTER the durable started claim is published may the wrapper receive
+  // the previously verified input bytes. A changed disk snapshot cannot slip in.
+  child.stdin?.end(sealedPayload);
   let escalation;
   const stop = nextReason => {
     if (reason !== "child_exit") return;
