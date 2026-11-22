@@ -673,10 +673,10 @@ test("Windows PID reuse alone cannot establish that a durable job is running", {
 });
 test("abrupt wrapper death leaves startup state and independently captured signal", { skip: process.platform === "win32" }, async () => {
   const { result, job } = await runSupervised("kill_wrapper");
-  assert.equal(result.status, "finished");
-  assert.equal(result.execution.signal, "SIGKILL");
-  assert.equal(result.execution.receipt_exists, false);
+  assert.equal(result.status, "unknown", "missing wrapper receipt cannot publish completion");
   assert.equal(result.receipt, undefined);
+  assert.equal(supervisor.verify(job).integrity, "incomplete");
+  assert.equal(JSON.parse(fs.readFileSync(path.join(job, "execution.json"))).receipt_exists, false);
   const progress = JSON.parse(fs.readFileSync(path.join(job, "run/progress.json")));
   assert.equal(progress.phase, "running");
   assert.ok(progress.wrapper_pid > 0);
@@ -727,6 +727,89 @@ test("without execution.json the liveness probe decides running, interrupted or 
   // The default probe sees that pid 99999999 does not exist.
   assert.equal(supervisor.status(job).status, "interrupted");
 });
+test("new job records exact raw bytes, pinned role paths, and immutable request digest", () => {
+  const directory=path.join(root,"raw-job-"+counter++);
+  fs.mkdirSync(directory);
+  const prompt=path.join(directory,"raw-prompt.txt"), job=path.join(directory,"job");
+  const bytes=Buffer.from("\ufeff中文\r\nBOM+CRLF\r\n","utf8");
+  fs.writeFileSync(prompt,bytes);
+  const { EventEmitter } = require("node:events");
+  supervisor.start(job,["--prompt-file",prompt],{spawnWorker:()=>{
+    const child=new EventEmitter();child.unref=()=>{};return child;
+  }});
+  const request=JSON.parse(fs.readFileSync(path.join(job,"request.json"),"utf8"));
+  const hash=b=>require("node:crypto").createHash("sha256").update(b).digest("hex");
+  assert.equal(request.format,2);
+  assert.equal(request.inputs[0].sha256,hash(bytes));
+  assert.equal(request.inputs[0].bytes,bytes.length);
+  assert.deepEqual(fs.readFileSync(request.inputs[0].file),bytes);
+  assert.equal(request.args[request.inputs[0].index],request.inputs[0].file);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(job,"request-digest.json"))).sha256,
+    hash(fs.readFileSync(path.join(job,"request.json"))));
+  assert.notEqual(hash(bytes),hash(Buffer.from(bytes.toString("utf8").replace(/\r\n/g,"\n"))),
+    "job digests must not use the CRLF-normalized release hash");
+  assert.equal(supervisor.verify(job).integrity,"incomplete");
+});
+
+test("pinned input, request digest and role edits prevent worker execution", () => {
+  const { EventEmitter }=require("node:events");
+  const script=path.resolve(__dirname,"../scripts/zcode-run.js");
+  for(const kind of ["snapshot","request","role"]) {
+    const directory=path.join(root,"pinned-tamper-"+kind+"-"+counter++);
+    fs.mkdirSync(directory);
+    const prompt=path.join(directory,"raw.txt"),job=path.join(directory,"job");
+    fs.writeFileSync(prompt,"SAFE\r\n");
+    supervisor.start(job,["--prompt-file",prompt],{spawnWorker:()=>{
+      const mock=new EventEmitter();mock.unref=()=>{};return mock;
+    }});
+    const requestFile=path.join(job,"request.json");
+    const request=JSON.parse(fs.readFileSync(requestFile,"utf8"));
+    if(kind==="snapshot")fs.writeFileSync(request.inputs[0].file,"SAFE\n");
+    else if(kind==="request")fs.appendFileSync(requestFile," ");
+    else {
+      request.args[request.inputs[0].index]=prompt;
+      fs.writeFileSync(requestFile,JSON.stringify(request));
+      const bytes=fs.readFileSync(requestFile);
+      fs.writeFileSync(path.join(job,"request-digest.json"),JSON.stringify({
+        bytes:bytes.length,sha256:require("node:crypto").createHash("sha256").update(bytes).digest("hex")
+      }));
+    }
+    const worker=spawnSync(process.execPath,[script,"worker",job],{encoding:"utf8"});
+    assert.equal(worker.status,1,kind);
+    assert.equal(fs.existsSync(path.join(job,"started.json")),false,kind);
+    assert.equal(supervisor.verify(job).integrity,"corrupt",kind);
+    assert.equal(supervisor.status(job).status,"unknown",kind);
+    assert.equal(fs.existsSync(path.join(job,"worker.lock")),true,kind);
+  }
+});
+
+test("completed job remains locally verifiable but detects receipt replacement", async () => {
+  const {result,job}=await runSupervised("network_events");
+  assert.equal(result.status,"finished");
+  assert.equal(result.integrity,"match");
+  assert.equal(supervisor.verify(job).integrity,"match");
+  fs.writeFileSync(path.join(job,"run/receipt.json"),'{"status":"ok","text":"forged"}');
+  assert.equal(supervisor.verify(job).integrity,"corrupt");
+  assert.equal(supervisor.status(job).status,"unknown");
+  const before=fs.readFileSync(path.join(job,"execution.json"),"utf8");
+  assert.equal(spawnSync(process.execPath,[path.resolve(__dirname,"../scripts/zcode-run.js"),"worker",job],{encoding:"utf8"}).status,1);
+  assert.equal(fs.readFileSync(path.join(job,"execution.json"),"utf8"),before);
+});
+
+test("legacy jobs stay read-only without retrospective hash or execution migration", () => {
+  const job=path.join(root,"legacy-job-"+counter++);
+  fs.mkdirSync(job);
+  fs.writeFileSync(path.join(job,"request.json"),JSON.stringify({wrapper:process.execPath,args:[]}));
+  fs.writeFileSync(path.join(job,"launch.json"),JSON.stringify({supervisor_pid:123}));
+  assert.equal(supervisor.status(job).legacy_unverified,true);
+  assert.equal(supervisor.verify(job).integrity,"legacy_unverified");
+  assert.equal(supervisor.cancel(job).status,"legacy_read_only");
+  assert.equal(fs.existsSync(path.join(job,"cancel.request")),false);
+  const worker=spawnSync(process.execPath,[path.resolve(__dirname,"../scripts/zcode-run.js"),"worker",job],{encoding:"utf8"});
+  assert.equal(worker.status,1);
+  assert.equal(fs.existsSync(path.join(job,"request-digest.json")),false);
+});
+
 test("SKILL.md, the release manifest and the wrapper agree on one version", () => {
   const manifest = JSON.parse(fs.readFileSync(path.resolve(__dirname, "../.zcode-release.json"), "utf8"));
   const frontmatter = fs.readFileSync(path.resolve(__dirname, "../SKILL.md"), "utf8").match(/^---\r?\n([\s\S]*?)\r?\n---/);

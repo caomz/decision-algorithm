@@ -3,6 +3,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const { createHash } = require("node:crypto");
 const { spawn, spawnSync } = require("node:child_process");
 const { strictJson } = require("./review.js");
 const { parseArgs, checkInstall } = require("./zcode-chat.js");
@@ -15,6 +16,97 @@ function save(file, value) {
   fs.renameSync(temporary, file);
 }
 function read(file) { return strictJson(fs.readFileSync(file, "utf8")); }
+const SHA256 = /^[0-9a-f]{64}$/;
+function rawFingerprint(value) {
+  // Job material is hashed byte for byte; NEVER normalize CRLF like the
+  // installation manifest, which has completely different semantics.
+  const bytes = Buffer.isBuffer(value) ? value : fs.readFileSync(value);
+  return { bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
+}
+function checkedBytes(file, expected) {
+  if (!expected || !Number.isSafeInteger(expected.bytes) || expected.bytes < 0 ||
+      typeof expected.sha256 !== "string" || !SHA256.test(expected.sha256)) throw new Error("invalid raw fingerprint");
+  const stat = fs.lstatSync(file);
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("input or record is not a regular file");
+  const bytes = fs.readFileSync(file);
+  if (bytes.length !== expected.bytes || rawFingerprint(bytes).sha256 !== expected.sha256) throw new Error("raw bytes mismatch");
+  return bytes;
+}
+function readPinnedRequest(job, { requireRuntime = true } = {}) {
+  const recorded = read(path.join(job, "request-digest.json"));
+  checkedBytes(path.join(job, "request.json"), recorded);
+  const request = read(path.join(job, "request.json"));
+  if (request.format !== 2 || !path.isAbsolute(request.wrapper) ||
+      !Array.isArray(request.args) || request.args.some(v => typeof v !== "string") ||
+      !Array.isArray(request.inputs) || request.inputs.length < 1 || request.inputs.length > 2) {
+    throw new Error("invalid request schema");
+  }
+  if (!fs.lstatSync(path.join(job, "inputs")).isDirectory()) throw new Error("job inputs must be an actual directory");
+  const options = parseArgs(request.args);
+  if (options.output !== path.join(job, "run")) throw new Error("job output role mismatch");
+  const seen = new Set();
+  for (const input of request.inputs) {
+    const role = input.name === "prompt.txt" ? "--prompt-file" :
+      input.name === "evidence-ids.json" ? "--evidence-ids-file" : null;
+    if (!role || seen.has(role) || !Number.isInteger(input.index) || input.index < 1 ||
+        input.file !== path.join(job, "inputs", input.name) ||
+        request.args[input.index - 1] !== role || request.args[input.index] !== input.file) {
+      throw new Error("job input role, argument or path mismatch");
+    }
+    seen.add(role);
+    checkedBytes(input.file, input);
+  }
+  if (!seen.has("--prompt-file") || Boolean(options.ids) !== seen.has("--evidence-ids-file") ||
+      options.prompt !== path.join(job, "inputs", "prompt.txt") ||
+      (options.ids && options.ids !== path.join(job, "inputs", "evidence-ids.json"))) {
+    throw new Error("job input set mismatch");
+  }
+  let runtimeCode = "match";
+  try { checkedBytes(request.wrapper, request.wrapper_digest); }
+  catch {
+    runtimeCode = "changed_or_missing";
+    if (requireRuntime) throw new Error("wrapper runtime changed; do not replay");
+  }
+  return { request, options, requestSha256: recorded.sha256, runtimeCode };
+}
+function verify(jobPath) {
+  const job = path.resolve(jobPath);
+  try {
+    const { requestSha256, runtimeCode } = readPinnedRequest(job, { requireRuntime: false });
+    if (!fs.existsSync(path.join(job, "completion.json"))) {
+      return { integrity: "incomplete", job_dir: job, runtime_code: runtimeCode };
+    }
+    const completion = read(path.join(job, "completion.json"));
+    if (completion.format !== 2 || completion.request_sha256 !== requestSha256) throw new Error("completion request mismatch");
+    for (const name of ["attempt.json", "started.json", "execution.json"]) {
+      checkedBytes(path.join(job, name), completion[name]);
+    }
+    const execution = read(path.join(job, "execution.json"));
+    if (execution.format !== 2 || execution.request_sha256 !== requestSha256 ||
+        !["child_exit", "cancelled", "spawn_error", "supervisor_timeout"].includes(execution.reason) ||
+        typeof execution.wrapper_started !== "boolean" || typeof execution.receipt_exists !== "boolean" ||
+        execution.receipt_exists !== true || !execution.outputs ||
+        !(Number.isInteger(execution.exit_code) || execution.exit_code === null) ||
+        !(execution.signal === null || typeof execution.signal === "string")) throw new Error("execution schema mismatch");
+    for (const name of ["stdout.json", "stderr.log", "run/receipt.json"]) {
+      checkedBytes(path.join(job, name), execution.outputs[name]);
+    }
+    const attempt = read(path.join(job, "attempt.json"));
+    if (attempt.format !== 2 || attempt.request_sha256 !== requestSha256) throw new Error("attempt request mismatch");
+    const receipt = read(path.join(job, "run/receipt.json"));
+    const stdout = strictJson(fs.readFileSync(path.join(job, "stdout.json"), "utf8").trim());
+    if (JSON.stringify(stdout) !== JSON.stringify(receipt) ||
+        (receipt.status === "ok" && (execution.exit_code !== 0 || receipt.complete !== true))) {
+      throw new Error("exit, wrapper stdout and receipt disagree");
+    }
+    return { integrity: "match", job_dir: job, runtime_code: runtimeCode,
+      note: "Only local records are consistent; provider billing and detached descendants are not independently verified." };
+  } catch {
+    if (!fs.existsSync(path.join(job, "request-digest.json"))) return { integrity: "legacy_unverified", job_dir: job };
+    return { integrity: "corrupt", job_dir: job };
+  }
+}
+
 function alive(pid, job) {
   if (!Number.isSafeInteger(pid) || pid <= 0) return false;
   try { process.kill(pid, 0); } catch (error) { return error.code === "ESRCH" ? false : null; }
@@ -82,12 +174,19 @@ function start(jobPath, wrapperArgs, { wrapperPath = WRAPPER, spawnWorker = spaw
   }
   fs.mkdirSync(job, { mode: 0o700 });
   fs.mkdirSync(path.join(job, "inputs"), { mode: 0o700 });
+  const pinnedInputs = [];
   for (const input of inputs) {
     const file = path.join(job, "inputs", input.name);
     fs.writeFileSync(file, input.bytes, { flag: "wx", mode: 0o600 });
     args[input.index] = file;
+    pinnedInputs.push({ index: input.index, name: input.name, file, ...rawFingerprint(input.bytes) });
   }
-  save(path.join(job, "request.json"), { wrapper: path.resolve(wrapperPath), args });
+  const wrapperFile = fs.realpathSync(wrapperPath);
+  const requestFile = path.join(job, "request.json");
+  save(requestFile, { format: 2, created_at: new Date().toISOString(), wrapper: wrapperFile,
+    wrapper_digest: rawFingerprint(wrapperFile), args, inputs: pinnedInputs });
+  save(path.join(job, "request-digest.json"), rawFingerprint(requestFile));
+  readPinnedRequest(job);
   const log = fs.openSync(path.join(job, "supervisor.log"), "wx", 0o600);
   let child;
   const recordLaunchError = error => {
@@ -109,17 +208,21 @@ function start(jobPath, wrapperArgs, { wrapperPath = WRAPPER, spawnWorker = spaw
 async function worker(job) {
   // A removed worker.lock is never permission to resubmit a job that
   // already has any execution evidence. Check before claiming the new lock.
-  for (const name of ["started.json", "stdout.json", "stderr.log", "execution.json", "completion.json", "run"]) {
+  for (const name of ["attempt.json", "started.json", "stdout.json", "stderr.log", "execution.json", "completion.json", "run"]) {
     if (fs.existsSync(path.join(job, name))) throw new Error("existing execution evidence; do not replay");
   }
   fs.mkdirSync(path.join(job, "worker.lock"), { mode: 0o700 });
-  const request = read(path.join(job, "request.json"));
-  if (!path.isAbsolute(request.wrapper) || !Array.isArray(request.args) || request.args.some(arg => typeof arg !== "string")) throw new Error("invalid job");
-  const options = parseArgs(request.args);
-  if (path.resolve(options.output) !== path.join(job, "run")) throw new Error("invalid output-dir");
+  const { request, options, requestSha256 } = readPinnedRequest(job);
+  // Durable attempt evidence precedes any possible wrapper/provider launch.
+  // Even a lost worker.lock cannot turn this attempt into permission to replay.
+  save(path.join(job, "attempt.json"), { format: 2, request_sha256: requestSha256,
+    worker_pid: process.pid, claimed_at: new Date().toISOString() });
   const cancelMarker = path.join(job, "cancel.request");
   if (fs.existsSync(cancelMarker)) {
-    save(path.join(job, "execution.json"), { exit_code: null, signal: null, reason: "cancelled", ended_at: new Date().toISOString(), wrapper_started: false, receipt_exists: false });
+    save(path.join(job, "execution.json"), { format: 2, request_sha256: requestSha256,
+      exit_code: null, signal: null, reason: "cancelled", ended_at: new Date().toISOString(),
+      wrapper_started: false, receipt_exists: false });
+    // A cancelled pre-launch request without a wrapper receipt stays incomplete.
     return;
   }
   const out = fs.openSync(path.join(job, "stdout.json"), "wx", 0o600);
@@ -164,8 +267,34 @@ async function worker(job) {
   clearTimeout(deadline); clearInterval(cancelPoll); if (escalation) clearTimeout(escalation);
   if (reason === "child_exit" && fs.existsSync(cancelMarker)) reason = "cancelled";
   process.removeListener("SIGTERM", cancel); process.removeListener("SIGINT", cancel);
-  // Preserve a real negative outcome even if the wrapper died before writing its receipt.
-  save(path.join(job, "execution.json"), { exit_code: result.code, signal: result.signal, reason, ended_at: new Date().toISOString(), wrapper_started: Boolean(child.pid), receipt_exists: fs.existsSync(path.join(job, "run/receipt.json")) });
+  // Preserve a real negative outcome even if the wrapper died before writing
+  // its receipt, but NEVER publish completion or a PASS for a missing receipt.
+  const receiptFile = path.join(job, "run/receipt.json");
+  const receiptExists = fs.existsSync(receiptFile);
+  const outputRecords = {
+    "stdout.json": rawFingerprint(path.join(job, "stdout.json")),
+    "stderr.log": rawFingerprint(path.join(job, "stderr.log")),
+    "run/receipt.json": receiptExists ? rawFingerprint(receiptFile) : null,
+  };
+  const executionFile = path.join(job, "execution.json");
+  save(executionFile, { format: 2, request_sha256: requestSha256, exit_code: result.code,
+    signal: result.signal, reason, ended_at: new Date().toISOString(),
+    wrapper_started: Boolean(child.pid), receipt_exists: receiptExists, outputs: outputRecords });
+  if (receiptExists) {
+    try {
+      // Validate before the final publication; never bless truncated or
+      // mismatched output, and never manufacture receipt data.
+      const receipt = read(receiptFile);
+      const stdout = strictJson(fs.readFileSync(path.join(job, "stdout.json"), "utf8").trim());
+      if (JSON.stringify(receipt) === JSON.stringify(stdout) &&
+          !(receipt.status === "ok" && (result.code !== 0 || receipt.complete !== true))) {
+        save(path.join(job, "completion.json"), { format: 2, request_sha256: requestSha256,
+          "attempt.json": rawFingerprint(path.join(job, "attempt.json")),
+          "started.json": rawFingerprint(path.join(job, "started.json")),
+          "execution.json": rawFingerprint(executionFile) });
+      }
+    } catch { /* Incomplete evidence remains permanently unknown and inspect-only. */ }
+  }
 }
 
 function cancel(jobPath) {
@@ -173,14 +302,16 @@ function cancel(jobPath) {
   // A cancellation request is a file in this existing job; it never signals a
   // PID recovered from disk and never restarts the request.
   if (!fs.statSync(job).isDirectory() || fs.lstatSync(job).isSymbolicLink()) throw new Error("invalid job");
-  read(path.join(job, "request.json"));
-  if (fs.existsSync(path.join(job, "execution.json"))) return { ...status(job), cancel_requested: false };
+  if (!fs.existsSync(path.join(job, "request-digest.json"))) {
+    return { status: "legacy_read_only", job_dir: job, cancel_requested: false };
+  }
+  if (fs.existsSync(path.join(job, "completion.json"))) return { ...status(job), cancel_requested: false };
   writeCancel(job);
   return { status: "cancel_requested", job_dir: job, cancel_requested: true };
 }
 
 // isAlive is injectable so tests can reproduce the exit race deterministically.
-function status(jobPath, { isAlive = alive } = {}) {
+function legacyStatus(jobPath, { isAlive = alive } = {}) {
   const job = path.resolve(jobPath);
   const launch = read(path.join(job, "launch.json"));
   const result = { status: "running", job_dir: job, supervisor_pid: launch.supervisor_pid };
@@ -214,14 +345,35 @@ function status(jobPath, { isAlive = alive } = {}) {
   return result;
 }
 
+function status(jobPath, { isAlive = alive } = {}) {
+  const job = path.resolve(jobPath);
+  if (!fs.existsSync(path.join(job, "request-digest.json"))) {
+    try { return { ...legacyStatus(job, { isAlive }), legacy_unverified: true }; }
+    catch { return { status: "unknown", job_dir: job, legacy_unverified: true,
+      note: "Old-format job is read-only and cannot be replayed or upgraded automatically." }; }
+  }
+  const evidence = verify(job);
+  if (evidence.integrity !== "match") {
+    let pid = null;
+    try { pid = read(path.join(job, "launch.json")).supervisor_pid ?? null; } catch {}
+    return { status: "unknown", job_dir: job, supervisor_pid: pid, integrity: evidence.integrity,
+      runtime_code: evidence.runtime_code ?? null,
+      note: "Missing, incomplete or changed job evidence: never resubmit automatically." };
+  }
+  return { ...legacyStatus(job, { isAlive }), integrity: "match",
+    runtime_code: evidence.runtime_code };
+}
+
 if (require.main === module) {
   const [action, job, ...args] = process.argv.slice(2);
   (async () => {
-    if (!job || !["start", "status", "cancel", "worker"].includes(action)) throw new Error("usage");
+    if (!job || !["start", "status", "cancel", "worker", "verify"].includes(action)) throw new Error("usage");
     if (action === "worker") { await worker(path.resolve(job)); return; }
-    const result = action === "start" ? start(job, args) : action === "cancel" ? cancel(job) : status(job);
+    const result = action === "start" ? start(job, args) : action === "cancel" ? cancel(job)
+      : action === "verify" ? verify(job) : status(job);
+    if (action === "verify" && result.integrity !== "match") process.exitCode = 2;
     process.stdout.write(JSON.stringify(result) + "\n");
   })().catch(() => { process.stdout.write('{"status":"supervisor_error"}\n'); process.exitCode = 1; });
 }
 
-module.exports = { start, status, cancel };
+module.exports = { start, status, cancel, verify };
