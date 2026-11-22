@@ -40,11 +40,20 @@ fs.writeFileSync(counterFile, String(invocations + 1));
 if (process.env.FAKE_ARGS_DUMP) fs.appendFileSync(process.env.FAKE_ARGS_DUMP, argv.join(" ") + "\\n");
 const ok = extra => Object.assign({
   status: "ok", cli_invoked: true, exit_code: 0, signal: null, complete: true,
-  model: "Fake-GLM", stop_reason: "stop", truncated: false,
+  model: "GLM-5.3-Flash", provider: "ZCode", model_identity_source: "runtime.model_request",
+  tool_calls: 0, tool_requests: 0, stop_reason: "stop", truncated: false,
   usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 },
   review_gate: "NOT_EVALUATED", artifacts_dir: "C:\\\\fake\\\\zcode-text-fake",
   cleanup_confirmed: true, text: "REPLY:" + prompt.trim().slice(0, 30),
 }, extra);
+const passReview = { version: 1, summary: "Checked: unit; Not checkable: none", findings: [] };
+const failReview = { version: 1, summary: "Checked: unit; Not checkable: none", findings: [{
+  kind: "confirmed_defect", severity: "P1", title: "defect", evidence_refs: ["E1"],
+  condition: "a", impact: "b", recommendation: "c",
+}] };
+const reviewed = (review, gate, extra = {}) => ok({
+  text: JSON.stringify(review), review, review_gate: gate, ...extra,
+});
 const emit = receipt => { process.stdout.write(JSON.stringify(receipt) + "\\n"); };
 if (prompt.includes("CONC_PROBE")) {
   if (process.env.FAKE_CONC_LOG) fs.appendFileSync(process.env.FAKE_CONC_LOG, "START " + process.pid + " " + Date.now() + "\\n");
@@ -55,8 +64,15 @@ if (prompt.includes("CONC_PROBE")) {
   return;
 }
 if (prompt.includes("CHILD_ERR")) { process.stdout.write("definitely not json"); process.exitCode = 1; return; }
-if (prompt.includes("REVIEW_PASS")) { emit(ok({ review_gate: "PASS" })); return; }
-if (prompt.includes("REVIEW_FAIL")) { emit(ok({ review_gate: "FAIL" })); return; }
+if (prompt.includes("REVIEW_BAD_EXIT")) { emit(reviewed(passReview, "PASS")); process.exitCode = 9; return; }
+if (prompt.includes("REVIEW_BAD_SIGNAL")) { emit(reviewed(passReview, "PASS")); process.kill(process.pid, "SIGTERM"); return; }
+if (prompt.includes("REVIEW_DUP_KEY")) { process.stdout.write('{"status":"ok","status":"ok","review_gate":"PASS"}\\n'); return; }
+if (prompt.includes("REVIEW_FAKE_GATE")) { emit(reviewed(passReview, "FAIL")); return; }
+if (prompt.includes("REVIEW_CLEANUP_NULL")) { emit(reviewed(passReview, "PASS", { cleanup_confirmed: null })); return; }
+if (prompt.includes("REVIEW_MODEL_FALSE")) { emit(reviewed(passReview, "PASS", { model_identity_source: "environment" })); return; }
+if (prompt.includes("REVIEW_TOOLS")) { emit(reviewed(passReview, "PASS", { tool_calls: 1 })); return; }
+if (prompt.includes("REVIEW_PASS")) { emit(reviewed(passReview, "PASS")); return; }
+if (prompt.includes("REVIEW_FAIL")) { emit(reviewed(failReview, "FAIL")); return; }
 if (prompt.includes("AUTH_ERR")) { emit({ status: "auth_error", cli_invoked: false, complete: false, review_gate: "NOT_EVALUATED", error: "auth failed" }); return; }
 if (prompt.includes("POLICY_ERR")) { emit({ status: "policy_violation", cli_invoked: true, complete: false, review_gate: "NOT_EVALUATED", error: "tool used" }); return; }
 if (prompt.includes("TRUNC")) { emit(ok({ truncated: true, complete: false, stop_reason: "max_tokens", review_gate: "PASS" })); return; }
@@ -154,6 +170,66 @@ test("pass-through: mode, evidence ids, cli path and timeout reach every shard",
   assert.ok(line.includes("--timeout-seconds 123"));
 });
 
+test("truth table: review votes require independently verified process, identity, cleanup and text", () => {
+  const { verifiedReviewVote, aggregate } = require("../scripts/zcode-batch.js");
+  const goodReview = { version: 1, summary: "Checked: unit; Not checkable: none", findings: [] };
+  const good = {
+    status: "ok", cli_invoked: true, wrapper_exit_code: 0, wrapper_signal: null,
+    exit_code: 0, signal: null, complete: true, truncated: false,
+    cleanup_confirmed: true, model: "GLM-5.3-Flash", provider: "ZCode",
+    model_identity_source: "runtime.model_request", tool_calls: 0, tool_requests: 0,
+    stop_reason: "stop", text: JSON.stringify(goodReview), review: goodReview, review_gate: "PASS",
+  };
+  const judge = x => aggregate([x], [{ label: "shard" }], { mode: "review", validatedIds: ["E1", "E2"] }, Date.now());
+  assert.equal(verifiedReviewVote(good, ["E1", "E2"]), "PASS");
+  assert.equal(judge(good).gate, "PASS");
+  const bad = [
+    ["unknown cleanup", { cleanup_confirmed: null }],
+    ["false cleanup", { cleanup_confirmed: false }],
+    ["missing cleanup", { cleanup_confirmed: undefined }],
+    ["nonzero actual wrapper", { wrapper_exit_code: 9 }],
+    ["signaled wrapper", { wrapper_signal: "SIGTERM" }],
+    ["nonzero model CLI", { exit_code: 3 }],
+    ["signaled model CLI", { signal: "SIGTERM" }],
+    ["provider missing", { provider: undefined }],
+    ["forged source", { model_identity_source: "environment" }],
+    ["wrong native family", { model: "MiniMax-M3" }],
+    ["model missing", { model: null }],
+    ["unobserved tools", { tool_calls: undefined }],
+    ["tool invoked", { tool_calls: 1 }],
+    ["tool request", { tool_requests: 1 }],
+    ["truncated", { truncated: true }],
+    ["incomplete", { complete: false }],
+    ["forged verdict", { review_gate: "FAIL" }],
+    ["forged review", { review: { ...goodReview, summary: "tampered" } }],
+    ["duplicate JSON key inside text", { text: '{"version":1,"version":1,"summary":"good","findings":[]}' }],
+  ];
+  for (const [name, change] of bad) {
+    const data = { ...good, ...change };
+    assert.equal(verifiedReviewVote(data, ["E1", "E2"]), null, name);
+    assert.equal(judge(data).gate, "NOT_EVALUATED", name);
+  }
+});
+test("fake wrappers cannot vote PASS when they fail, signal, forge review or omit cleanup", () => {
+  for (const [name, marker] of [
+    ["bad-exit.txt", "REVIEW_BAD_EXIT"],
+    ["bad-signal.txt", "REVIEW_BAD_SIGNAL"],
+    ["bad-key.txt", "REVIEW_DUP_KEY"],
+    ["bad-gate.txt", "REVIEW_FAKE_GATE"],
+    ["bad-cleanup.txt", "REVIEW_CLEANUP_NULL"],
+    ["bad-model.txt", "REVIEW_MODEL_FALSE"],
+    ["bad-tools.txt", "REVIEW_TOOLS"],
+  ]) {
+    const file = shardFile(name, marker);
+    const receipt = receiptOf(runBatch(["--prompt-file", file, "--mode", "review", "--evidence-ids-file", idsFile]));
+    assert.equal(receipt.gate, "NOT_EVALUATED", name);
+    assert.equal(receipt.batch.review_pass, 0, name);
+    if (name === "bad-exit.txt" || name === "bad-signal.txt") {
+      assert.equal(receipt.shards[0].status, "child_error", name);
+      assert.equal(receipt.shards[0].diagnostic_receipt.review_gate, "PASS", name);
+    }
+  }
+});
 test("all shards PASS: content and transport gates PASS, input order preserved", () => {
   const files = [shardFile("r2.txt", "REVIEW_PASS two"), shardFile("r1.txt", "REVIEW_PASS one")];
   const run = runBatch(["--prompt-file", files[0], "--prompt-file", files[1], "--mode", "review", "--evidence-ids-file", idsFile, "--concurrency", "2"]);

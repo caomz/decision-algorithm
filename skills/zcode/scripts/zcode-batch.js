@@ -17,6 +17,7 @@
 const fs = require("fs");
 const path = require("path");
 const { spawn } = require("child_process");
+const { strictJson, validateReview, validateIds } = require("./review.js");
 
 const VERSION = "1.0.0";
 const DEFAULT_WRAPPER = path.join(__dirname, "zcode-chat.js");
@@ -201,11 +202,11 @@ function runWrapperOnce(promptFile, fixedArgs) {
       liveChildren.delete(child);
       resolve({ receipt: { status: "child_error", error: `wrapper spawn failed: ${err.code || err.message}` }, duration: 0 });
     });
-    child.on("close", code => {
+    child.on("close", (code, signal) => {
       liveChildren.delete(child);
       const duration = (Date.now() - started) / 1000;
       if (cancelled) {
-        resolve({ receipt: { status: "cancelled", exit_code: code }, duration });
+        resolve({ receipt: { status: "cancelled", wrapper_exit_code: code, wrapper_signal: signal }, duration });
         return;
       }
       const outText = Buffer.concat(stdout).toString("utf8").trim();
@@ -218,7 +219,7 @@ function runWrapperOnce(promptFile, fixedArgs) {
         return;
       }
       let receipt;
-      try { receipt = JSON.parse(outText); }
+      try { receipt = strictJson(outText); }
       catch {
         resolve({ receipt: { status: "child_error", exit_code: code, error: "wrapper stdout was not valid JSON" }, duration });
         return;
@@ -228,7 +229,14 @@ function runWrapperOnce(promptFile, fixedArgs) {
         resolve({ receipt: { status: "child_error", exit_code: code, error: "wrapper envelope is not a JSON object with a status" }, duration });
         return;
       }
-      resolve({ receipt, duration });
+      // A clean stdout reply is never evidence that its wrapper exited cleanly.
+      // Keep diagnostic content but disqualify an abnormal wrapper process.
+      if (code !== 0 || signal !== null) {
+        resolve({ receipt: { status: "child_error", wrapper_exit_code: code, wrapper_signal: signal,
+          diagnostic_receipt: receipt, error: "wrapper process did not exit cleanly" }, duration });
+        return;
+      }
+      resolve({ receipt: { ...receipt, wrapper_exit_code: code, wrapper_signal: signal }, duration });
     });
   });
 }
@@ -270,6 +278,30 @@ async function runShardWithRetries(shard, fixedArgs, allowPaidRetry) {
 // Gates — transport usability and content review_gate are separate verdicts.
 // ---------------------------------------------------------------------------
 
+// Review votes are independently derived from the original text, never from
+// the wrapper's review_gate alone. This stays outside the cross-review runner
+// to avoid a large dependency/call cycle.
+function verifiedReviewVote(receipt, evidenceIds) {
+  if (!Array.isArray(evidenceIds) || evidenceIds.length === 0 ||
+      receipt.status !== "ok" || receipt.cli_invoked !== true ||
+      receipt.wrapper_exit_code !== 0 || receipt.wrapper_signal !== null ||
+      receipt.exit_code !== 0 || receipt.signal !== null ||
+      receipt.complete !== true || receipt.truncated !== false ||
+      receipt.cleanup_confirmed !== true ||
+      typeof receipt.model !== "string" || !/^glm(?:[-_.]|$)/i.test(receipt.model) ||
+      typeof receipt.provider !== "string" || !receipt.provider.trim() ||
+      receipt.model_identity_source !== "runtime.model_request" ||
+      receipt.tool_calls !== 0 || receipt.tool_requests !== 0 ||
+      !["stop", "end_turn", "stop_sequence"].includes(receipt.stop_reason) ||
+      typeof receipt.text !== "string" || !receipt.text.trim()) return null;
+  try {
+    const checked = validateReview(receipt.text, evidenceIds);
+    if (receipt.review_gate !== checked.review_gate ||
+        JSON.stringify(receipt.review) !== JSON.stringify(checked.review)) return null;
+    return checked.review_gate;
+  } catch { return null; }
+}
+
 function aggregate(results, shards, args, started) {
   let okCount = 0;
   let transportOkCount = 0;
@@ -284,10 +316,11 @@ function aggregate(results, shards, args, started) {
       okCount++;
       if (result.complete === true && result.truncated !== true) {
         transportOkCount++;
-        // Only a fully delivered shard may contribute to the content gate: a
-        // truncated reply must not vote on the review verdict.
-        if (result.review_gate === "PASS") reviewPass++;
-        else if (result.review_gate === "FAIL") reviewFail++;
+        // Independently revalidate schema, evidence IDs, native model identity,
+        // wrapper exit and descendant cleanup before accepting a content vote.
+        const vote = verifiedReviewVote(result, args.validatedIds);
+        if (vote === "PASS") reviewPass++;
+        else if (vote === "FAIL") reviewFail++;
         else reviewNotEvaluated++;
       } else truncatedCount++;
     }
@@ -338,12 +371,9 @@ async function main() {
     try { raw = fs.readFileSync(args.evidenceIdsFile); }
     catch { usageError(`--evidence-ids-file is not readable: ${args.evidenceIdsFile}`); }
     let parsed;
-    try { parsed = JSON.parse(raw.toString("utf8")); }
-    catch { usageError("--evidence-ids-file is not valid JSON."); }
-    // The upstream validator owns the exact id rules; reuse it so the batch
-    // gate cannot drift from the single-shot contract.
-    const { validateIds } = require("./review.js");
-    try { validateIds(parsed); }
+    try { parsed = strictJson(raw.toString("utf8")); }
+    catch { usageError("--evidence-ids-file is not valid strict JSON."); }
+    try { args.validatedIds = validateIds(parsed); }
     catch { usageError("--evidence-ids-file must be a nonempty unique array of plain id strings."); }
   }
   const shards = collectShardFiles(args);
@@ -398,5 +428,5 @@ if (require.main === module) {
     fail(error.envelope ?? { status: "batch_error", error: "zcode-batch failed locally." });
   });
 } else {
-  module.exports = { parseArgs, collectShardFiles, aggregate, MODES, RETRYABLE };
+  module.exports = { parseArgs, collectShardFiles, aggregate, verifiedReviewVote, MODES, RETRYABLE };
 }
