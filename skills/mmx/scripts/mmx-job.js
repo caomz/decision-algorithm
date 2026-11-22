@@ -8,9 +8,10 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { spawn, spawnSync } = require("node:child_process");
 const { parseArgs, collectShardFiles, readProfileBudget } = require("./mmx-batch.js");
-// Reuse the wrapper's own CLI resolvers so the runtime binding and the child
-// launch agree on which mmx-cli package is "the CLI".
-const { mmxPackageEntry, npmShimEntry } = require("./mmx-chat.js");
+// Reuse the wrapper's own CLI selection (findMmx) and package verification
+// (mmxPackageEntry) so the runtime binding and the child launch agree exactly
+// on what "the CLI" is.
+const { mmxPackageEntry, findMmx } = require("./mmx-chat.js");
 
 const BATCH = path.join(__dirname, "mmx-batch.js");
 const EXIT_UNKNOWN = 2;
@@ -58,75 +59,48 @@ function matchesFingerprint(file, expected) {
 }
 // Pin the actual local runtime used by the detached job. Do not record keys,
 // model credentials, proxy addresses, or arbitrary environment contents.
-function cliLauncher() {
-  const names = process.platform === "win32" ? ["mmx.cmd", "mmx.exe", "mmx"] : ["mmx"];
-  for (const dir of (process.env.PATH || "").split(path.delimiter)) {
-    if (!dir) continue;
-    for (const name of names) {
-      try {
-        const file = fs.realpathSync(path.resolve(dir, name));
-        if (!fs.statSync(file).isFile()) continue;
-        return file;
-      } catch {}
-    }
+// Identify the CLI execution chain exactly as mmx-chat.js will launch it.
+// findMmx is the single source of truth for launcher selection: the same PATH
+// scan, the same X_OK policy, the same npm shim and package-entry resolution.
+// The text of arbitrary shell scripts is never scanned, so a custom launcher
+// whose inner target cannot be proven by the shared rule stays unresolved and
+// a durable job refuses to launch instead of binding a guess.
+function cliIdentity(envPath = process.env.PATH) {
+  const unresolved = kind => ({ kind, resolution: "unresolved",
+    entry: null, package: null, preload: null, launcher: null });
+  let mmx;
+  try { mmx = findMmx(process.platform, envPath ?? ""); } catch { mmx = null; }
+  if (!mmx) return unresolved("missing");
+  if (mmx.unsafe) return unresolved("unsafe");
+  if (mmx.argsPrefix.length !== 1) {
+    // A custom launcher: what it finally executes cannot be proven without
+    // scanning shell text, which is forbidden. Bind the launcher bytes for
+    // diagnostics only; the resolution stays unknown.
+    let launcher = null;
+    try { launcher = { file: fs.realpathSync(mmx.cmd), ...fingerprint(mmx.cmd) }; } catch {}
+    return { ...unresolved("custom_launcher"), launcher };
   }
-  return null;
-}
-// Resolve the mmx-cli package that a launcher finally executes. The wrapper
-// verifies a package by the same rule (mmxPackageEntry), so the binding and
-// the runtime agree on what "the CLI" means. A same-named package in an
-// unrelated directory is never a binding: the package must own the entry.
-function cliPackageEntry(launcher) {
-  if (!launcher) return null;
-  let real;
-  try { real = fs.realpathSync(launcher); } catch { return null; }
-  // A Windows npm shim declares the package entry in its own body.
-  if (/\.(?:cmd|bat)$/i.test(real)) {
-    const entry = npmShimEntry(real);
-    return entry ? mmxPackageEntry(entry) : null;
-  }
-  // The launcher is the package entry itself, or links to it.
-  const direct = mmxPackageEntry(real);
-  if (direct) return direct;
-  // A POSIX launcher may be a shell wrapper that execs the real CLI. Follow
-  // that indirection so the binding pins the CLI that actually runs. Only
-  // absolute paths are inspected; the launcher is never executed and no shell
-  // is ever evaluated, so a hostile PATH entry cannot run anything.
-  let text;
-  try { text = fs.readFileSync(real, "utf8"); } catch { return null; }
-  if (!text.startsWith("#!")) return null;
-  const roots = new Map();
-  // Tokenise the launcher text on shell-like separators and keep only
-  // absolute-looking tokens that name an mmx entry. The launcher is never
-  // executed and no shell is ever evaluated.
-  for (const token of text.split(/[\s"'`;|&()<>]+/)) {
-    if (!/^(?:[A-Za-z]:[\\/]|[\\/]|~[\\/])/.test(token)) continue;
-    if (!/(?:^|[\\/])mmx(?:\.(?:cmd|exe|mjs|cjs|js))?$/.test(token)) continue;
-    // Resolve the candidate first: a package owns its entry, not the shim
-    // directory that may sit outside the package tree.
-    let resolved;
-    try { resolved = fs.realpathSync(token); } catch { continue; }
-    const pkg = mmxPackageEntry(resolved);
-    if (pkg) roots.set(pkg.root, pkg);
-  }
-  // An ambiguous chain is reported as unknown rather than guessed.
-  if (roots.size !== 1) return null;
-  return [...roots.values()][0];
-}
-function cliPackage(file) {
-  const pkg = cliPackageEntry(file);
-  if (!pkg) return null;
+  const pkg = mmxPackageEntry(mmx.argsPrefix[0]);
+  if (!pkg) return unresolved("custom_launcher");
   const meta = path.join(pkg.root, "package.json");
+  let preload = null;
+  try {
+    const undici = require.resolve("undici", { paths: [pkg.root] });
+    preload = { file: undici, ...fingerprint(undici) };
+  } catch { preload = null; }
   try {
     const data = JSON.parse(fs.readFileSync(meta, "utf8"));
-    if (!data || data.name !== "mmx-cli" || typeof data.version !== "string") return null;
-    return { file: meta, version: data.version, ...fingerprint(meta) };
-  } catch { return null; }
-}
-function cliEntryBinding(file) {
-  const pkg = cliPackageEntry(file);
-  if (!pkg) return null;
-  try { return { file: pkg.entry, ...fingerprint(pkg.entry) }; } catch { return null; }
+    if (!data || data.name !== "mmx-cli" || typeof data.version !== "string") {
+      throw new Error("invalid mmx-cli package metadata");
+    }
+    return { kind: "package_entry", resolution: "resolved",
+      entry: { file: pkg.entry, ...fingerprint(pkg.entry) },
+      package: { file: meta, version: data.version, ...fingerprint(meta) },
+      preload, launcher: null };
+  } catch {
+    return { kind: "package_entry", resolution: "unresolved",
+      entry: null, package: null, preload: null, launcher: null };
+  }
 }
 function runtimeBinding() {
   const components = [
@@ -136,19 +110,16 @@ function runtimeBinding() {
     __filename,
   ];
   const files = components.map(file=>({file:fs.realpathSync(file),...fingerprint(file)}));
-  const cli = cliLauncher();
-  const pkg = cli ? cliPackage(cli) : null;
-  const entry = cli ? cliEntryBinding(cli) : null;
   return {
     format:1,
     node_version:process.version,
     node_executable:fs.realpathSync(process.execPath),
     files,
-    // resolution is explicit: "resolved" when the executed CLI package is
-    // pinned, "unresolved" when the chain could not be determined. An
-    // unresolved chain is reported as unknown, never as a fabricated binding.
-    cli:cli?{file:cli,...fingerprint(cli),package:pkg,entry,
-             resolution:(pkg&&entry)?"resolved":"unresolved"}:null,
+    // resolution is explicit: "resolved" only when the wrapper would execute a
+    // verified mmx-cli package entry through findMmx. Any other chain — a
+    // custom launcher, an unsafe cmd path or a missing CLI — is "unresolved"
+    // and a durable job refuses to launch rather than invent an identity.
+    cli:cliIdentity(),
   };
 }
 
@@ -210,6 +181,13 @@ function readRequest(job) {
 }
 function start(jobPath, argv, overrides = {}) {
   const { parsed, shards } = resolveArgs(argv);
+  // A durable job must prove what it will execute before any job state exists.
+  // An unprovable CLI startup chain never launches and never creates a job
+  // directory, so there is no partial state to preserve or replay.
+  const binding = runtimeBinding();
+  if (!binding.cli || binding.cli.resolution !== "resolved") {
+    throw new Error("MMX CLI startup chain is not provable; refusing to start a durable job");
+  }
   // mkdir without recursive is the idempotency gate. Preserve partial jobs:
   // their absence of a receipt is never permission to launch again.
   fs.mkdirSync(path.resolve(jobPath), { mode: 0o700 });
@@ -221,7 +199,7 @@ function start(jobPath, argv, overrides = {}) {
   const batchScript = fs.realpathSync(overrides.batchPath ?? BATCH);
   const request = { format: FORMAT, created_at: new Date().toISOString(), prompts, profile,
     batch_script: batchScript, batch_script_digest: fingerprint(batchScript),
-    runtime: runtimeBinding(),
+    runtime: binding,
     batch_args: makeBatchArgs(parsed, prompts, profile.file, path.join(job, "receipt.json")) };
   writeOnce(path.join(job, "request.json"), request);
   writeOnce(path.join(job, "request-digest.json"), fingerprint(path.join(job, "request.json")));
@@ -355,6 +333,12 @@ async function worker(jobPath) {
     if (fs.existsSync(path.join(job, name))) throw new Error("existing execution evidence; do not replay");
   }
   const { request, requestDigest } = readRequest(job);
+  // Second identity gate, independent of start(): a recorded runtime whose CLI
+  // chain was not provable must never reach a provider, even when the recorded
+  // bytes still match the current binding exactly.
+  if (!request.runtime || !request.runtime.cli || request.runtime.cli.resolution !== "resolved") {
+    throw new Error("recorded MMX CLI startup chain is unprovable; do not launch");
+  }
   const started_ms = Date.now();
   const out = fs.openSync(path.join(job, "stdout.json"), "wx", 0o600);
   let err;

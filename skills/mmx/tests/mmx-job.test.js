@@ -7,6 +7,7 @@ const path = require("node:path");
 const { createHash } = require("node:crypto");
 const { spawnSync } = require("node:child_process");
 const { start, status, cancel, verify, runtimeBinding } = require("../scripts/mmx-job.js");
+const { findMmx } = require("../scripts/mmx-chat.js");
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "mmx-durable-job-"));
 after(() => { try { fs.rmSync(root, { recursive: true, force: true }); } catch {} });
@@ -161,61 +162,107 @@ test("MAC-10 verified runtime binds Node, MMX wrapper, guard and CLI before work
     assert.equal(invocationCount(),count,name+" may not call provider");
   }
 });
-// Build a macOS-shaped launcher sandbox: a shell wrapper on PATH that execs a
-// real mmx-cli package entry, so the package is not reachable by walking up
-// from the launcher directory.
-function launcherSandbox(label, version) {
+// Build a synthetic mmx-cli package whose shim sits on PATH, so findMmx
+// resolves the package entry — the provable chain. POSIX uses a symlink (or
+// copy) named `mmx`; Windows uses an npm-style mmx.cmd shim whose package
+// lives beside it, exactly like a real npm global install.
+function provableCli(label, version) {
   const sandbox = fs.mkdtempSync(path.join(root, label + "-"));
   const binDir = path.join(sandbox, "bin");
-  const pkgDir = path.join(sandbox, "npm", "node_modules", "mmx-cli");
   fs.mkdirSync(binDir, { recursive: true });
+  const pkgDir = process.platform === "win32"
+    ? path.join(binDir, "node_modules", "mmx-cli")
+    : path.join(sandbox, "pkg", "node_modules", "mmx-cli");
   fs.mkdirSync(path.join(pkgDir, "dist"), { recursive: true });
   fs.writeFileSync(path.join(pkgDir, "package.json"), JSON.stringify({
     name: "mmx-cli", version: version || "9.9.9", bin: { mmx: "dist/mmx.mjs" },
   }));
   const entry = path.join(pkgDir, "dist", "mmx.mjs");
-  fs.writeFileSync(entry, "// synthetic CLI entry\n");
-  // The npm .bin shim is a symlink on POSIX. Where a symlink cannot be created
-  // the wrapper references the package entry directly, which resolves to the
-  // same owning package.
-  const shim = path.join(sandbox, "npm", "node_modules", ".bin", "mmx");
-  fs.mkdirSync(path.dirname(shim), { recursive: true });
-  let target = entry;
-  try {
-    fs.symlinkSync(entry, shim);
-    target = shim;
-  } catch { target = entry; }
-  const wrapper = path.join(binDir, "mmx");
-  fs.writeFileSync(wrapper, ["#!/bin/bash", `exec env "${target}" "$@"`, ""].join("\n"));
-  fs.chmodSync(wrapper, 0o755);
-  return { sandbox, binDir, pkgDir, entry, shim, wrapper };
+  // The entry must carry the executable bit: findMmx checks X_OK through the
+  // shim, and a symlink's access check lands on its target.
+  fs.writeFileSync(entry, "// synthetic CLI entry\n", { mode: 0o755 });
+  fs.chmodSync(entry, 0o755);
+  let shim;
+  if (process.platform === "win32") {
+    shim = path.join(binDir, "mmx.cmd");
+    fs.writeFileSync(shim, [
+      "@ECHO off",
+      "SETLOCAL",
+      '"%_prog%" "%dp0%\\node_modules\\mmx-cli\\dist\\mmx.mjs" %*',
+      "",
+    ].join("\n"));
+  } else {
+    shim = path.join(binDir, "mmx");
+    try { fs.symlinkSync(entry, shim); }
+    catch { fs.copyFileSync(entry, shim); fs.chmodSync(shim, 0o755); }
+  }
+  return { sandbox, binDir, pkgDir, entry, shim };
 }
-function withPath(binDir, run) {
+// A shell wrapper that execs the package shim: what it finally executes cannot
+// be proven by the shared rule, so the chain is unresolved by design. POSIX
+// only; on Windows a bare `mmx` wrapper is simply not found, which the
+// kind-agnostic unresolved assertions accept.
+function wrapperOver(label, version) {
+  const cli = provableCli(label, version);
+  const binDir = path.join(cli.sandbox, "wrapper-bin");
+  fs.mkdirSync(binDir, { recursive: true });
+  const wrapper = path.join(binDir, "mmx");
+  fs.writeFileSync(wrapper, ["#!/bin/bash", `exec env "${cli.shim}" "$@"`, ""].join("\n"));
+  fs.chmodSync(wrapper, 0o755);
+  return { ...cli, binDir, wrapper };
+}
+function withPath(value, run) {
   const saved = process.env.PATH;
-  process.env.PATH = binDir + path.delimiter + saved;
+  process.env.PATH = value;
   try { return run(); } finally { process.env.PATH = saved; }
 }
-test("MAC-10 a PATH launcher that shadows the npm shim still pins the CLI version", () => {
-  // Reproduces the macOS layout where ~/.local/bin/mmx is a shell wrapper that
-  // execs the real CLI, so the npm package is not reachable by walking up from
-  // the launcher directory. The version must still be bound.
-  const box = launcherSandbox("wrapper-path", "9.9.9");
+const POSIX_ONLY = { skip: process.platform === "win32" };
+// One shared provable chain for every test that just needs a launchable job:
+// this whole file runs with the shim first on PATH, so preparedJob records a
+// resolved binding and every spawned worker agrees with it.
+const PROVABLE = provableCli("shared-cli", "9.9.9");
+process.env.PATH = PROVABLE.binDir + path.delimiter + process.env.PATH;
+test("MAC-10 a package-owned shim on PATH binds the executed package", () => {
+  const box = provableCli("provable-shim", "9.9.9");
   withPath(box.binDir, () => {
     const runtime = runtimeBinding();
-    assert.ok(runtime.cli, "the CLI launcher must stay bound");
-    assert.equal(runtime.cli.file, fs.realpathSync(box.wrapper));
+    assert.equal(runtime.cli.kind, "package_entry");
     assert.equal(runtime.cli.resolution, "resolved");
-    assert.ok(runtime.cli.package, "the CLI package version must stay bound");
+    assert.equal(runtime.cli.entry.file, fs.realpathSync(box.entry));
     assert.equal(runtime.cli.package.version, "9.9.9");
     assert.equal(runtime.cli.package.file, fs.realpathSync(path.join(box.pkgDir, "package.json")));
-    assert.ok(runtime.cli.entry, "the executed CLI entry must stay bound");
-    assert.equal(runtime.cli.entry.file, fs.realpathSync(box.entry));
+    assert.equal(runtime.cli.launcher, null, "no launcher guess is recorded");
+  });
+});
+test("MAC-10 a shell wrapper that shadows the npm shim is unprovable and refuses to launch", POSIX_ONLY, () => {
+  // The macOS layout where ~/.local/bin/mmx is a shell wrapper: what the
+  // wrapper finally executes cannot be proven without scanning shell text,
+  // which is forbidden. The binding stays unresolved and a durable job refuses
+  // to launch before creating any job state.
+  const box = wrapperOver("wrapper-path", "9.9.9");
+  withPath(box.binDir, () => {
+    const runtime = runtimeBinding();
+    assert.ok(runtime.cli, "the CLI record must stay bound");
+    assert.equal(runtime.cli.kind, "custom_launcher");
+    assert.equal(runtime.cli.resolution, "unresolved");
+    assert.equal(runtime.cli.package, null, "no package identity may be invented");
+    assert.equal(runtime.cli.entry, null, "no entry identity may be invented");
+    assert.equal(runtime.cli.launcher.file, fs.realpathSync(box.wrapper));
+    const jobDir = path.join(box.sandbox, "refused-job");
+    const promptFile = path.join(box.sandbox, "prompt.txt");
+    fs.writeFileSync(promptFile, "SYNTHETIC REQUEST A\n");
+    const count = invocationCount();
+    assert.throws(() => start(jobDir, ["--prompt-file", promptFile, "--concurrency", "1"]),
+      /not provable/, "start must refuse an unprovable chain");
+    assert.equal(fs.existsSync(jobDir), false, "no job state may be created");
+    assert.equal(invocationCount(), count);
   });
 });
 test("MAC-10 a same-named package in an unrelated directory is not a binding", () => {
   // An mmx-cli package.json that exists somewhere else on disk must never be
-  // accepted as the binding for a launcher that does not execute it.
-  const box = launcherSandbox("unrelated-pkg", "9.9.9");
+  // accepted as the binding. Only the package that owns the resolved entry
+  // counts; the decoy must lose.
+  const box = provableCli("unrelated-pkg", "9.9.9");
   const decoy = path.join(box.sandbox, "elsewhere");
   fs.mkdirSync(decoy, { recursive: true });
   fs.writeFileSync(path.join(decoy, "package.json"), JSON.stringify({
@@ -223,12 +270,13 @@ test("MAC-10 a same-named package in an unrelated directory is not a binding", (
   }));
   withPath(box.binDir, () => {
     const runtime = runtimeBinding();
-    assert.ok(runtime.cli.package, "the executed package must stay bound");
+    assert.equal(runtime.cli.resolution, "resolved");
     assert.equal(runtime.cli.package.version, "9.9.9", "a decoy package must not win");
+    assert.equal(runtime.cli.package.file, fs.realpathSync(path.join(box.pkgDir, "package.json")));
     assert.notEqual(runtime.cli.package.file, fs.realpathSync(path.join(decoy, "package.json")));
   });
 });
-test("MAC-10 an undeterminable execution chain is reported as unknown", () => {
+test("MAC-10 an undeterminable execution chain is reported as unknown", POSIX_ONLY, () => {
   // A launcher that executes no resolvable mmx-cli entry leaves the binding
   // explicitly unresolved instead of fabricating a package identity.
   const sandbox = fs.mkdtempSync(path.join(root, "unresolved-"));
@@ -240,13 +288,136 @@ test("MAC-10 an undeterminable execution chain is reported as unknown", () => {
   withPath(binDir, () => {
     const runtime = runtimeBinding();
     assert.ok(runtime.cli, "the launcher must stay bound");
+    assert.equal(runtime.cli.kind, "custom_launcher");
     assert.equal(runtime.cli.resolution, "unresolved");
     assert.equal(runtime.cli.package, null, "no package identity may be invented");
     assert.equal(runtime.cli.entry, null, "no entry identity may be invented");
+    assert.equal(runtime.cli.launcher.file, fs.realpathSync(wrapper));
   });
 });
+test("MAC-10 start refuses and creates no job state when the chain is unprovable", () => {
+  const sandbox = fs.mkdtempSync(path.join(root, "refuse-start-"));
+  const binDir = path.join(sandbox, "bin");
+  fs.mkdirSync(binDir, { recursive: true });
+  const wrapper = path.join(binDir, "mmx");
+  fs.writeFileSync(wrapper, ["#!/bin/bash", "exec /usr/bin/true \"$@\"", ""].join("\n"));
+  fs.chmodSync(wrapper, 0o755);
+  const promptFile = path.join(sandbox, "prompt.txt");
+  fs.writeFileSync(promptFile, "SYNTHETIC REQUEST A\n");
+  const jobDir = path.join(sandbox, "job");
+  const count = invocationCount();
+  withPath(binDir, () => {
+    assert.throws(() => start(jobDir, ["--prompt-file", promptFile, "--concurrency", "1"]),
+      /not provable/);
+  });
+  assert.equal(fs.existsSync(jobDir), false, "no job directory may be created");
+  assert.equal(invocationCount(), count, "a refused start may not call the provider");
+});
+test("MAC-10 the worker refuses a recorded unprovable chain even without drift", () => {
+  // A job whose recorded binding was already unresolved must never reach the
+  // provider, even when the recorded bytes still match the current binding.
+  const sandbox = fs.mkdtempSync(path.join(root, "worker-gate-"));
+  const binDir = path.join(sandbox, "bin");
+  fs.mkdirSync(binDir, { recursive: true });
+  const wrapper = path.join(binDir, "mmx");
+  fs.writeFileSync(wrapper, ["#!/bin/bash", "exec /usr/bin/true \"$@\"", ""].join("\n"));
+  fs.chmodSync(wrapper, 0o755);
+  const job = withPath(binDir, () => preparedJob("worker-gate-unresolved"));
+  const count = invocationCount();
+  withPath(binDir, () => {
+    assert.equal(runWorker(job).status, 2);
+  });
+  assert.equal(invocationCount(), count, "an unprovable recording may not call the provider");
+});
+test("MAC-10 launcher selection agrees with mmx-chat findMmx (X_OK policy)", POSIX_ONLY, () => {
+  // A non-executable shim is skipped by findMmx; the job must make the same
+  // choice instead of binding the first name match.
+  const boxA = provableCli("xok-a", "1.1.1");
+  const boxB = provableCli("xok-b", "2.2.2");
+  fs.chmodSync(boxA.shim, 0o644); // present but not executable
+  const pathValue = boxA.binDir + path.delimiter + boxB.binDir;
+  withPath(pathValue, () => {
+    const runtime = runtimeBinding();
+    const wrapperChoice = findMmx();
+    assert.ok(wrapperChoice && wrapperChoice.argsPrefix.length === 1,
+      "findMmx must resolve the executable shim");
+    assert.equal(runtime.cli.resolution, "resolved");
+    assert.equal(runtime.cli.package.version, "2.2.2",
+      "the non-executable shim must be skipped exactly like findMmx");
+    assert.equal(runtime.cli.entry.file, fs.realpathSync(boxB.entry));
+  });
+});
+test("MAC-10 a package entry under a CJK and space path binds normally", () => {
+  // Legitimate paths containing Chinese characters and spaces must not break
+  // the provable chain: the shim resolves and the package is bound.
+  const sandbox = fs.mkdtempSync(path.join(root, "cjk-path-"));
+  const base = path.join(sandbox, "中文 目录");
+  const binDir = path.join(base, "bin");
+  fs.mkdirSync(binDir, { recursive: true });
+  const pkgDir = process.platform === "win32"
+    ? path.join(binDir, "node_modules", "mmx-cli")
+    : path.join(base, "pkg", "node_modules", "mmx-cli");
+  fs.mkdirSync(path.join(pkgDir, "dist"), { recursive: true });
+  fs.writeFileSync(path.join(pkgDir, "package.json"), JSON.stringify({
+    name: "mmx-cli", version: "3.3.3", bin: { mmx: "dist/mmx.mjs" },
+  }));
+  const entry = path.join(pkgDir, "dist", "mmx.mjs");
+  // The entry must carry the executable bit: findMmx checks X_OK through the
+  // shim, and a symlink's access check lands on its target.
+  fs.writeFileSync(entry, "// synthetic CLI entry\n", { mode: 0o755 });
+  fs.chmodSync(entry, 0o755);
+  let shim;
+  if (process.platform === "win32") {
+    shim = path.join(binDir, "mmx.cmd");
+    fs.writeFileSync(shim, [
+      "@ECHO off",
+      "SETLOCAL",
+      '"%_prog%" "%dp0%\\node_modules\\mmx-cli\\dist\\mmx.mjs" %*',
+      "",
+    ].join("\n"));
+  } else {
+    shim = path.join(binDir, "mmx");
+    try { fs.symlinkSync(entry, shim); }
+    catch { fs.copyFileSync(entry, shim); fs.chmodSync(shim, 0o755); }
+  }
+  withPath(binDir, () => {
+    const runtime = runtimeBinding();
+    assert.equal(runtime.cli.resolution, "resolved");
+    assert.equal(runtime.cli.package.version, "3.3.3");
+    assert.equal(runtime.cli.entry.file, fs.realpathSync(entry));
+  });
+});
+test("MAC-10 a comment that names an mmx-cli entry is never a binding", () => {
+  // A wrapper whose comment mentions a real package entry but whose code
+  // executes something else must stay unresolved. Comments are not execution.
+  const box = provableCli("comment-decoy", "9.9.9");
+  const binDir = path.join(box.sandbox, "comment-bin");
+  fs.mkdirSync(binDir, { recursive: true });
+  const wrapper = path.join(binDir, "mmx");
+  fs.writeFileSync(wrapper, [
+    "#!/bin/bash",
+    `# exec "${box.entry}"`,
+    "exec /usr/bin/true \"$@\"",
+    "",
+  ].join("\n"));
+  fs.chmodSync(wrapper, 0o755);
+  const jobDir = path.join(box.sandbox, "comment-job");
+  const promptFile = path.join(box.sandbox, "prompt.txt");
+  fs.writeFileSync(promptFile, "SYNTHETIC REQUEST A\n");
+  const count = invocationCount();
+  withPath(binDir, () => {
+    const runtime = runtimeBinding();
+    assert.equal(runtime.cli.resolution, "unresolved",
+      "a commented path must never claim resolution");
+    assert.equal(runtime.cli.package, null);
+    assert.throws(() => start(jobDir, ["--prompt-file", promptFile, "--concurrency", "1"]),
+      /not provable/);
+  });
+  assert.equal(fs.existsSync(jobDir), false);
+  assert.equal(invocationCount(), count);
+});
 test("MAC-10 a package upgrade is a runtime drift that refuses to launch", () => {
-  const box = launcherSandbox("pkg-upgrade", "9.9.9");
+  const box = provableCli("pkg-upgrade", "9.9.9");
   const job = withPath(box.binDir, () => preparedJob("runtime-drift-package-upgrade"));
   // The package is upgraded in place after the job was recorded.
   fs.writeFileSync(path.join(box.pkgDir, "package.json"), JSON.stringify({
@@ -260,7 +431,7 @@ test("MAC-10 a package upgrade is a runtime drift that refuses to launch", () =>
   assert.equal(invocationCount(), count, "a package upgrade may not call the provider");
 });
 test("MAC-10 a changed CLI entry is a runtime drift that refuses to launch", () => {
-  const box = launcherSandbox("entry-change", "9.9.9");
+  const box = provableCli("entry-change", "9.9.9");
   const job = withPath(box.binDir, () => preparedJob("runtime-drift-entry-change"));
   // The executed entry changes while the declared version stays the same.
   fs.writeFileSync(box.entry, "// synthetic CLI entry, changed\n");
@@ -272,16 +443,53 @@ test("MAC-10 a changed CLI entry is a runtime drift that refuses to launch", () 
   assert.equal(invocationCount(), count, "a changed entry may not call the provider");
 });
 test("MAC-10 a PATH drift is a runtime drift that refuses to launch", () => {
-  const first = launcherSandbox("path-drift-a", "9.9.9");
-  const second = launcherSandbox("path-drift-b", "9.9.9");
+  const first = provableCli("path-drift-a", "9.9.9");
+  const second = provableCli("path-drift-b", "9.9.10");
   const job = withPath(first.binDir, () => preparedJob("runtime-drift-path"));
   const count = invocationCount();
-  // The same job is verified against a different launcher on PATH.
+  // The same job is verified against a different package on PATH.
   withPath(second.binDir, () => {
     assert.equal(verify(job).integrity, "corrupt");
     assert.equal(runWorker(job).status, 2);
   });
   assert.equal(invocationCount(), count, "a PATH drift may not call the provider");
+});
+test("MAC-10 drift of the preloaded undici copy refuses to launch", () => {
+  // The undici copy that mmx-chat's fetch guard would preload is part of the
+  // execution identity: mutating it after recording is drift.
+  const box = provableCli("preload-drift", "9.9.9");
+  const undiciDir = path.join(box.pkgDir, "node_modules", "undici");
+  fs.mkdirSync(undiciDir, { recursive: true });
+  fs.writeFileSync(path.join(undiciDir, "package.json"), JSON.stringify({
+    name: "undici", version: "0.0.0", main: "index.js",
+  }));
+  const undici = path.join(undiciDir, "index.js");
+  fs.writeFileSync(undici, "module.exports = {};\n");
+  const job = withPath(box.binDir, () => preparedJob("runtime-drift-preload"));
+  withPath(box.binDir, () => {
+    const runtime = runtimeBinding();
+    assert.equal(runtime.cli.resolution, "resolved");
+    assert.ok(runtime.cli.preload, "the resolvable undici copy must be bound");
+    assert.equal(runtime.cli.preload.file, fs.realpathSync(undici));
+  });
+  fs.writeFileSync(undici, "module.exports = { changed: true };\n");
+  const count = invocationCount();
+  withPath(box.binDir, () => {
+    assert.equal(verify(job).integrity, "corrupt");
+    assert.equal(runWorker(job).status, 2);
+  });
+  assert.equal(invocationCount(), count, "a preload drift may not call the provider");
+});
+test("MAC-10 cancelling a finished job never re-invokes the provider", () => {
+  const job = preparedJob("cancel-after-finish");
+  assert.equal(runWorker(job).status, 0);
+  const count = invocationCount();
+  const result = cancel(job);
+  assert.equal(result.status, "finished", "a finished job cannot be cancelled");
+  assert.equal(fs.existsSync(path.join(job, "cancel.request")), false,
+    "cancelling a finished job must not write a cancel marker");
+  assert.equal(runWorker(job).status, 2, "a finished job may not be replayed");
+  assert.equal(invocationCount(), count, "cancelling a finished job may not call the provider");
 });
 test("legacy MMX jobs without runtime identity remain inspect-only and cannot execute", () => {
   const job=preparedJob("legacy-runtime");
