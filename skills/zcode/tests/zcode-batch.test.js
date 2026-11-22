@@ -192,7 +192,7 @@ test("MAC-03 default batches have durable private receipts without an explicit o
 });
 
 test("MAC-03 post-request EIO fails closed without replay or lost initial call count", () => {
-  const file=shardFile("zcode-post-eio.txt", "EIO must be reported");
+  const file=shardFile("zcode-post-eio.txt", "QUOTA_ALWAYS must be reported");
   const archive=path.join(root,"zcode-post-eio-final.json");
   const preload=path.join(root,"zcode-fault-open.cjs");
   fs.writeFileSync(preload, [

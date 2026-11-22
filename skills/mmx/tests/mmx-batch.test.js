@@ -159,7 +159,7 @@ test("MAC-03 default batches have durable private receipts without an explicit o
 });
 
 test("MAC-03 post-request EIO fails closed without replay or lost initial call count", () => {
-  const file=shardFile("mmx-post-eio.txt", "EIO must be reported");
+  const file=shardFile("mmx-post-eio.txt", "QUOTA limited shard must be reported");
   const archive=path.join(root,"mmx-post-eio-final.json");
   const preload=path.join(root,"mmx-fault-open.cjs");
   fs.writeFileSync(preload, [
