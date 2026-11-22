@@ -601,12 +601,12 @@ test("post-spawn started.json EACCES/ENOSPC/EEXIST failures cancel the owned wra
       if (process.argv[2] === "worker" && /zcode-run\\.js$/.test(process.argv[1])) {
         const fs = require("node:fs"), path = require("node:path");
         process.on("exit", () => fs.writeFileSync(${JSON.stringify(workerEnded)}, "finished"));
-        const rename = fs.renameSync;
-        fs.renameSync = function(from, to) {
+        const link = fs.linkSync;
+        fs.linkSync = function(from, to) {
           if (path.basename(to) === "started.json") {
             throw Object.assign(new Error("synthetic " + ${JSON.stringify(code)}), { code: ${JSON.stringify(code)} });
           }
-          return rename.apply(this, arguments);
+          return link.apply(this, arguments);
         };
       }
     `);

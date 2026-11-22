@@ -3,17 +3,27 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
-const { createHash } = require("node:crypto");
+const { createHash, randomUUID } = require("node:crypto");
 const { spawn, spawnSync } = require("node:child_process");
 const { strictJson } = require("./review.js");
 const { parseArgs, checkInstall } = require("./zcode-chat.js");
 const WRAPPER = path.join(__dirname, "zcode-chat.js");
 
 function save(file, value) {
-  if (fs.existsSync(file)) throw new Error("existing job state");
-  const temporary = file + ".writing";
-  fs.writeFileSync(temporary, JSON.stringify(value, null, 2) + "\n", { flag: "wx", mode: 0o600 });
-  fs.renameSync(temporary, file);
+  // Atomic no-overwrite publication: fs.renameSync can replace prior evidence.
+  // Local NTFS (Windows) and POSIX job stores support hard-link publication.
+  const temp = file + "." + randomUUID() + ".writing";
+  try {
+    fs.writeFileSync(temp, JSON.stringify(value, null, 2) + "\n", { flag: "wx", mode: 0o600 });
+    fs.linkSync(temp, file);
+  } catch (error) {
+    if (error.code === "EEXIST") throw new Error("existing job state; never overwrite prior evidence");
+    if (["EPERM", "EACCES", "ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EXDEV", "EINVAL"].includes(error.code)) {
+      throw Object.assign(new Error("Atomic Job publication unavailable; use writable local NTFS storage."),
+        { code: "ZCODE_JOB_PUBLICATION_UNAVAILABLE", cause: error });
+    }
+    throw error;
+  } finally { try { fs.unlinkSync(temp); } catch {} }
 }
 function read(file) { return strictJson(fs.readFileSync(file, "utf8")); }
 const SHA256 = /^[0-9a-f]{64}$/;
