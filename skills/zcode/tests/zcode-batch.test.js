@@ -216,6 +216,45 @@ test("MAC-03 post-request EIO fails closed without replay or lost initial call c
   assert.equal(fs.readFileSync(path.join(stateDir,path.basename(file)),"utf8"),"1");
   assert.equal(JSON.parse(fs.readFileSync(archive,"utf8")).status,"archive_error");
 });
+test("MAC-03 two concurrent zcode batches cannot share the same receipt destination", { timeout: 15000 }, async () => {
+  const file = shardFile("zcode-race-prompt.txt", "CONC_PROBE race");
+  const destination = path.join(root, "zcode-race-output.json");
+  const argv = [batch, "--prompt-file", file, "--receipt-file", destination];
+  const env = { ...process.env, ZCODE_BATCH_WRAPPER:fakeWrapper, FAKE_STATE_DIR:stateDir, FAKE_CONC_LOG:concLog, ZCODE_BATCH_RETRY_MS:"10" };
+  const launch = () => {
+    const child = spawn(process.execPath, argv, { env, stdio: ["ignore", "pipe", "pipe"], shell: false });
+    let stdout = "";
+    child.stdout.on("data", b => { stdout += b; });
+    child.stderr.resume();
+    const closed = new Promise(resolve => {
+      child.once("close", (code, signal) => resolve({ code, signal, stdout }));
+      child.once("error", error => resolve({ code: null, signal: null, error: error.message }));
+    });
+    return { child, closed };
+  };
+  const left = launch();
+  const right = launch();
+  let output;
+  try {
+    output = await Promise.all([left.closed, right.closed]);
+  } finally {
+    for (const c of [left.child, right.child]) {
+      if (c.exitCode === null && c.signalCode === null) {
+        try { c.kill("SIGKILL"); } catch {}
+      }
+    }
+  }
+  const receipts = output.map(row => {
+    assert.ok(row.code === 0 || row.code === 1, JSON.stringify(row));
+    return JSON.parse(row.stdout.trim());
+  });
+  assert.equal(receipts.filter(v => v.status === "archive_error").length, 1);
+  assert.equal(receipts.filter(v => v.status === "ok").length, 1);
+  assert.equal(receipts.filter(v => v.status === "archive_error" && v.gate === "NOT_EVALUATED").length, 1);
+  assert.equal(fs.readFileSync(path.join(stateDir, path.basename(file)), "utf8"), "1", "only the winner may call the fake provider");
+  assert.equal(JSON.parse(fs.readFileSync(destination, "utf8")).status, "ok");
+  assert.equal(fs.existsSync(path.join(destination + ".shards", "000.json")), true);
+});
 test("usage: rejects a request with no shard source", () => {
   assert.equal(receiptOf(runBatch([])).status, "usage_error");
 });

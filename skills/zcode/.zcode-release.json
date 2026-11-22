@@ -15,7 +15,7 @@
     "tests/fixtures/fake-zcode.cjs": "a2e5648cdcf8d1fe270c012625553528366d01d89ff4e430424991b8d9a480df",
     "tests/repin-release.test.js": "04c9eb364d50693732a619f3cda7c2dde58bb1f28103a40bb406301acb7e8320",
     "tests/review-golden.test.js": "e36ffebea6e6456f6b3c6362eab3429e43fa4beac9cf91e61e9155792ce6d04e",
-    "tests/zcode-batch.test.js": "6aa4d982510842e5c68ec87be6a76bccd887ff1fc76e5649c41011c6061df298",
+    "tests/zcode-batch.test.js": "00dee2e4cdb57682958d43c20a47d6df6972a199bbd56692f747ac28ca8b476f",
     "tests/zcode-chat.test.js": "32794dd6ca16ab0c1edf11e76281a9bccf8f51c00bfe330b578a27b96577cedc",
     "tests/zcode-run-integrity.test.js": "1db4930613ad3411d5d99c716ba383b9932da17012a956f6a7b3bb617af3597c"
   },
