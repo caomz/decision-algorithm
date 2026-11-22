@@ -148,10 +148,35 @@ test("failed shard: batch failed gate, honest per-shard status", () => {
   assert.equal(receipt.shards[0].status, "api_error");
 });
 
-test("budget retry: small caller budget heals at the profile budget, both receipts kept", () => {
+test("default never replays a quota error, truncated output or exhausted thinking budget", () => {
+  for (const [name, scenario, status] of [
+    ["one-quota.txt", "QUOTA limited shard", "quota_error"],
+    ["one-truncated.txt", "TRUNCATE hard shard", "ok"],
+    ["one-thinking.txt", "THINK hard shard", "thinking_budget_exhausted"],
+  ]) {
+    const file = shardFile(name, scenario);
+    const receipt = receiptOf(runBatch(["--prompt-file", file, "--max-tokens", "128"]));
+    assert.equal(receipt.gate, "NOT_EVALUATED", name);
+    assert.equal(receipt.shards[0].status, status, name);
+    assert.equal(receipt.shards[0].retried, false, name);
+    assert.equal(receipt.shards[0].retry_skipped_reason, "paid_retry_not_authorized", name);
+    assert.equal(receipt.batch.paid_retry_authorized, false, name);
+    assert.equal(fs.readFileSync(path.join(stateDir, name), "utf8"), "1", name);
+  }
+});
+test("MMX paid retry requires an explicit per-call flag", () => {
+  const { parseArgs } = require("../scripts/mmx-batch.js");
+  assert.equal(parseArgs(["--prompt-file", "a.txt"]).allowPaidRetry, false);
+  assert.equal(parseArgs(["--prompt-file", "a.txt", "--allow-paid-retry"]).allowPaidRetry, true);
+  assert.throws(() => parseArgs(["--prompt-file", "a.txt", "--allow-paid-retry", "--allow-paid-retry"]), /more than once/);
+  const file = shardFile("env-thinking.txt", "THINK hard shard");
+  receiptOf(runBatch(["--prompt-file", file, "--max-tokens", "128"], { MMX_BATCH_ALLOW_PAID_RETRY: "1" }));
+  assert.equal(fs.readFileSync(path.join(stateDir, "env-thinking.txt"), "utf8"), "1");
+});
+test("opt-in budget retry: both attempts are retained", () => {
   const dumpLines = fs.existsSync(argsDump) ? fs.readFileSync(argsDump, "utf8").split("\n").filter(Boolean) : [];
   const before = dumpLines.length;
-  const run = runBatch(["--prompt-file", shardFile("t.txt", "THINK hard shard"), "--max-tokens", "128"]);
+  const run = runBatch(["--prompt-file", shardFile("t.txt", "THINK hard shard"), "--max-tokens", "128", "--allow-paid-retry"]);
   const receipt = receiptOf(run);
   assert.equal(run.status, 0);
   assert.equal(receipt.gate, "PASS");
@@ -200,7 +225,7 @@ process.stdout.write(JSON.stringify(reply));
 `, { mode: 0o755 });
   const files = [shardFile("chain-think-max.txt", "CHAIN_THINK_MAX shard"),
     shardFile("chain-text-max.txt", "CHAIN_TEXT_MAX shard"), shardFile("chain-think-end.txt", "CHAIN_THINK_END shard")];
-  const run = runBatch([...files.flatMap(file => ["--prompt-file", file]), "--max-tokens", "128", "--concurrency", "1"], {
+  const run = runBatch([...files.flatMap(file => ["--prompt-file", file]), "--max-tokens", "128", "--concurrency", "1", "--allow-paid-retry"], {
     MMX_BATCH_WRAPPER: undefined, PATH: `${bin}${path.delimiter}${process.env.PATH || ""}`,
     TMPDIR: chainTmp, TMP: chainTmp, TEMP: chainTmp, MMX_CONFIG_DIR: path.join(root, "chain-config-absent"),
   });
@@ -225,8 +250,8 @@ process.stdout.write(JSON.stringify(reply));
   ]);
 });
 
-test("quota retry: one backoff retry then ok", () => {
-  const run = runBatch(["--prompt-file", shardFile("q.txt", "QUOTA limited shard")]);
+test("opt-in quota retry: both attempts retained", () => {
+  const run = runBatch(["--prompt-file", shardFile("q.txt", "QUOTA limited shard"), "--allow-paid-retry"]);
   const receipt = receiptOf(run);
   assert.equal(run.status, 0);
   const shard = receipt.shards[0];

@@ -4,9 +4,8 @@
 //   1. budget: every shard goes through mmx-chat.js, so the wrapper/profile
 //      output budget (524288) always applies. The bare `mmx text chat` CLI
 //      default of 4096 tokens cannot silently truncate a review any more.
-//      A shard that still exhausts its budget (caller passed a small
-//      --max-tokens) is retried once at the profile budget, both receipts
-//      kept — never hidden.
+//      A shard that exhausts its budget is NOT automatically retried.
+//      A second potentially billed attempt requires explicit per-call consent.
 //   2. concurrency: shards execute through a bounded parallel pool instead
 //      of N sequential host tool calls, so wall time is ~ceil(N/concurrency)
 //      shard durations, not their sum.
@@ -95,7 +94,7 @@ function readProfileBudget(file) {
 
 function parseArgs(argv) {
   const out = { promptFiles: [], promptsDir: null, concurrency: null, model: null,
-    maxTokens: null, timeout: null, wrapTimeout: null, profileFile: null, receiptFile: null };
+    maxTokens: null, timeout: null, wrapTimeout: null, profileFile: null, receiptFile: null, allowPaidRetry: false };
   const seen = new Set();
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -143,6 +142,7 @@ function parseArgs(argv) {
       }
       case "--profile-file": out.profileFile = path.resolve(next()); break;
       case "--receipt-file": out.receiptFile = path.resolve(next()); break;
+      case "--allow-paid-retry": out.allowPaidRetry = true; break;
       default: usageError(`Unknown flag: ${arg}`);
     }
   }
@@ -288,7 +288,7 @@ function runWrapperOnce(promptFile, fixedArgs) {
 // still truncates at the profile budget is reported honestly for re-sharding.
 // ---------------------------------------------------------------------------
 
-async function runShardWithRetries(shard, fixedArgs, effectiveBudget, retryBudget) {
+async function runShardWithRetries(shard, fixedArgs, effectiveBudget, retryBudget, allowPaidRetry) {
   const first = await runWrapperOnce(shard.file, fixedArgs);
   let retryReason = null;
   let backoffSeconds = 0;
@@ -299,8 +299,9 @@ async function runShardWithRetries(shard, fixedArgs, effectiveBudget, retryBudge
     retryReason = "budget_exhausted";
   }
 
-  if (retryReason === null || cancelled) {
+  if (retryReason === null || !allowPaidRetry || cancelled) {
     return { shard: shard.label, prompt_file: shard.file, retried: false, retry_reason: null,
+      ...(retryReason !== null && !allowPaidRetry ? { retry_skipped_reason: "paid_retry_not_authorized" } : {}),
       duration_seconds: first.duration, ...first.receipt };
   }
 
@@ -346,7 +347,7 @@ async function main() {
     return;
   }
   if (argv.length === 1 && argv[0] === "--help") {
-    process.stdout.write(JSON.stringify({ status: "usage", usage: "node mmx-batch.js --prompt-file FILE [--prompt-file FILE ...] | --prompts-dir DIR [--concurrency 2] [--model ID] [--max-tokens N] [--timeout SEC] [--wrap-timeout SEC] [--profile-file FILE] [--receipt-file FILE]" }) + "\n");
+    process.stdout.write(JSON.stringify({ status: "usage", usage: "node mmx-batch.js --prompt-file FILE [--prompt-file FILE ...] | --prompts-dir DIR [--concurrency 2] [--model ID] [--max-tokens N] [--timeout SEC] [--wrap-timeout SEC] [--profile-file FILE] [--receipt-file FILE] [--allow-paid-retry]" }) + "\n");
     return;
   }
 
@@ -372,7 +373,7 @@ async function main() {
     while (!cancelled) {
       const index = nextIndex++;
       if (index >= shards.length) return;
-      results[index] = await runShardWithRetries(shards[index], fixedArgs, effectiveBudget, retryBudget);
+      results[index] = await runShardWithRetries(shards[index], fixedArgs, effectiveBudget, retryBudget, args.allowPaidRetry);
     }
   }
   await Promise.all(Array.from({ length: Math.min(concurrency, shards.length) }, worker));
@@ -403,6 +404,7 @@ async function main() {
       truncated_or_incomplete: truncatedCount, retried: retriedCount,
       concurrency, wall_seconds: Number(((Date.now() - started) / 1000).toFixed(1)),
       effective_max_tokens: effectiveBudget, retry_max_tokens: retryBudget,
+      paid_retry_authorized: args.allowPaidRetry,
     },
     shards: results,
   };

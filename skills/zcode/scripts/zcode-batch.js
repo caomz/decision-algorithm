@@ -66,7 +66,7 @@ function positiveInteger(value) {
 
 function parseArgs(argv) {
   const out = { promptFiles: [], promptsDir: null, concurrency: null, mode: "chat",
-    evidenceIdsFile: null, cliPath: null, timeout: null, receiptFile: null };
+    evidenceIdsFile: null, cliPath: null, timeout: null, receiptFile: null, allowPaidRetry: false };
   const seen = new Set();
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -100,6 +100,8 @@ function parseArgs(argv) {
         break;
       }
       case "--receipt-file": out.receiptFile = path.resolve(next()); break;
+      // Only a per-invocation flag may authorize a possible second paid request.
+      case "--allow-paid-retry": out.allowPaidRetry = true; break;
       default: usageError(`Unknown flag: ${arg}`);
     }
   }
@@ -232,15 +234,17 @@ function runWrapperOnce(promptFile, fixedArgs) {
 }
 
 // ---------------------------------------------------------------------------
-// Retry policy — one explicit retry for clearly terminated transport failures
-// (quota/timeout) with backoff; both receipts kept. Auth, policy, schema and
-// content-level FAIL are never retried.
+// Default: one possibly billed provider request per shard. Retrying an
+// unknown remote outcome always requires explicit authorization. First-attempt
+// receipts remain available when the caller opts into a second attempt.
 // ---------------------------------------------------------------------------
 
-async function runShardWithRetries(shard, fixedArgs) {
+async function runShardWithRetries(shard, fixedArgs, allowPaidRetry) {
   const first = await runWrapperOnce(shard.file, fixedArgs);
-  if (!RETRYABLE.has(first.receipt.status) || cancelled) {
+  // Local cleanup/timeout never proves the remote provider did not execute.
+  if (!allowPaidRetry || !RETRYABLE.has(first.receipt.status) || cancelled) {
     return { shard: shard.label, prompt_file: shard.file, retried: false, retry_reason: null,
+      ...(!allowPaidRetry && RETRYABLE.has(first.receipt.status) ? { retry_skipped_reason: "paid_retry_not_authorized" } : {}),
       duration_seconds: first.duration, ...first.receipt };
   }
   const retryReason = first.receipt.status;
@@ -304,7 +308,7 @@ function aggregate(results, shards, args, started) {
       shards: shards.length, ok: okCount, transport_ok: transportOkCount,
       truncated_or_incomplete: truncatedCount, retried: retriedCount,
       review_pass: reviewPass, review_fail: reviewFail, review_not_evaluated: reviewNotEvaluated,
-      mode: args.mode,
+      mode: args.mode, paid_retry_authorized: args.allowPaidRetry,
       concurrency: args.concurrency ?? DEFAULT_CONCURRENCY,
       wall_seconds: Number(((Date.now() - started) / 1000).toFixed(1)),
     },
@@ -322,7 +326,7 @@ async function main() {
     return;
   }
   if (argv.length === 1 && argv[0] === "--help") {
-    process.stdout.write(JSON.stringify({ status: "usage", usage: "node zcode-batch.js --prompt-file FILE [--prompt-file FILE ...] | --prompts-dir DIR [--concurrency 2] [--mode chat|review|challenge --evidence-ids-file FILE] [--timeout-seconds 1200] [--cli-path EXECUTABLE] [--receipt-file FILE]" }) + "\n");
+    process.stdout.write(JSON.stringify({ status: "usage", usage: "node zcode-batch.js --prompt-file FILE [--prompt-file FILE ...] | --prompts-dir DIR [--concurrency 2] [--mode chat|review|challenge --evidence-ids-file FILE] [--timeout-seconds 1200] [--cli-path EXECUTABLE] [--receipt-file FILE] [--allow-paid-retry]" }) + "\n");
     return;
   }
 
@@ -358,7 +362,7 @@ async function main() {
     while (!cancelled) {
       const index = nextIndex++;
       if (index >= shards.length) return;
-      results[index] = await runShardWithRetries(shards[index], fixedArgs);
+      results[index] = await runShardWithRetries(shards[index], fixedArgs, args.allowPaidRetry);
     }
   }
   await Promise.all(Array.from({ length: Math.min(concurrency, shards.length) }, worker));

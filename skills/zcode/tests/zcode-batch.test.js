@@ -224,8 +224,31 @@ test("a truncated shard must not vote on the content gate", () => {
   assert.equal(receipt.gate, "NOT_EVALUATED", "a truncated shard cannot make the batch PASS");
 });
 
-test("quota retry: one backoff retry then ok, first attempt kept", () => {
-  const run = runBatch(["--prompt-file", shardFile("q.txt", "QUOTA_ONCE shard")]);
+test("default never replays timed out or quota-rejected requests", () => {
+  for (const [name, scenario, status] of [
+    ["one-quota.txt", "QUOTA_ALWAYS shard", "quota_error"],
+    ["one-timeout.txt", "TIMEOUT_ONCE shard", "timeout"],
+  ]) {
+    const file = shardFile(name, scenario);
+    const receipt = receiptOf(runBatch(["--prompt-file", file]));
+    assert.equal(receipt.shards[0].status, status, name);
+    assert.equal(receipt.shards[0].retried, false, name);
+    assert.equal(receipt.shards[0].retry_skipped_reason, "paid_retry_not_authorized", name);
+    assert.equal(receipt.batch.paid_retry_authorized, false, name);
+    assert.equal(fs.readFileSync(path.join(stateDir, name), "utf8"), "1", name);
+  }
+});
+test("ZCode paid retry requires per-request flag; environment cannot grant consent", () => {
+  const { parseArgs } = require("../scripts/zcode-batch.js");
+  assert.equal(parseArgs(["--prompt-file", "a.txt"]).allowPaidRetry, false);
+  assert.equal(parseArgs(["--prompt-file", "a.txt", "--allow-paid-retry"]).allowPaidRetry, true);
+  assert.throws(() => parseArgs(["--prompt-file", "a.txt", "--allow-paid-retry", "--allow-paid-retry"]), /more than once/);
+  const file = shardFile("env-quota.txt", "QUOTA_ALWAYS shard");
+  receiptOf(runBatch(["--prompt-file", file], { ZCODE_BATCH_ALLOW_PAID_RETRY: "1" }));
+  assert.equal(fs.readFileSync(path.join(stateDir, "env-quota.txt"), "utf8"), "1");
+});
+test("opt-in quota retry: first attempt retained", () => {
+  const run = runBatch(["--prompt-file", shardFile("q.txt", "QUOTA_ONCE shard"), "--allow-paid-retry"]);
   const receipt = receiptOf(run);
   assert.equal(run.status, 0);
   const shard = receipt.shards[0];
@@ -236,17 +259,17 @@ test("quota retry: one backoff retry then ok, first attempt kept", () => {
   assert.ok(shard.retry_backoff_seconds > 0);
 });
 
-test("timeout retry: one backoff retry then ok", () => {
-  const run = runBatch(["--prompt-file", shardFile("to.txt", "TIMEOUT_ONCE shard")]);
+test("opt-in timeout retry: one bounded replay", () => {
+  const run = runBatch(["--prompt-file", shardFile("to.txt", "TIMEOUT_ONCE shard"), "--allow-paid-retry"]);
   const receipt = receiptOf(run);
   assert.equal(run.status, 0);
   assert.equal(receipt.shards[0].retry_reason, "timeout");
   assert.equal(receipt.shards[0].status, "ok");
 });
 
-test("persistent quota failure: exactly two attempts, no third", () => {
+test("opt-in persistent quota failure: exactly two attempts, no third", () => {
   const file = shardFile("qa.txt", "QUOTA_ALWAYS shard");
-  const run = runBatch(["--prompt-file", file]);
+  const run = runBatch(["--prompt-file", file, "--allow-paid-retry"]);
   const receipt = receiptOf(run);
   assert.equal(run.status, 1);
   assert.equal(receipt.shards[0].retried, true);
