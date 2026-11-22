@@ -1,7 +1,7 @@
 ---
 name: zcode
 description: Use the ZCode CLI for text-only chat, review, challenge, or an explicitly requested second opinion. Applies to "/zcode", "用 ZCode 问一下", "通过 zcode cli 交叉验证" and review workflows that name ZCode.
-version: 1.5.1
+version: 1.5.2
 ---
 
 # /zcode — ZCode 文本复核
@@ -55,7 +55,7 @@ node <ZCODE_SKILL_DIR>/scripts/zcode-batch.js --prompt-file <f1> [--prompt-file 
 
 - Mac Batch 默认每片最多一次请求；quota、timeout 等未知状态不能自动重发。只有本次明确授权且显式传入 `--allow-paid-retry` 才可能发生第二次收费调用。审查票必须核对 wrapper 实际退出、原生模型身份、零工具、`cleanup_confirmed=true`、原文与 evidence IDs，不能信任声称的 `review_gate`。
 - 持久 Job 先在私有目录固定 prompt 与 IDs 的原始字节、SHA256 和请求角色；worker 只接受校验通过的已密封输入。`status=unknown` 或 `verify=corrupt/incomplete` 不授权重发；`finished` 不是模型成功的同义词。
-- `--prompt-file` 是包装器接口。**已知原生 ZCode CLI 对较小材料仍通过 argv `--prompt` 传输**；MAC-08 的真正私有文件输入通道未经目标 Mac 证实，严禁将此路径当作敏感材料安全通道。
+- `--prompt-file` 是包装器接口。MAC-08 v1.5.2 把 chat/review/challenge 的完整渲染正文（含规则、schema 和 E 编号）全部写入私有 `--attach` 文件；argv 只含固定短指令，已通过假 CLI 离线字节测试。目标 Mac `zcode-runtime 0.17.1` 对附件的实际解码、截断/分片及模型消费仍须单独验收；未获真实验证之前禁止用此路径发送敏感材料。
 - 此代码分支不代表已更新 WorkSSD 受管安装或各个 harness。请按仓库 `docs/mac-zmx-acceptance.md` 先完成隔离验收，不自动改安装树或 Keychain。
 
 ## 执行与结果
@@ -65,7 +65,7 @@ node <ZCODE_SKILL_DIR>/scripts/zcode-batch.js --prompt-file <f1> [--prompt-file 
 每次请求在启动和首个模型请求时原子更新 `progress.json`，记录 wrapper/CLI PID、阶段及观察到的模型；只有最终有效回执才可作为完成依据。监督器另给 wrapper 预检与清理 45 秒余量，超出后终止本任务进程组并保留真实退出记录。
 
 - 固定只读权限模式、关闭动态工作流和 ToolSearch，使用独立子进程用户目录、工作目录及运行配置；禁用扩展、Hook、记忆和工具。权限模式按平台取默认值：macOS/Linux 为 `plan`，Windows 为 `guarded`；`ZCODE_CLI_MODE` 可显式覆盖为 `plan` 或 `guarded`，其它值直接拒绝。实际使用的模式记入 `launch.json`。现有 provider/认证数据根用于 CLI 复用认证；macOS 额外链接当前默认 Keychain，保持系统访问控制，不复制凭据或修改系统默认设置，不宣称完整账号隔离。
-- `--prompt-file` 是 wrapper 接口。ZCode 原生只有 `--prompt`，正文最终进入 CLI 子进程参数；仅传获准的非敏感材料。包装器不用 shell，也不接受模型或 token 参数。
+- `--prompt-file` 是 wrapper 接口。CLI 接收固定短 `--prompt` 与完整私有 `--attach`，不再把正文写进子进程参数；仍仅传获准的非敏感材料。包装器不用 shell，不接受模型或 token 参数，也不放开只读工具限制。
 - `status=ok` 要求实际模型请求事件、成功回合、唯一末尾 result、身份一致、零工具调用、完整结束及零 CLI 退出码。缺失模型或结束原因不能由配置推断。`usage` 缺失保持 `null`。
 - `review_gate=PASS|FAIL|NOT_EVALUATED` 独立于传输状态；有效返回可能发现 P1 缺陷而给出 `FAIL`。呈现外部发现、证据缺口、本地处置及原文链接。
 - 截断、未知终态、工具违规、超时、认证/额度错误或协议错误如实报告，原始流留在私有目录。失败不自动重试。stderr 不原样复制到公开错误提示。

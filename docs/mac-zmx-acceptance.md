@@ -8,7 +8,7 @@
 - 已在新分支修复 Batch 安全默认值、ZCode 审核票资格、回执独占发布、ZCode Job 快照与取消结果保存，并针对 MMX Job 增强本地 runtime 绑定。受管安装树尚未替换。
 - `review-run.js run --backend real` 尚未实现，故真实统一审核 `REVIEW_GATE=FAIL`。fixture 成功不等于真实模型成功。
 - Stage 4 的 macOS hosted runner 并非用户 Mac。315 秒代理长请求、Keychain、真实模型、各 harness 发现情况均必须本机另验收。
-- `--prompt-file` 只表示 wrapper 从文件读入；目前 ZCode 对较小材料的真实 CLI argv 暴露未解除，不得用于未经授权的敏感数据。
+- MAC-08 v1.5.2 源码已统一把完整渲染 prompt 写入私有 `--attach` 文件，argv 仅保留固定短句；假 CLI 离线检查不等于 Mac `zcode-runtime 0.17.1` 真正消费完整附件。正式 Mac 受管副本未切换，敏感材料与真实模型仍未获验收授权。
 
 ## 2. 隔离克隆（不改本机已安装 skill）
 

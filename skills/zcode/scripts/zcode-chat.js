@@ -8,7 +8,7 @@ const { createHash } = require("node:crypto");
 const { spawn, spawnSync } = require("node:child_process");
 const { buildPrompt, validateReview, validateIds, strictJson } = require("./review.js");
 
-const VERSION = "1.5.1";
+const VERSION = "1.5.2";
 const SUPPORTED_CLI = "0.17.1";
 // The CLI accepts build/edit/plan/yolo/guarded. This wrapper only ever uses the
 // two read-only modes: macOS keeps the plan mode it was accepted with, Windows
@@ -16,9 +16,9 @@ const SUPPORTED_CLI = "0.17.1";
 const CLI_MODES = Object.freeze(["plan", "guarded"]);
 const DEFAULT_MODE = Object.freeze({ win32: "guarded" });
 const MAX_BYTES = 64 * 1024 * 1024;
-// Windows caps a command line at roughly 32 KiB, so a prompt larger than this
-// cannot travel on argv. Above the limit the material is attached as a file.
-const ARGV_PROMPT_LIMIT = 24 * 1024;
+// MAC-08: argv contains only a fixed short instruction. The COMPLETE rendered
+// prompt (including review rules, schema and evidence IDs) always travels via
+// one private UTF-8 attachment, regardless of its size.
 const ATTACHED_PROMPT = "The attached file contains the complete request material. Review it exactly as instructed below and answer from it only.";
 const DENIED_TOOLS = Object.freeze([
   "Read", "Write", "Edit", "ApplyPatch", "Bash", "Glob", "Grep", "WebFetch", "WebSearch", "js",
@@ -94,6 +94,10 @@ async function readSealedJobInputs(args) {
     input_sha256: {
       "prompt.txt": prompt.sha256,
       ...(ids ? { "evidence-ids.json": ids.sha256 } : {}),
+    },
+    input_bytes: {
+      "prompt.txt": prompt.bytes.length,
+      ...(ids ? { "evidence-ids.json": ids.bytes.length } : {}),
     },
   };
 }
@@ -347,7 +351,11 @@ async function main(argv, deps = {}) {
     try { checkInstall(); } catch { fail("install_mismatch"); }
     const args = parseArgs(argv);
     const sealed = await readSealedJobInputs(args);
-    const material = sealed ? sealed.material : readUtf8(args.prompt);
+    const rawMaterial = sealed ? null : fs.readFileSync(args.prompt);
+    const material = sealed ? sealed.material : decodeInputBytes(rawMaterial);
+    const materialBytes = sealed ? sealed.input_bytes["prompt.txt"] : rawMaterial.length;
+    const materialSha256 = sealed ? sealed.input_sha256["prompt.txt"] :
+      createHash("sha256").update(rawMaterial).digest("hex");
     const ids = sealed ? sealed.ids : (args.ids ? validateIds(strictJson(readUtf8(args.ids))) : null);
     if (sealed) {
       receipt.job_request_sha256 = sealed.request_sha256;
@@ -357,6 +365,8 @@ async function main(argv, deps = {}) {
     const cancellationRequested = () => signalCancelled || Boolean(cancelMarker && fs.existsSync(cancelMarker));
     if (cancellationRequested()) fail("cancelled");
     const prompt = buildPrompt(material, args.mode, ids);
+    const renderedPromptBytes = Buffer.from(prompt, "utf8");
+    const renderedPromptSha256 = createHash("sha256").update(renderedPromptBytes).digest("hex");
     const cli = findCli(args.cli);
     const launch = resolveLaunch(cli);
     const mode = (deps.resolveMode || resolveMode)();
@@ -389,22 +399,29 @@ async function main(argv, deps = {}) {
     privateWrite(path.join(home, ".zcode/cli/config.json"), JSON.stringify(RUNTIME_CONFIG));
     receipt.auth_environment = (deps.setupMacKeychain || setupMacKeychain)(home);
     privateWrite(path.join(directory, "prompt.txt"), prompt);
-    privateWrite(path.join(directory, "launch.json"), JSON.stringify({ wrapper_version: VERSION, cli_version: receipt.cli_version, launcher: cli, entry: launch.entry, entry_sha256: hashFile(launch.entry), runtime: launch.command, mode, denied_tools: DENIED_TOOLS, timeout_seconds: args.timeout, shared_auth_data: true }, null, 2));
+    privateWrite(path.join(directory, "launch.json"), JSON.stringify({
+      wrapper_version: VERSION, cli_version: receipt.cli_version,
+      launcher: cli, entry: launch.entry, entry_sha256: hashFile(launch.entry),
+      runtime: launch.command, mode, denied_tools: DENIED_TOOLS,
+      timeout_seconds: args.timeout, shared_auth_data: true,
+      material_bytes: materialBytes, material_sha256: materialSha256,
+      rendered_prompt_bytes: renderedPromptBytes.length,
+      rendered_prompt_sha256: renderedPromptSha256,
+    }, null, 2));
     const attachedFile = path.join(work, "attached-material.txt");
-    privateWrite(attachedFile, prompt);
+    privateWrite(attachedFile, renderedPromptBytes);
+    // Fail before CLI spawn if the private attachment does not match the exact
+    // rendered prompt. Never fall back to placing the body in --prompt argv.
+    if (!fs.readFileSync(attachedFile).equals(renderedPromptBytes)) fail("input_error");
     const stdoutFd = fs.openSync(path.join(directory, "stdout.ndjson"), "wx", 0o600);
     const stderrFd = fs.openSync(path.join(directory, "stderr.log"), "wx", 0o600);
     const parser = new EventParser();
     const decoder = new TextDecoder("utf-8", { fatal: true });
     let pending = "", bytes = 0, problem = null, termination;
-    // The CLI takes the prompt on the command line, and Windows caps a command
-    // line at ~32 KiB. A large material would fail the spawn with
-    // ENAMETOOLONG, so oversized prompts are passed as an attached file and the
-    // argv keeps only a short instruction.
-    const promptBytes = Buffer.byteLength(prompt, "utf8");
-    const cliArgs = promptBytes > ARGV_PROMPT_LIMIT
-      ? [...launch.prefix, "--prompt", ATTACHED_PROMPT, "--attach", attachedFile, "--cwd", work, "--mode", mode, "--output-format", "stream-json", "--workflow-mode", "disabled", "--toolsearch-mode", "off", "--disallowed-tools", DENIED_TOOLS.join(","), "--no-color"]
-      : [...launch.prefix, "--prompt", prompt, "--cwd", work, "--mode", mode, "--output-format", "stream-json", "--workflow-mode", "disabled", "--toolsearch-mode", "off", "--disallowed-tools", DENIED_TOOLS.join(","), "--no-color"];
+    const cliArgs = [...launch.prefix, "--prompt", ATTACHED_PROMPT, "--attach", attachedFile,
+      "--cwd", work, "--mode", mode, "--output-format", "stream-json",
+      "--workflow-mode", "disabled", "--toolsearch-mode", "off",
+      "--disallowed-tools", DENIED_TOOLS.join(","), "--no-color"];
     if (cancellationRequested()) fail("cancelled");
     child = spawn(launch.command, cliArgs, { cwd: work, env: isolatedEnv(home), shell: false, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });    receipt.cli_invoked = Boolean(child.pid);
     progress("running");
