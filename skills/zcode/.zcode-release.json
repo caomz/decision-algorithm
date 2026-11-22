@@ -16,7 +16,7 @@
     "tests/repin-release.test.js": "04c9eb364d50693732a619f3cda7c2dde58bb1f28103a40bb406301acb7e8320",
     "tests/review-golden.test.js": "e36ffebea6e6456f6b3c6362eab3429e43fa4beac9cf91e61e9155792ce6d04e",
     "tests/zcode-batch.test.js": "c4662f2239ecc1b52ec44b5a4d73c0aebc7b95e06aae4984647d3b508f2ab1d4",
-    "tests/zcode-chat.test.js": "53d123b5ece101cf49591c262ac450a344e4e800fbf7adfce5d96dbbb5a35934"
+    "tests/zcode-chat.test.js": "e41468f457807abfe38aada4d21a44efc49bce9d67681768e20bf5835c938c61"
   },
   "review_sha256": "f4a6a4522bb5d07d48db6b3ac83bda25a08dff5bbd0cde7b05618d54520c9c83"
 }
