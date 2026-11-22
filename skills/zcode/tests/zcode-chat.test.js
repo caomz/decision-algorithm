@@ -320,7 +320,9 @@ async function runSupervised(scenario, timeout = 2) {
   do {
     await new Promise(resolve => setTimeout(resolve, 30));
     result = supervisor.status(job);
-  } while (["running", "unknown"].includes(result.status) && Date.now() < deadline);
+  } while (["running", "unknown"].includes(result.status) &&
+    !(scenario === "kill_wrapper" && fs.existsSync(path.join(job, "execution.json"))) &&
+    Date.now() < deadline);
   return { result, job };
 }
 test("durable supervisor keeps a real exit receipt and complete wrapper reply", async () => {
@@ -338,12 +340,15 @@ test("supervisor preserves nonzero timeout and child cleanup evidence", async ()
   assert.equal(result.receipt.status, "timeout");
   assert.equal(result.receipt.cleanup_confirmed, true);
 });
-test("abrupt wrapper death leaves startup state and independently captured signal", { skip: process.platform === "win32" }, async () => {
+test("abrupt wrapper death is UNKNOWN, preserving independent signal evidence without a false finish", { skip: process.platform === "win32" }, async () => {
   const { result, job } = await runSupervised("kill_wrapper");
-  assert.equal(result.status, "finished");
-  assert.equal(result.execution.signal, "SIGKILL");
-  assert.equal(result.execution.receipt_exists, false);
+  assert.equal(result.status, "unknown");
+  assert.equal(result.integrity, "incomplete");
+  const execution = JSON.parse(fs.readFileSync(path.join(job, "execution.json"), "utf8"));
+  assert.equal(execution.signal, "SIGKILL");
+  assert.equal(execution.receipt_exists, false);
   assert.equal(result.receipt, undefined);
+  assert.equal(supervisor.verify(job).integrity, "incomplete");
   const progress = JSON.parse(fs.readFileSync(path.join(job, "run/progress.json")));
   assert.equal(progress.phase, "running");
   assert.ok(progress.wrapper_pid > 0);
