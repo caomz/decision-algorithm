@@ -69,6 +69,40 @@ function shardFile(name, content) {
   return file;
 }
 
+
+test("MAC-03 refuses old receipts and symlinks before starting a wrapper", () => {
+  const file = shardFile("mmx-claim.txt", "plain claim");
+  const dest = path.join(root, "mmx-claimed.json");
+  const sentinel = "DO NOT TOUCH";
+  fs.writeFileSync(dest, sentinel);
+  const pre = fs.existsSync(path.join(stateDir, path.basename(file))) ? fs.readFileSync(path.join(stateDir,path.basename(file)), "utf8") : null;
+  const a = receiptOf(runBatch(["--prompt-file", file, "--receipt-file", dest]));
+  assert.equal(a.status, "archive_error");
+  assert.equal(a.gate, "NOT_EVALUATED");
+  assert.equal(fs.readFileSync(dest, "utf8"), sentinel);
+  assert.equal(fs.existsSync(path.join(stateDir,path.basename(file))) ? fs.readFileSync(path.join(stateDir,path.basename(file)), "utf8") : null, pre);
+  const link = path.join(root, "mmx-symlink.json");
+  try { fs.symlinkSync(dest, link); }
+  catch (error) { if (process.platform === "win32") return; throw error; }
+  const b = receiptOf(runBatch(["--prompt-file", file, "--receipt-file", link]));
+  assert.equal(b.status, "archive_error");
+  assert.equal(fs.readFileSync(dest, "utf8"), sentinel);
+});
+test("MAC-03 stores every completed shard as a write-once private receipt", () => {
+  const files = [shardFile("mmx-archive-a.txt", "first"), shardFile("mmx-archive-b.txt", "second")];
+  const dest = path.join(root, "mmx-fresh-archive.json");
+  const x = receiptOf(runBatch([...files.flatMap(f=>["--prompt-file",f]), "--receipt-file", dest]));
+  assert.equal(x.status, "ok");
+  const dir = dest + ".shards";
+  assert.equal(fs.readdirSync(dir).filter(f=>f.endsWith(".json")).length,2);
+  for (let i=0;i<files.length;i++) {
+    const saved = JSON.parse(fs.readFileSync(path.join(dir,String(i).padStart(3,"0")+".json"),"utf8"));
+    assert.equal(saved.shard, x.shards[i].shard);
+  }
+  assert.deepEqual(JSON.parse(fs.readFileSync(dest,"utf8")).shards,x.shards);
+  const repeat = receiptOf(runBatch(["--prompt-file",files[0],"--receipt-file",dest]));
+  assert.equal(repeat.status,"archive_error");
+});
 test("usage: rejects a request with no shard source", () => {
   const run = runBatch([]);
   assert.equal(run.status, 1);

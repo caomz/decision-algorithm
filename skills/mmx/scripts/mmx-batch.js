@@ -54,6 +54,41 @@ function fail(result) {
   process.exitCode = 1;
 }
 
+
+function claimArchive(file) {
+  if (file === null) return null;
+  // O_EXCL prevents following symlinks and overwriting existing evidence.
+  // The reserved file is intentionally left in place after any failure.
+  const fd = fs.openSync(file, "wx", 0o600);
+  try {
+    const dir = file + ".shards";
+    fs.mkdirSync(dir, { mode: 0o700 });
+    return { fd, file, dir };
+  } catch (error) {
+    fs.closeSync(fd);
+    throw error;
+  }
+}
+function saveShardReceipt(archive, index, receipt) {
+  if (!archive) return;
+  const file = path.join(archive.dir, String(index).padStart(3, "0") + ".json");
+  const fd = fs.openSync(file, "wx", 0o600);
+  try {
+    fs.writeSync(fd, JSON.stringify(receipt, null, 2) + "\n", null, "utf8");
+    fs.fsyncSync(fd);
+  } finally { fs.closeSync(fd); }
+}
+function finishArchive(archive, envelope) {
+  if (!archive) return;
+  try {
+    fs.writeSync(archive.fd, JSON.stringify(envelope, null, 2) + "\n", null, "utf8");
+    fs.fsyncSync(archive.fd);
+  } finally { fs.closeSync(archive.fd); }
+}
+function archiveErrorCode(err) {
+  return typeof err?.code === "string" ? err.code : "IO";
+}
+
 function usageError(message) {
   throw Object.assign(new Error(message), { envelope: { status: "usage_error", error: message } });
 }
@@ -364,16 +399,24 @@ async function main() {
   if (args.timeout !== null) fixedArgs.push("--timeout", String(args.timeout));
   if (args.wrapTimeout !== null) fixedArgs.push("--wrap-timeout", String(args.wrapTimeout));
 
+  // Claim the final receipt BEFORE a wrapper may send any provider request.
+  let archive;
+  try { archive = claimArchive(args.receiptFile); }
+  catch (error) { fail({ status: "archive_error", gate: "NOT_EVALUATED",
+    error: "cannot exclusively reserve receipt archive", code: archiveErrorCode(error) }); return; }
+  let archiveFailure = null;
   const concurrency = args.concurrency ?? DEFAULT_CONCURRENCY;
   const started = Date.now();
   const results = new Array(shards.length);
   let nextIndex = 0;
 
   async function worker() {
-    while (!cancelled) {
+    while (!cancelled && !archiveFailure) {
       const index = nextIndex++;
       if (index >= shards.length) return;
       results[index] = await runShardWithRetries(shards[index], fixedArgs, effectiveBudget, retryBudget, args.allowPaidRetry);
+      try { saveShardReceipt(archive, index, results[index]); }
+      catch (error) { archiveFailure = archiveFailure || archiveErrorCode(error); }
     }
   }
   await Promise.all(Array.from({ length: Math.min(concurrency, shards.length) }, worker));
@@ -408,16 +451,23 @@ async function main() {
     },
     shards: results,
   };
-  if (args.receiptFile !== null) {
-    envelope.receipt_file = args.receiptFile;
-    try {
-      fs.writeFileSync(args.receiptFile, JSON.stringify(envelope, null, 2) + "\n", { mode: 0o600 });
-    } catch (err) {
-      delete envelope.receipt_file;
-      envelope.receipt_file_write_error = `could not write receipt file: ${err.code || err.message}`;
+  if (archive) envelope.receipt_file = archive.file;
+  if (archiveFailure) {
+    envelope.status = "archive_error";
+    envelope.gate = "NOT_EVALUATED";
+    envelope.archive_error = archiveFailure;
+  }
+  if (archive) {
+    try { finishArchive(archive, envelope); }
+    catch (error) {
+      envelope.status = "archive_error";
+      envelope.gate = "NOT_EVALUATED";
+      envelope.archive_error = archiveErrorCode(error);
+      envelope.note = "Original requests may have been sent; do not replay.";
     }
   }
-  if (gate === "PASS") emit(envelope);
+  if (envelope.status === "archive_error") fail(envelope);
+  else if (gate === "PASS") emit(envelope);
   else fail(envelope);
 }
 
