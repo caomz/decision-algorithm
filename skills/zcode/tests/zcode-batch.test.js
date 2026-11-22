@@ -300,8 +300,35 @@ test("a truncated shard must not vote on the content gate", () => {
   assert.equal(receipt.gate, "NOT_EVALUATED", "a truncated shard cannot make the batch PASS");
 });
 
+test("default never replays uncertain remote requests even after local cleanup", () => {
+  for (const [name, marker, status] of [
+    ["default-quota.txt", "QUOTA_ALWAYS", "quota_error"],
+    ["default-timeout-cleaned.txt", "TIMEOUT_ONCE", "timeout"],
+    ["default-timeout-unknown.txt", "TIMEOUT_UNKNOWN", "timeout"],
+  ]) {
+    const file = shardFile(name, marker);
+    const receipt = receiptOf(runBatch(["--prompt-file", file]));
+    assert.equal(receipt.status, "failed", name);
+    assert.equal(receipt.shards[0].status, status, name);
+    assert.equal(receipt.shards[0].retried, false, name);
+    assert.equal(receipt.shards[0].retry_skipped_reason, "paid_retry_not_authorized", name);
+    assert.equal(receipt.batch.paid_retry_authorized, false, name);
+    assert.equal(receipt.shards[0].first_attempt, undefined, name);
+    assert.equal(fs.readFileSync(path.join(stateDir, name), "utf8"), "1", name);
+  }
+});
+test("paid replay requires an explicit per-request flag; environment cannot opt in", () => {
+  const { parseArgs } = require("../scripts/zcode-batch.js");
+  assert.equal(parseArgs(["--prompt-file", "x.txt"]).allowPaidRetry, false);
+  assert.equal(parseArgs(["--prompt-file", "x.txt", "--allow-paid-retry"]).allowPaidRetry, true);
+  assert.throws(() => parseArgs(["--prompt-file", "x.txt", "--allow-paid-retry", "--allow-paid-retry"]), /more than once/);
+  const file = shardFile("env-not-permission.txt", "QUOTA_ALWAYS");
+  const receipt = receiptOf(runBatch(["--prompt-file", file], { ZCODE_BATCH_ALLOW_PAID_RETRY: "1" }));
+  assert.equal(receipt.shards[0].retried, false);
+  assert.equal(fs.readFileSync(path.join(stateDir, "env-not-permission.txt"), "utf8"), "1");
+});
 test("quota retry: one backoff retry then ok, first attempt kept", () => {
-  const run = runBatch(["--prompt-file", shardFile("q.txt", "QUOTA_ONCE shard")]);
+  const run = runBatch(["--prompt-file", shardFile("q.txt", "QUOTA_ONCE shard"), "--allow-paid-retry"]);
   const receipt = receiptOf(run);
   assert.equal(run.status, 0);
   const shard = receipt.shards[0];
@@ -313,7 +340,7 @@ test("quota retry: one backoff retry then ok, first attempt kept", () => {
 });
 
 test("timeout retry: one backoff retry then ok", () => {
-  const run = runBatch(["--prompt-file", shardFile("to.txt", "TIMEOUT_ONCE shard")]);
+  const run = runBatch(["--prompt-file", shardFile("to.txt", "TIMEOUT_ONCE shard"), "--allow-paid-retry"]);
   const receipt = receiptOf(run);
   assert.equal(run.status, 0);
   assert.equal(receipt.shards[0].retry_reason, "timeout");
@@ -358,7 +385,7 @@ test("a pre-cancelled batch never starts a wrapper", () => {
 test("marker cancellation interrupts retry backoff and preserves the first receipt", { timeout: 15000 }, async () => {
   const file = shardFile("cancel-backoff.txt", "QUOTA_ALWAYS");
   const marker = path.join(root, "backoff-cancel.request");
-  const child = spawn(process.execPath, [batch, "--prompt-file", file], {
+  const child = spawn(process.execPath, [batch, "--prompt-file", file, "--allow-paid-retry"], {
     env: { ...process.env, ZCODE_BATCH_WRAPPER: fakeWrapper, FAKE_STATE_DIR: stateDir,
       ZCODE_BATCH_RETRY_MS: "30000", ZCODE_CANCEL_REQUEST_FILE: marker },
     stdio: ["ignore", "pipe", "pipe"],
@@ -403,9 +430,9 @@ test("importing the batch module does not install process signal handlers", () =
   assert.equal(run.status, 0, run.stderr);
 });
 
-test("persistent quota failure: exactly two attempts, no third", () => {
+test("explicitly authorized persistent quota failure: exactly two attempts, no third", () => {
   const file = shardFile("qa.txt", "QUOTA_ALWAYS shard");
-  const run = runBatch(["--prompt-file", file]);
+  const run = runBatch(["--prompt-file", file, "--allow-paid-retry"]);
   const receipt = receiptOf(run);
   assert.equal(run.status, 1);
   assert.equal(receipt.shards[0].retried, true);
