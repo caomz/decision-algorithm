@@ -267,14 +267,15 @@ test("real preflight run() is fail-closed before CLI lookup and launch; fake com
       throw new Error("unexpected executable in fake preflight: " + command);
     };
     const fakeRequire = id => {
+      const normalizedId = String(id).replace(/\\/g, "/");
       if (id === "node:child_process") return { spawnSync: fakeSpawnSync };
-      if (id.endsWith("/skills/zcode-mmx-review/scripts/review-run.js"))
+      if (normalizedId.endsWith("/skills/zcode-mmx-review/scripts/review-run.js"))
         return { doctorOffline: () => ({ status: doctorOk ? "ok" : "blocked",
           checks: doctorOk ? [] : [{ name: "protocol", ok: false }] }) };
-      if (id.endsWith("/skills/zcode/scripts/zcode-chat.js"))
+      if (normalizedId.endsWith("/skills/zcode/scripts/zcode-chat.js"))
         return { findCli: () => { lookup.zcode++; return "fake-zcode"; },
           resolveLaunch: () => ({ command: "fake-zcode", prefix: [], entry: "fake-zcode" }) };
-      if (id.endsWith("/skills/mmx/scripts/mmx-chat.js"))
+      if (normalizedId.endsWith("/skills/mmx/scripts/mmx-chat.js"))
         return { findMmx: () => { lookup.mmx++; return { cmd: "fake-mmx", argsPrefix: [] }; },
           cliLaunch: () => ({ argsPrefix: [], env: {}, fetch_timeout_guard: "fake-only" }) };
       if (id.startsWith("node:")) return require(id);
@@ -296,7 +297,7 @@ test("real preflight run() is fail-closed before CLI lookup and launch; fake com
     return { actual, lookup, requests };
   }
   const valid = inspect("compliant");
-  assert.equal(valid.actual.exitCode, 0);
+  assert.equal(valid.actual.exitCode, 0, JSON.stringify(valid.actual.report.failed));
   assert.equal(valid.actual.report.readiness, "preflight_ready");
   assert.deepEqual(valid.lookup, { zcode: 1, mmx: 1 });
   assert.deepEqual(valid.requests, { zcode: 1, mmx: 1 });
