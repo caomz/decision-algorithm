@@ -9,6 +9,12 @@
 - `review-run.js run --backend real` 尚未实现，故真实统一审核 `REVIEW_GATE=FAIL`。fixture 成功不等于真实模型成功。
 - Stage 4 的 macOS hosted runner 并非用户 Mac。315 秒代理长请求、Keychain、真实模型、各 harness 发现情况均必须本机另验收。
 - MAC-08 v1.5.2 源码已统一把完整渲染 prompt 写入私有 `--attach` 文件，argv 仅保留固定短句；假 CLI 离线检查不等于 Mac `zcode-runtime 0.17.1` 真正消费完整附件。正式 Mac 受管副本未切换，敏感材料与真实模型仍未获验收授权。
+- **B0-PREP 代理勘误**：仓库 `skills/mmx/scripts/mmx-chat.js::cliLaunch` **保留**代理环境及 CLI 配置的 proxy，检测到代理只记录 `proxy_limited`；它剥离的是 `MINIMAX_BASE_URL` 末尾的 `/v1`，**不是代理剥离**。旧自定义 bash 包装器的代理处理属于另一条执行链，不能套用到仓库 wrapper。
+- **B0-PREP Guard 勘误**：`fetch-timeout-guard.js` 仅设置 undici dispatcher 的 `headersTimeout:0/bodyTimeout:0`，初始化 `applied` **不是网络出站拦截或地址/端口授权证明**；`preloaded` 也不能证明真实 CLI 后续没有替换 dispatcher。
+- **验收范围切分**：315 秒 **Node 合成回环** ≠ **实际 mmx-cli 经过仓库 wrapper 的回环** ≠ **真实供应商请求**；三者必须单独计数、单独标记，不互推 PASS。历史 Mac 报告的 315 秒是合成 Node 对照，不是 B0 真实 CLI 已通过。
+- **Agent 与模型**：主控和多个 `zhipu-bigmodel/glm-5.3-flash` 同模型子 Agent 的工作分工，仅是编排；它**不构成 MAC-06 ZCode/MMX 两个不同模型的真实审核**。MAC-06 的 `--backend real` 仍未实现。
+- **Node 范围**：Mac 报告中 Node v24.15.0 的完整 487 项回归与 Node v26.13.1 的单一统一审核套件 247/247 必须分开归档；**Node 26 的 247 项不代表第二 Node 完整 487 项通过**。
+- **B0 独立门禁**：参见 [B0-PREP 证据范围、原生隔离调查和待批 B0-RUN 单](mac-b0-prep.md)。没有真实监听的禁止端口 canary、完整子进程/凭据/代理隔离证明前，`MAC09_REAL_CLI_LOOPBACK=BLOCKED`、`AUTHORIZATION=NOT_GRANTED`。无需为这些勘误重跑旧 487 项或重复 315 秒。
 
 ## 2. 隔离克隆（不改本机已安装 skill）
 
@@ -87,4 +93,4 @@ ZCode 目标 runtime 是 `0.17.1`；Mac 曾报告 mmx-cli `1.0.29`，须以本�
 
 仅在隔离目录离线回归、原生 CLI、受管文件清单、真实单次请求、取消和恢复均通过且用户再次确认后，才能规划与现有 WorkSSD 正本的原子切换；本分支的 GitHub 提交不构成切换授权。
 
-保留原安装目录与清单、已存在的 Job/slot/归档及 13 个用户未提交文件。代码回滚使用新提交 `git revert <具体 SHA>`，不强推、不自动合并、不重启远端状态未知的请求。若证据不完整、真实审核未实现、未实机验证，则发布结论 `NOT_EVALUATED` 或 `FAIL`，不得称为 Mac 全流程生产就绪。
+保留原安装目录与清单、已存在的 Job/slot/归档及用户未提交修改；已知 Mac 现场报告为 53 项，但每轮须以本机只读现测为准，不清理或重置。代码回滚使用新提交 `git revert <具体 SHA>`，不强推、不自动合并、不重启远端状态未知的请求。若证据不完整、真实审核未实现、未实机验证，则发布结论 `NOT_EVALUATED` 或 `FAIL`，不得称为 Mac 全流程生产就绪。
