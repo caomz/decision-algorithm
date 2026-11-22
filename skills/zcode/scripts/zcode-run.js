@@ -356,8 +356,13 @@ function status(jobPath, { isAlive = alive } = {}) {
   if (evidence.integrity !== "match") {
     let pid = null;
     try { pid = read(path.join(job, "launch.json")).supervisor_pid ?? null; } catch {}
+    // Preserve original pre-spawn diagnostics without promoting the job to
+    // finished or inferring that a provider was (or was not) invoked.
+    let launchError = null;
+    try { launchError = read(path.join(job, "launch-error.json")); } catch {}
     return { status: "unknown", job_dir: job, supervisor_pid: pid, integrity: evidence.integrity,
       runtime_code: evidence.runtime_code ?? null,
+      ...(launchError ? { launch_error: launchError } : {}),
       note: "Missing, incomplete or changed job evidence: never resubmit automatically." };
   }
   return { ...legacyStatus(job, { isAlive }), integrity: "match",
