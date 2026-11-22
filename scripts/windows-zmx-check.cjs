@@ -147,7 +147,22 @@ function supportStatus(metadata, targetOs, at = new Date()) {
   if (skuEdition !== declaredEdition) return "conflicting_edition";
   const longServicing = ["enterprise", "education", "iot_enterprise"].includes(skuEdition);
   const end = longServicing ? row.enterprise_end : row.consumer_end;
-  return atMs <= Date.parse(end + "T23:59:59Z") ? "supported" : "out_of_support";
+  // Exclusive midnight boundary includes every millisecond of the end date.
+  return atMs < utcDay(end) + 86400000 ? "supported" : "out_of_support";
+}
+
+
+function clockStatus(at) {
+  const ms = at instanceof Date ? at.getTime() : NaN;
+  if (!Number.isFinite(ms)) return "invalid";
+  const reviewMs = utcDay(WINDOWS11_SUPPORT_TABLE.verified_date);
+  if (reviewMs === null || !validateSupportTable()) return "table_unverified";
+  if (ms < reviewMs) return "before_table_verification";
+  // This static data has no release after 2029. A clock more than one year
+  // beyond the last known GA support end is anomalous for this frozen snapshot.
+  const latestEnd = Math.max(...WINDOWS11_SUPPORT_TABLE.rows.map(r => utcDay(r.enterprise_end)));
+  if (ms >= latestEnd + 366 * 86400000) return "implausible_future";
+  return "plausible_unverified";
 }
 
 function hardlinkProbe(root, fsApi = fs) {
@@ -254,7 +269,12 @@ function run(options, root = ROOT) {
   // Reserve a NEW destination before running anything; an old report is evidence.
   fs.mkdirSync(path.dirname(options.report), { recursive: true });
   const reportFd = fs.openSync(options.report, "wx", 0o600);
-  const report = { format: 1, checked_at: new Date().toISOString(), mode: options.offline ? "offline" : "preflight",
+  // Sample the local clock exactly once for this run. It is NOT attested by a
+  // time authority; tests freeze the Date constructor inside a private VM.
+  const evaluatedAt = new Date();
+  const timeMs = evaluatedAt.getTime();
+  const checkedAt = Number.isFinite(timeMs) ? evaluatedAt.toISOString() : null;
+  const report = { format: 1, checked_at: checkedAt, mode: options.offline ? "offline" : "preflight",
     readiness: "blocked", provider_auth: "not_run", real_provider_requests: 0, real_provider_acceptance: "not_run",
     checks: [], tests: [], cli: { zcode: { status: "not_probed" }, mmx: { status: "not_probed" } } };
   try {
@@ -276,7 +296,11 @@ function run(options, root = ROOT) {
         : "unknown_or_emulated",
     };
     report.target_match = targetMatch(metadata, report.requested_target);
-    report.support_status = supportStatus(metadata, report.requested_target);
+    report.support_status = supportStatus(metadata, report.requested_target, evaluatedAt);
+    const clockVerdict = clockStatus(evaluatedAt);
+    report.clock = { source: "local_system_clock", authenticated: false,
+      evaluated_at: checkedAt, status: clockVerdict,
+      note: "The operating-system clock is not an authenticated time authority." };
     const evaluatedRow = supportRow(Number(metadata.windows?.build_number));
     report.support_table = {
       data_version: WINDOWS11_SUPPORT_TABLE.data_version,
@@ -301,6 +325,8 @@ function run(options, root = ROOT) {
     const dirty = git(["status", "--porcelain", "--untracked-files=all"]);
     if (dirty.status === 0) report.source.working_tree_dirty = Boolean(dirty.stdout.trim());
     const add = (name, ok, detail, applicable = true) => report.checks.push({ name, ok, detail, applicable });
+    add("evaluation_clock", options.offline || clockVerdict === "plausible_unverified",
+      "Only a plausible local clock is usable for non-offline preflight; time is never authenticated.", !options.offline);
     add("node_22_x64", process.versions.node.split(".")[0] === "22" && process.arch === "x64", "Supported Windows acceptance target is Node.js 22 x64.");
     add("native_windows", options.offline || process.platform === "win32", "Offline mode is not Windows platform acceptance.", !options.offline);
     add(report.requested_target === "windows11" ? "windows11_target" : "windows10_target", options.offline || report.target_match,
@@ -312,8 +338,15 @@ function run(options, root = ROOT) {
     report.jobs_root = options.jobsRoot;
     add("job_storage", storage.ok, storage.code);
     if (process.platform === "win32") add("local_ntfs", metadata.jobs_volume?.file_system === "NTFS" && metadata.jobs_volume?.drive_type === 3, "Durable jobs require a verified local NTFS volume; do not use a network or synchronized job folder.");
-    const doctor = require(path.join(root, "skills/zcode-mmx-review/scripts/review-run.js")).doctorOffline(path.join(root, "skills"));
-    add("release_and_protocol", doctor.status === "ok", doctor.checks.filter(check => !check.ok).map(check => check.name));
+    // An already-blocked preflight must not run the offline doctor wrapper
+    // (which may check a repository-owned wrapper via --version). Offline
+    // diagnostics still run the full doctor for protocol evidence.
+    if (options.offline || report.checks.every(check => check.ok)) {
+      const doctor = require(path.join(root, "skills/zcode-mmx-review/scripts/review-run.js")).doctorOffline(path.join(root, "skills"));
+      add("release_and_protocol", doctor.status === "ok", doctor.checks.filter(check => !check.ok).map(check => check.name));
+    } else {
+      add("release_and_protocol", false, "not_run_due_to_failed_prerequisite");
+    }
     if (!options.offline) {
       add("windows_global_slot_disabled", process.env.MMX_GLOBAL_SLOT !== "1", "Windows global slot is intentionally unavailable.");
       add("no_inherited_cancellation", !process.env.MMX_CANCEL_REQUEST_FILE && !process.env.ZCODE_CANCEL_REQUEST_FILE, "Run the preflight from a normal terminal, outside a managed job.");
@@ -366,4 +399,4 @@ if (require.main === module) {
 }
 
 module.exports = { parseArgs, hostClass, targetMatch, supportStatus, WINDOWS11_SUPPORT_TABLE,
-  validateSupportTable, hardlinkProbe, versionToken, probeVersion, testFiles, readHost, run };
+  validateSupportTable, clockStatus, hardlinkProbe, versionToken, probeVersion, testFiles, readHost, run };

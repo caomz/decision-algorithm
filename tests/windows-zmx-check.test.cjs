@@ -6,7 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 const vm = require("node:vm");
 const { parseArgs, hostClass, targetMatch, supportStatus, WINDOWS11_SUPPORT_TABLE,
-  validateSupportTable, hardlinkProbe, versionToken, probeVersion, testFiles, readHost, run } = require("../scripts/windows-zmx-check.cjs");
+  validateSupportTable, clockStatus, hardlinkProbe, versionToken, probeVersion, testFiles, readHost, run } = require("../scripts/windows-zmx-check.cjs");
 
 test("host classification distinguishes Windows 10, Windows 11 and Server on the same NT major", () => {
   const win = (build, product = 1) => ({ windows: { version: `10.0.${build}`, build_number: String(build), product_type: product } });
@@ -236,7 +236,8 @@ test("OperatingSystemSKU is captured and allowlisted without leaking unrelated h
 test("real preflight run() is fail-closed before CLI lookup and launch; fake compliant host probes both", t => {
   const source = fs.readFileSync(path.join(__dirname, "../scripts/windows-zmx-check.cjs"), "utf8").replace(/^#![^\n]*\n/, "");
   const checkoutDir = path.join(__dirname, "../scripts");
-  function inspect(name, winOverrides = {}, envOverrides = {}, doctorOk = true) {
+  function inspect(name, winOverrides = {}, envOverrides = {}, doctorOk = true,
+    clockIso = "2026-11-22T12:00:00.000Z", offline = false) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "zmx-preflight-" + name + "-"));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const host = path.join(root, "host.json");
@@ -249,12 +250,21 @@ test("real preflight run() is fail-closed before CLI lookup and launch; fake com
     fs.writeFileSync(host, JSON.stringify({ windows: { ...baseWindows, ...winOverrides },
       powershell: { version: "5.1.26100.1" }, jobs_volume: { file_system: "NTFS", drive_type: 3 } }));
     const lookup = { zcode: 0, mmx: 0 }, requests = { zcode: 0, mmx: 0 };
+    let liveClockReads = 0, doctorCalls = 0;
+    class FixedDate extends Date {
+      constructor(...args) {
+        if (args.length) super(...args);
+        else { super(clockIso === "invalid" ? NaN : clockIso); liveClockReads++; }
+      }
+    }
     const fakeSpawnSync = (command, args) => {
       if (command === "git") {
         const operation = args.slice(2).join(" ");
         return { status: 0, stdout: operation === "rev-parse HEAD" ? "a".repeat(40) + "\n"
           : operation === "branch --show-current" ? "windows-zmx-validation-20261121\n" : "" };
       }
+      if (command === "fake-node" && args[0] === "--test")
+        return { status: 0, stdout: "# tests 1\n# pass 1\n# fail 0\n# cancelled 0\n# skipped 0\n" };
       if (command === "fake-zcode") {
         assert.deepEqual(Array.from(args), ["--version"]);
         requests.zcode++;
@@ -271,8 +281,8 @@ test("real preflight run() is fail-closed before CLI lookup and launch; fake com
       const normalizedId = String(id).replace(/\\/g, "/");
       if (id === "node:child_process") return { spawnSync: fakeSpawnSync };
       if (normalizedId.endsWith("/skills/zcode-mmx-review/scripts/review-run.js"))
-        return { doctorOffline: () => ({ status: doctorOk ? "ok" : "blocked",
-          checks: doctorOk ? [] : [{ name: "protocol", ok: false }] }) };
+        return { doctorOffline: () => { doctorCalls++; return ({ status: doctorOk ? "ok" : "blocked",
+          checks: doctorOk ? [] : [{ name: "protocol", ok: false }] }); } };
       if (normalizedId.endsWith("/skills/zcode/scripts/zcode-chat.js"))
         return { findCli: () => { lookup.zcode++; return "fake-zcode"; },
           resolveLaunch: () => ({ command: "fake-zcode", prefix: [], entry: "fake-zcode" }) };
@@ -287,21 +297,42 @@ test("real preflight run() is fail-closed before CLI lookup and launch; fake com
       versions: { node: "22.23.5" }, execPath: "fake-node", env: envOverrides };
     vm.runInNewContext(source, {
       require: fakeRequire, module: moduleUnderTest, __dirname: checkoutDir,
-      process: fakeProcess, Buffer, console, setTimeout, clearTimeout,
+      process: fakeProcess, Date: FixedDate, Buffer, console, setTimeout, clearTimeout,
     }, { filename: "windows-zmx-check.fake-preflight.cjs" });
     const actual = moduleUnderTest.exports.run({
-      offline: false, targetOs: "windows11", hostFile: host,
+      offline, targetOs: "windows11", hostFile: host,
       report, jobsRoot: path.join(root, "jobs"),
-    }, root);
+    }, offline ? path.resolve(__dirname, "..") : root);
     assert.deepEqual(JSON.parse(fs.readFileSync(report, "utf8")).cli, JSON.parse(JSON.stringify(actual.report.cli)),
       "persisted report must match in-memory CLI evidence");
-    return { actual, lookup, requests };
+    assert.equal(liveClockReads, 1, "sample the local evaluation time exactly once");
+    assert.equal(actual.report.checked_at, actual.report.clock.evaluated_at, "report and support use same instant");
+    assert.equal(actual.report.clock.source, "local_system_clock");
+    assert.equal(actual.report.clock.authenticated, false);
+    return { actual, lookup, requests, doctorCalls };
   }
   const valid = inspect("compliant");
   assert.equal(valid.actual.exitCode, 0, JSON.stringify(valid.actual.report.failed));
   assert.equal(valid.actual.report.readiness, "preflight_ready");
   assert.deepEqual(valid.lookup, { zcode: 1, mmx: 1 });
   assert.deepEqual(valid.requests, { zcode: 1, mmx: 1 });
+  for (const iso of ["invalid", "2020-01-01T00:00:00.000Z", "2099-01-01T00:00:00.000Z"]) {
+    const result = inspect("badclock-" + iso.slice(0, 4), {}, {}, true, iso);
+    assert.equal(result.actual.exitCode, 2);
+    assert.equal(result.actual.report.readiness, "blocked");
+    assert.equal(result.actual.report.failed.includes("evaluation_clock"), true);
+    assert.equal(result.doctorCalls, 0, "blocked clock must not launch doctor wrapper");
+    assert.deepEqual(result.lookup, { zcode: 0, mmx: 0 });
+    assert.deepEqual(result.requests, { zcode: 0, mmx: 0 });
+    assert.equal(result.actual.report.cli.zcode.status, "not_probed");
+    assert.equal(result.actual.report.cli.mmx.status, "not_probed");
+  }
+  const diagnostic = inspect("offline-badclock", {}, {}, true, "invalid", true);
+  assert.equal(diagnostic.actual.report.readiness, "offline_pass");
+  assert.equal(diagnostic.actual.report.clock.status, "invalid");
+  assert.equal(diagnostic.actual.report.clock.authenticated, false);
+  assert.equal(diagnostic.actual.report.cli.zcode.status, "not_probed");
+  assert.equal(diagnostic.doctorCalls, 1);
   const disallowed = [
     ["expired", { build_number: "22631", version: "10.0.22631" }, {}, true, "windows11_support"],
     ["arm64", { native_machine: 0xAA64, processor_architecture_code: 12, os_architecture: "ARM64" },
@@ -353,4 +384,20 @@ test("invalid or contradictory GA table cannot authorize additional OS support",
   assert.equal(alter(v => { v.rows[2].available_date = "2030-01-01"; }), false);
   assert.equal(supportStatus({windows:{build_number:"30000",caption:"Windows 11 Home",operating_system_sku:101}},
     "windows11", new Date("2026-11-22T00:00:00Z")), "unknown_build");
+});
+
+test("GA support uses exclusive next-UTC-day boundary, including the last millisecond", () => {
+  const win = (sku, caption) => ({ windows: { build_number: "26100", operating_system_sku: sku, caption } });
+  const consumer = win(164, "Windows 11 Pro Education"), enterprise = win(121, "Windows 11 Education");
+  assert.equal(supportStatus(consumer, "windows11", new Date("2026-10-13T23:59:59.999Z")), "supported");
+  assert.equal(supportStatus(consumer, "windows11", new Date("2026-10-14T00:00:00.000Z")), "out_of_support");
+  assert.equal(supportStatus(enterprise, "windows11", new Date("2027-10-12T23:59:59.999Z")), "supported");
+  assert.equal(supportStatus(enterprise, "windows11", new Date("2027-10-13T00:00:00.000Z")), "out_of_support");
+});
+test("single local clock status is explicitly unauthenticated and fails closed on anomalies", () => {
+  assert.equal(clockStatus(new Date("2026-11-22T12:00:00.000Z")), "plausible_unverified");
+  assert.equal(clockStatus(new Date("2024-01-01T00:00:00.000Z")), "before_table_verification");
+  assert.equal(clockStatus(new Date("2099-01-01T00:00:00.000Z")), "implausible_future");
+  assert.equal(clockStatus(new Date(NaN)), "invalid");
+  assert.throws(() => parseArgs(["--jobs-root","jobs","--report","report.json","--date","2029-01-01"]));
 });
