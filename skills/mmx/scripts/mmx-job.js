@@ -154,9 +154,9 @@ function readRequest(job) {
       JSON.stringify(request.runtime) !== JSON.stringify(runtimeBinding())) {
     throw new Error("Node, wrapper, guard or CLI runtime changed; do not launch");
   }
-  if (request.batch_script === fs.realpathSync(BATCH) && !request.runtime.cli) {
-    throw new Error("real MMX batch requires a verified CLI launcher on PATH");
-  }
+  // A missing CLI is a recorded runtime state, not a license to execute a
+  // different launcher later. readRequest's exact runtime identity check blocks
+  // PATH drift, while the actual wrapper rejects cli_missing before billing.
   return { request, requestDigest: recorded.sha256 };
 }
 function start(jobPath, argv, overrides = {}) {
