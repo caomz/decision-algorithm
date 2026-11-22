@@ -18,12 +18,12 @@ async function waitFor(probe, timeout = 10000) {
   throw new Error("timed out waiting for controlled batch evidence");
 }
 
-function launch(t, root, preload, wrapper, extraEnv = {}) {
+function launch(t, root, preload, wrapper, extraEnv = {}, batchFlags = []) {
   const prompt = path.join(root, "中文 request.txt");
   const receipt = path.join(root, "receipt.json");
   fs.writeFileSync(prompt, "SYNTHETIC ONLY\r\n");
   const child = spawn(process.execPath, ["--require", preload, batch, "--prompt-file", prompt,
-    "--concurrency", "1", "--receipt-file", receipt], {
+    "--concurrency", "1", "--receipt-file", receipt, ...batchFlags], {
     shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, MMX_BATCH_WRAPPER: wrapper, MMX_CANCEL_REQUEST_FILE: "", ...extraEnv },
   });
@@ -45,7 +45,7 @@ function launch(t, root, preload, wrapper, extraEnv = {}) {
   return { child, receipt, closed, output: () => ({ stdout, stderr }), done: () => finished };
 }
 
-test("cancelling during quota backoff writes a receipt promptly without another request", { timeout: 15000 }, async t => {
+test("explicitly authorized quota retry can still be cancelled during backoff without a second request", { timeout: 15000 }, async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "mmx-backoff-cancel-"));
   const marker = path.join(root, "cancel.request");
   const ready = path.join(root, "backoff-ready");
@@ -73,7 +73,7 @@ cp.spawn=function(...args) {
 `);
   const running = launch(t, root, preload, wrapper, {
     MMX_CANCEL_REQUEST_FILE: marker, MMX_BATCH_QUOTA_RETRY_MS: "30000",
-  });
+  }, ["--allow-paid-retry"]);
   await waitFor(() => fs.existsSync(ready));
   fs.writeFileSync(marker, "cancel\n");
   await waitFor(running.done, 3000);
