@@ -5,7 +5,8 @@
 param(
     [switch]$Offline,
     [string]$JobsRoot,
-    [string]$ReportPath
+    [string]$ReportPath,
+    [ValidateSet('windows10','windows11')][string]$TargetOs = 'windows10'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -60,6 +61,7 @@ try {
     $OutputEncoding = $utf8
     [Console]::OutputEncoding = $utf8
     $helperArgs = @((Join-Path $repo 'scripts\windows-zmx-check.cjs'), '--host-file', $hostFile, '--jobs-root', $JobsRoot, '--report', $ReportPath)
+    $helperArgs += @('--target-os', $TargetOs)
     if ($Offline) { $helperArgs += '--offline' }
     & $node.Source @helperArgs
     $helperExit = $LASTEXITCODE

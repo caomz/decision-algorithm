@@ -1,6 +1,6 @@
 # Windows 10：ZCode + MMX 操作与验收
 
-本指南针对 `windows-zmx-validation-20261121` 分支。目标是 **Windows 10 x64、Node.js 22 x64、Windows PowerShell 5.1 或 PowerShell 7**。仓库内直接调用只需要 Node；不需要 WSL、Python、管理员终端或修改全局执行策略。Git 用于同步分支。
+本指南针对 `windows-zmx-validation-20261121` 分支。目标是 **Windows 10 x64、Node.js 22 x64、Windows PowerShell 5.1 或 PowerShell 7**。Windows 11 请使用新增的 [Windows 11 独立验收说明](windows11-zmx.md) 并显式添加 `-TargetOs windows11`；默认依旧为 Windows 10。仓库内直接调用只需要 Node；不需要 WSL、Python、管理员终端或修改全局执行策略。Git 用于同步分支。
 
 当前可用入口是 ZCode/MMX 各自的单次 wrapper、批处理和持久任务。`zcode-mmx-review/review-run.js` 的统一真实后端仍未开放，`--backend real` 会拒绝；离线分片覆盖 PASS 不能代替真实双模型审查。
 

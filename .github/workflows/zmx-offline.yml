@@ -10,6 +10,7 @@ on:
       - "scripts/windows-zmx-check.*"
       - "tests/windows-zmx-check.test.cjs"
       - "docs/windows10-zmx.md"
+      - "docs/windows11-zmx.md"
   push:
     branches:
       - "cloud/**"
@@ -22,6 +23,7 @@ on:
       - "scripts/windows-zmx-check.*"
       - "tests/windows-zmx-check.test.cjs"
       - "docs/windows10-zmx.md"
+      - "docs/windows11-zmx.md"
   workflow_dispatch:
 
 permissions:
@@ -90,6 +92,15 @@ jobs:
           if ($report.readiness -ne 'offline_pass' -or $report.real_provider_requests -ne 0) { throw 'Unexpected acceptance scope' }
           if ($report.environment.powershell.version -notlike '5.1.*') { throw 'PowerShell 5.1 evidence is missing' }
           Write-Host "Observed host: $($report.environment.host_class); this does not constitute Windows 10 native acceptance."
+          # Hosted Windows Server is NOT a Windows 11 client, even when its
+          # offline diagnostics succeed.
+          $win11Report = Join-Path $env:RUNNER_TEMP 'windows-zmx-check.json.win11'
+          & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $copyRoot 'scripts/windows-zmx-check.ps1') -Offline -TargetOs windows11 -JobsRoot (Join-Path $copyRoot 'job data 11') -ReportPath $win11Report
+          if ($LASTEXITCODE -ne 0) { throw 'Windows 11 offline diagnostic failed' }
+          $diagnostic = Get-Content -LiteralPath $win11Report -Raw -Encoding UTF8 | ConvertFrom-Json
+          if ($diagnostic.readiness -ne 'offline_pass' -or $diagnostic.requested_target -ne 'windows11' -or $diagnostic.target_match -ne $false -or $diagnostic.observed_host -ne 'windows_server' -or $diagnostic.acceptance_scope -ne 'offline_diagnostics_only') {
+            throw 'Windows Server must not be promoted to Windows 11 compatibility'
+          }
       - name: Windows acceptance evidence
         if: always() && runner.os == 'Windows'
         uses: actions/upload-artifact@v4

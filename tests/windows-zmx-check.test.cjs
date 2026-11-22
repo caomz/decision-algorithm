@@ -4,7 +4,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { parseArgs, hostClass, hardlinkProbe, versionToken, probeVersion, testFiles, readHost, run } = require("../scripts/windows-zmx-check.cjs");
+const { parseArgs, hostClass, targetMatch, supportStatus, hardlinkProbe, versionToken, probeVersion, testFiles, readHost, run } = require("../scripts/windows-zmx-check.cjs");
 
 test("host classification distinguishes Windows 10, Windows 11 and Server on the same NT major", () => {
   const win = (build, product = 1) => ({ windows: { version: `10.0.${build}`, build_number: String(build), product_type: product } });
@@ -89,4 +89,42 @@ test("arguments reject duplicates and absent report destination", () => {
 test("PowerShell entry is ASCII so Windows PowerShell 5.1 does not misdecode its source", () => {
   const source = fs.readFileSync(path.join(__dirname, "../scripts/windows-zmx-check.ps1"));
   assert.ok([...source].every(byte => byte < 128));
+});
+test("Windows 11 explicit target accepts only reviewed x64 client builds", () => {
+  const win = (build, product = 1, version = "10.0." + build, architecture = "64-bit") =>
+    ({ windows: { version, build_number: String(build), product_type: product, os_architecture: architecture,
+      caption: "Microsoft Windows 11 Home" } });
+  assert.equal(targetMatch(win(19045), "windows10", "win32", "x64"), true);
+  assert.equal(targetMatch(win(19045), "windows11", "win32", "x64"), false);
+  for (const build of [22000, 22621, 22631, 26100, 26200, 26300, 28000]) {
+    assert.equal(targetMatch(win(build), "windows11", "win32", "x64"), true, String(build));
+    assert.equal(targetMatch(win(build), "windows10", "win32", "x64"), false);
+  }
+  assert.equal(targetMatch(win(22631, 3), "windows11", "win32", "x64"), false);
+  assert.equal(targetMatch(win(30000), "windows11", "win32", "x64"), false);
+  assert.equal(targetMatch(win(26000), "windows11", "win32", "x64"), false);
+  assert.equal(targetMatch(win(22631, 1, "10.0.19045"), "windows11", "win32", "x64"), false);
+  assert.equal(targetMatch(win(22631, 1, "10.0.22631", "32-bit"), "windows11", "win32", "x64"), false);
+  assert.equal(targetMatch(win(22631), "windows11", "win32", "ia32"), false);
+  assert.equal(targetMatch(win(22631), "windows11", "linux", "x64"), false);
+});
+test("Windows 11 lifecycle remains separate from Windows 11 host identity", () => {
+  const at = new Date("2026-11-22T00:00:00Z");
+  const win = (build, caption) => ({ windows: { build_number: String(build), caption } });
+  assert.equal(supportStatus(win(22631, "Windows 11 Home"), "windows11", at), "out_of_support");
+  assert.equal(supportStatus(win(26100, "Windows 11 Pro"), "windows11", at), "out_of_support");
+  assert.equal(supportStatus(win(26100, "Windows 11 Enterprise"), "windows11", at), "supported");
+  assert.equal(supportStatus(win(26200, "Windows 11 家庭中文版"), "windows11", at), "supported");
+  assert.equal(supportStatus(win(26300, "Windows 11 Home"), "windows11", at), "supported");
+  assert.equal(supportStatus(win(28000, "Windows 11 Home"), "windows11", at), "supported");
+  assert.equal(supportStatus(win(30000, "Windows 11 Home"), "windows11", at), "unknown_build");
+  assert.equal(supportStatus(win(26200, "Windows 11"), "windows11", at), "unknown_edition");
+  assert.equal(supportStatus(win(22631, "Windows 11 Home"), "windows10", at), "not_assessed");
+});
+test("OS target defaults Windows 10, supports explicit Win11 and rejects invalid flags", () => {
+  const base = ["--jobs-root", "jobs 中文", "--report", "check.json"];
+  assert.equal(parseArgs(base).targetOs, "windows10");
+  assert.equal(parseArgs([...base, "--target-os", "windows11"]).targetOs, "windows11");
+  assert.throws(() => parseArgs([...base, "--target-os", "windows_server"]));
+  assert.throws(() => parseArgs([...base, "--target-os", "windows11", "--target-os", "windows10"]));
 });

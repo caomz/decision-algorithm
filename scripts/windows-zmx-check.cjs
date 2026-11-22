@@ -10,7 +10,7 @@ const { spawnSync } = require("node:child_process");
 const ROOT = path.resolve(__dirname, "..");
 
 function parseArgs(argv) {
-  const out = { offline: false, jobsRoot: null, report: null, hostFile: null };
+  const out = { offline: false, jobsRoot: null, report: null, hostFile: null, targetOs: "windows10" };
   const names = { "--jobs-root": "jobsRoot", "--report": "report", "--host-file": "hostFile" };
   const seen = new Set();
   for (let i = 0; i < argv.length; i++) {
@@ -18,6 +18,7 @@ function parseArgs(argv) {
     if (seen.has(arg)) throw new Error("invalid_arguments");
     seen.add(arg);
     if (arg === "--offline") out.offline = true;
+    else if (arg === "--target-os" && ["windows10", "windows11"].includes(argv[i + 1])) out.targetOs = argv[++i];
     else if (names[arg] && argv[i + 1] && !argv[i + 1].startsWith("--")) out[names[arg]] = path.resolve(argv[++i]);
     else throw new Error("invalid_arguments");
   }
@@ -31,6 +32,43 @@ function hostClass(metadata, platform = process.platform) {
   if (!win || !/^10\./.test(win.version || "") || !/^\d+$/.test(String(win.build_number))) return "windows_unknown";
   if (Number(win.product_type) !== 1) return "windows_server";
   return Number(win.build_number) < 22000 ? "windows_10" : "windows_11_or_newer";
+}
+
+
+// Reviewed Windows client OS build families only. Never assume a higher or
+// unknown build is a compatible Windows 11 client.
+const WINDOWS11_KNOWN = new Set([22000, 22621, 22631, 26100, 26200, 26300, 28000]);
+const WINDOWS11_EOL = {
+  22000: ["2023-10-10", "2024-10-08"],
+  22621: ["2024-10-08", "2025-10-14"],
+  22631: ["2025-11-11", "2026-11-10"],
+  26100: ["2026-10-13", "2027-10-12"],
+  26200: ["2027-10-12", "2028-10-10"],
+  26300: ["2028-10-10", "2029-10-09"],
+  28000: ["2028-03-14", "2029-03-13"],
+};
+function targetMatch(metadata, targetOs, platform = process.platform, nodeArch = process.arch) {
+  const win = metadata?.windows;
+  if (platform !== "win32" || nodeArch !== "x64" || !win || Number(win.product_type) !== 1 ||
+      !/64/.test(String(win.os_architecture || ""))) return false;
+  const version = /^10\.0\.(\d+)$/.exec(String(win.version || ""));
+  const build = Number(win.build_number);
+  if (!version || !Number.isSafeInteger(build) || Number(version[1]) !== build) return false;
+  if (targetOs === "windows10") return build >= 10240 && build < 22000;
+  return targetOs === "windows11" && WINDOWS11_KNOWN.has(build);
+}
+// Windows client identity and security support are independent. Unknown OS
+// edition is never silently treated as supported.
+function supportStatus(metadata, targetOs, at = new Date()) {
+  if (targetOs !== "windows11") return "not_assessed";
+  const win = metadata?.windows, periods = WINDOWS11_EOL[Number(win?.build_number)];
+  if (!periods) return "unknown_build";
+  const caption = String(win?.caption || "");
+  const enterprise = /enterprise|education|iot|企业|教育/i.test(caption);
+  const homePro = /home|pro(?:fessional)?|家庭|专业/i.test(caption);
+  if (!enterprise && !homePro) return "unknown_edition";
+  const end = enterprise ? periods[1] : periods[0];
+  return at.getTime() <= Date.parse(end + "T23:59:59Z") ? "supported" : "out_of_support";
 }
 
 function hardlinkProbe(root, fsApi = fs) {
@@ -141,21 +179,30 @@ function run(options, root = ROOT) {
   try {
     const metadata = readHost(options.hostFile);
     report.environment = { ...metadata, host_class: hostClass(metadata), platform: process.platform,
-      os_release: os.release(), machine: os.machine(), node_version: process.versions.node, node_arch: process.arch, npm: npmVersion() };
-    report.target = { os: "Windows 10", arch: "x64", node_major: 22, powershell_minimum: "5.1" };
+      os_release: os.release(), machine: os.machine(), node_version: process.versions.node, node_exec_path: process.execPath,
+      node_arch: process.arch, npm: npmVersion() };
+    report.requested_target = options.targetOs ?? "windows10";
+    report.observed_host = report.environment.host_class;
+    report.target_match = targetMatch(metadata, report.requested_target);
+    report.support_status = supportStatus(metadata, report.requested_target);
+    report.acceptance_scope = options.offline ? "offline_diagnostics_only" : "native_client_preflight";
+    report.target = { os: report.requested_target === "windows11" ? "Windows 11" : "Windows 10", arch: "x64", node_major: 22, powershell_minimum: "5.1" };
     report.source = { root, head: null, branch: null, working_tree_dirty: null };
     const git = args => spawnSync("git", ["-C", root, ...args], { encoding: "utf8", timeout: 10000, maxBuffer: 16384, shell: false, windowsHide: true });
     const head = git(["rev-parse", "HEAD"]);
     if (head.status === 0 && /^[0-9a-f]{40}\s*$/.test(head.stdout || "")) report.source.head = head.stdout.trim();
     const branch = git(["branch", "--show-current"]);
     if (branch.status === 0 && /^[A-Za-z0-9._/-]*\s*$/.test(branch.stdout || "")) report.source.branch = branch.stdout.trim() || "detached";
-    const dirty = git(["status", "--porcelain", "--untracked-files=no"]);
+    const dirty = git(["status", "--porcelain", "--untracked-files=all"]);
     if (dirty.status === 0) report.source.working_tree_dirty = Boolean(dirty.stdout.trim());
-    const add = (name, ok, detail) => report.checks.push({ name, ok, detail });
+    const add = (name, ok, detail, applicable = true) => report.checks.push({ name, ok, detail, applicable });
     add("node_22_x64", process.versions.node.split(".")[0] === "22" && process.arch === "x64", "Supported Windows acceptance target is Node.js 22 x64.");
-    add("native_windows", options.offline || process.platform === "win32", "Offline runs on other operating systems do not establish Windows readiness.");
-    add("windows10_target", options.offline || report.environment.host_class === "windows_10", "Preflight targets a Windows 10 client; Server CI and Windows 11 are reported separately.");
-    add("powershell_host", options.offline || /^(?:5\.1\.|[6-9]\.)/.test(metadata.powershell?.version || ""), "Run the PowerShell entry point to record the actual shell version.");
+    add("native_windows", options.offline || process.platform === "win32", "Offline mode is not Windows platform acceptance.", !options.offline);
+    add(report.requested_target === "windows11" ? "windows11_target" : "windows10_target", options.offline || report.target_match,
+      "Only an explicitly recognized matching Windows client passes preflight.", !options.offline);
+    if (report.requested_target === "windows11") add("windows11_support", options.offline || report.support_status === "supported",
+      "Unsupported/unknown Windows 11 builds and editions block production preflight.", !options.offline);
+    add("powershell_host", options.offline || /^(?:5\.1\.|[6-9]\.)/.test(metadata.powershell?.version || ""), "PowerShell host version is inspected for preflight.", !options.offline);
     const storage = hardlinkProbe(options.jobsRoot);
     report.jobs_root = options.jobsRoot;
     add("job_storage", storage.ok, storage.code);
@@ -188,7 +235,7 @@ function run(options, root = ROOT) {
     for (const suite of report.tests) add(`tests:${suite.name}`, suite.ok, suite.summary);
     if (report.checks.every(check => check.ok)) report.readiness = options.offline ? "offline_pass" : "preflight_ready";
     report.failed = report.checks.filter(check => !check.ok).map(check => check.name);
-    report.note = "Neither offline_pass nor preflight_ready proves a real provider request, authentication, Windows descendant cleanup, or the unified real backend.";
+    report.note = "offline_pass is diagnostics only and NOT Windows client compatibility approval. preflight_ready does not prove provider authentication, billed requests, descendant cleanup, or the unified real backend.";
     fs.writeFileSync(reportFd, JSON.stringify(report, null, 2) + "\n", "utf8");
     return { exitCode: report.readiness === "blocked" ? 2 : 0, report };
   } catch {
@@ -205,7 +252,7 @@ if (require.main === module) {
     const result = run(options);
     process.stdout.write(JSON.stringify({ readiness: result.report.readiness, host_class: result.report.environment?.host_class ?? "unknown", report: options.report, failed: result.report.checks.filter(check => !check.ok).map(check => check.name), real_provider_acceptance: "not_run" }) + "\n");
     process.exitCode = result.exitCode;
-  } catch { process.stderr.write("Local check refused. Use --jobs-root DIRECTORY --report NEW_FILE [--offline]; existing reports are never replaced.\n"); process.exitCode = 2; }
+  } catch { process.stderr.write("Local check refused. Use --jobs-root DIRECTORY --report NEW_FILE [--offline] [--target-os windows10|windows11]; existing reports are never replaced.\n"); process.exitCode = 2; }
 }
 
-module.exports = { parseArgs, hostClass, hardlinkProbe, versionToken, probeVersion, testFiles, readHost, run };
+module.exports = { parseArgs, hostClass, targetMatch, supportStatus, hardlinkProbe, versionToken, probeVersion, testFiles, readHost, run };
