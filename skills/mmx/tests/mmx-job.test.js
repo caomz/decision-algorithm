@@ -299,6 +299,38 @@ test("verify CLI fails closed for corrupt or incomplete archives",async()=>{
   }
 });
 
+test("MAC-01 durable job to real batch to fake wrapper sends one request on quota", { timeout: 16000 }, async () => {
+  const wrapper = path.join(root, "quota-job-wrapper.cjs");
+  const independentCount = path.join(root, "quota-job-invocations");
+  fs.writeFileSync(wrapper, [
+    '"use strict";',
+    'const fs=require("node:fs");',
+    'fs.appendFileSync(process.env.MMX_E2E_COUNT, "1\\n");',
+    'process.stdout.write(JSON.stringify({status:"quota_error",cli_invoked:true,complete:false,truncated:false,error:"synthetic 429"})+"\\n");',
+  ].join("\n")+"\n");
+  const oldWrapper = process.env.MMX_BATCH_WRAPPER;
+  const oldCount = process.env.MMX_E2E_COUNT;
+  process.env.MMX_BATCH_WRAPPER = wrapper;
+  process.env.MMX_E2E_COUNT = independentCount;
+  let job;
+  try {
+    job = start(path.join(root, "real-batch-quota"), ["--prompt-file", prompt, "--concurrency", "1"]).job_dir;
+    const finished = await until(() => status(job).status === "finished" && status(job), 12000);
+    assert.equal(finished.receipt.shards.length, 1);
+    assert.equal(finished.receipt.shards[0].status, "quota_error");
+    assert.equal(finished.receipt.shards[0].retried, false);
+    assert.equal(finished.receipt.shards[0].retry_skipped_reason, "paid_retry_not_authorized");
+    assert.equal(fs.readFileSync(independentCount, "utf8").trim().split("\n").length, 1);
+    assert.equal(verify(job).integrity, "match");
+  } finally {
+    if (oldWrapper === undefined) delete process.env.MMX_BATCH_WRAPPER;
+    else process.env.MMX_BATCH_WRAPPER = oldWrapper;
+    if (oldCount === undefined) delete process.env.MMX_E2E_COUNT;
+    else process.env.MMX_E2E_COUNT = oldCount;
+    if (job && status(job).status !== "finished") cancel(job);
+  }
+});
+
 test("real batch cancellation lets wrappers clean their detached CLI before exit",{skip:process.platform==="win32"},async()=>{
   const wrapper=path.join(root,"cleanup-wrapper.cjs");
   const ready=path.join(root,"cleanup-child-pid");
