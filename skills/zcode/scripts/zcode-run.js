@@ -41,6 +41,26 @@ function writeCancel(job) {
   try { fs.writeFileSync(path.join(job, "cancel.request"), "cancel\n", { flag: "wx", mode: 0o600 }); }
   catch (error) { if (error.code !== "EEXIST") throw error; }
 }
+// Never wait indefinitely for a wrapper whose descendants may retain pipes.
+async function boundedClose(closed, milliseconds) {
+  let timer;
+  try {
+    return await Promise.race([
+      closed.then(() => true),
+      new Promise(resolve => { timer = setTimeout(() => resolve(false), milliseconds); }),
+    ]);
+  } finally { if (timer) clearTimeout(timer); }
+}
+async function stopOwnedAfterPublicationFailure(child, closed, job) {
+  // The wrapper may already have made a paid request. Never synthesize a
+  // cli_invoked=false receipt or treat PID disappearance as remote cancellation.
+  let markerWritten = false;
+  try { writeCancel(job); markerWritten = true; } catch {}
+  if (!markerWritten || !await boundedClose(closed, 15000)) {
+    signalChild(child, "SIGKILL"); // Only the child we actually spawned.
+    if (!await boundedClose(closed, 2000)) child.unref();
+  }
+}
 
 function start(jobPath, wrapperArgs, { wrapperPath = WRAPPER, spawnWorker = spawn } = {}) {
   checkInstall();
@@ -87,7 +107,11 @@ function start(jobPath, wrapperArgs, { wrapperPath = WRAPPER, spawnWorker = spaw
 }
 
 async function worker(job) {
-  // No second worker may replay this job, including after a crash.
+  // A removed worker.lock is never permission to resubmit a job that
+  // already has any execution evidence. Check before claiming the new lock.
+  for (const name of ["started.json", "stdout.json", "stderr.log", "execution.json", "completion.json", "run"]) {
+    if (fs.existsSync(path.join(job, name))) throw new Error("existing execution evidence; do not replay");
+  }
   fs.mkdirSync(path.join(job, "worker.lock"), { mode: 0o700 });
   const request = read(path.join(job, "request.json"));
   if (!path.isAbsolute(request.wrapper) || !Array.isArray(request.args) || request.args.some(arg => typeof arg !== "string")) throw new Error("invalid job");
@@ -100,13 +124,27 @@ async function worker(job) {
   }
   const out = fs.openSync(path.join(job, "stdout.json"), "wx", 0o600);
   const err = fs.openSync(path.join(job, "stderr.log"), "wx", 0o600);
-  const child = spawn(process.execPath, [request.wrapper, ...request.args], {
-    cwd: job, detached: process.platform !== "win32", shell: false, windowsHide: true,
-    env: { ...process.env, ZCODE_CANCEL_REQUEST_FILE: cancelMarker }, stdio: ["ignore", out, err],
-  });
-  fs.closeSync(out); fs.closeSync(err);
-  save(path.join(job, "started.json"), { supervisor_pid: process.pid, wrapper_pid: child.pid ?? null, started_at: new Date().toISOString() });
+  let child;
+  try {
+    child = spawn(process.execPath, [request.wrapper, ...request.args], {
+      cwd: job, detached: process.platform !== "win32", shell: false, windowsHide: true,
+      env: { ...process.env, ZCODE_CANCEL_REQUEST_FILE: cancelMarker }, stdio: ["ignore", out, err],
+    });
+  } finally { fs.closeSync(out); fs.closeSync(err); }
   let reason = "child_exit";
+  // Subscribe to both child events BEFORE publishing started.json. Otherwise
+  // a disk-full/access-denied fault after spawn can strand the paid wrapper.
+  child.once("error", () => { reason = "spawn_error"; });
+  const closed = new Promise(resolve => {
+    child.once("close", (code, signal) => resolve({ code, signal }));
+  });
+  try {
+    save(path.join(job, "started.json"), { supervisor_pid: process.pid, wrapper_pid: child.pid ?? null, started_at: new Date().toISOString() });
+  } catch (error) {
+    await stopOwnedAfterPublicationFailure(child, closed, job);
+    // Preserve unknown and permanent claim. No fabricated execution receipt.
+    throw error;
+  }
   let escalation;
   const stop = nextReason => {
     if (reason !== "child_exit") return;
@@ -122,10 +160,7 @@ async function worker(job) {
   const cancelPoll = setInterval(() => { if (fs.existsSync(cancelMarker)) cancel(); }, 75);
   // The wrapper owns the request deadline. This independent deadline also covers preflight and cleanup.
   const deadline = setTimeout(() => stop("supervisor_timeout"), (options.timeout + 45) * 1000);
-  const result = await new Promise(resolve => {
-    child.once("error", () => { reason = "spawn_error"; });
-    child.once("close", (code, signal) => resolve({ code, signal }));
-  });
+  const result = await closed;
   clearTimeout(deadline); clearInterval(cancelPoll); if (escalation) clearTimeout(escalation);
   if (reason === "child_exit" && fs.existsSync(cancelMarker)) reason = "cancelled";
   process.removeListener("SIGTERM", cancel); process.removeListener("SIGINT", cancel);
@@ -153,6 +188,10 @@ function status(jobPath, { isAlive = alive } = {}) {
   if (!fs.existsSync(execution)) {
     if (fs.existsSync(path.join(job, "launch-error.json"))) {
       return { ...result, status: "unknown", launch_error: read(path.join(job, "launch-error.json")) };
+    }
+    if (fs.existsSync(path.join(job, "worker.lock"))) {
+      return { ...result, status: "unknown",
+        note: "Worker claimed execution but no terminal record exists. Never replay or remove the claim." };
     }
     const supervisorAlive = isAlive(launch.supervisor_pid, job);
     // The worker saves execution.json before it exits. A supervisor that ends

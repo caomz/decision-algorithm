@@ -573,6 +573,79 @@ test("failed worker launch stays unknown and preserves explicit launch evidence"
     assert.equal(fs.existsSync(path.join(job, "started.json")), false);
   }
 });
+test("post-spawn started.json EACCES/ENOSPC/EEXIST failures cancel the owned wrapper and preserve a permanent claim", { timeout: 30000 }, async () => {
+  for (const code of ["EACCES", "ENOSPC", "EEXIST"]) {
+    const directory = path.join(root, "started-publish-" + code + "-" + counter++);
+    fs.mkdirSync(directory);
+    const prompt = path.join(directory, "prompt.txt");
+    const wrapperScript = path.join(directory, "fake-wrapper.cjs");
+    const preload = path.join(directory, "inject-started-failure.cjs");
+    const invocationLog = path.join(directory, "wrapper-calls.log");
+    const childEnded = path.join(directory, "child-ended");
+    const job = path.join(directory, "job");
+    fs.writeFileSync(prompt, "SYNTHETIC POST SPAWN\r\n");
+    fs.writeFileSync(wrapperScript, `
+      const fs = require("node:fs");
+      const log = ${JSON.stringify(invocationLog)};
+      const ended = ${JSON.stringify(childEnded)};
+      fs.appendFileSync(log, "invoked\\n");
+      const timer = setInterval(() => {
+        if (!fs.existsSync(process.env.ZCODE_CANCEL_REQUEST_FILE)) return;
+        clearInterval(timer);
+        fs.writeFileSync(ended, "cancel seen");
+        process.exitCode = 1;
+      }, 20);
+    `);
+    fs.writeFileSync(preload, `
+      if (process.argv[2] === "worker" && /zcode-run\\.js$/.test(process.argv[1])) {
+        const fs = require("node:fs"), path = require("node:path");
+        const rename = fs.renameSync;
+        fs.renameSync = function(from, to) {
+          if (path.basename(to) === "started.json") {
+            throw Object.assign(new Error("synthetic " + ${JSON.stringify(code)}), { code: ${JSON.stringify(code)} });
+          }
+          return rename.apply(this, arguments);
+        };
+      }
+    `);
+    const saved = process.env.NODE_OPTIONS;
+    let launch;
+    try {
+      process.env.NODE_OPTIONS = "--require " + JSON.stringify(preload);
+      launch = supervisor.start(job, ["--prompt-file", prompt], { wrapperPath: wrapperScript });
+    } finally {
+      if (saved === undefined) delete process.env.NODE_OPTIONS;
+      else process.env.NODE_OPTIONS = saved;
+    }
+    assert.equal(launch.status, "started");
+    await waitUntil(() => fs.existsSync(path.join(job, "cancel.request")));
+    await waitUntil(() => fs.existsSync(path.join(job, "worker.lock")));
+    assert.equal(supervisor.status(job).status, "unknown", code);
+    assert.equal(fs.existsSync(path.join(job, "execution.json")), false, code);
+    const before = fs.existsSync(invocationLog) ? fs.readFileSync(invocationLog,"utf8") : "";
+    const replay = spawnSync(process.execPath, [path.resolve(__dirname, "../scripts/zcode-run.js"), "worker", job], { encoding: "utf8" });
+    assert.equal(replay.status, 1, code);
+    const after = fs.existsSync(invocationLog) ? fs.readFileSync(invocationLog,"utf8") : "";
+    assert.equal(after, before, code);
+    assert.equal(fs.existsSync(path.join(job, "worker.lock")), true, code);
+    if (before) await waitUntil(() => fs.existsSync(childEnded), 5000);
+  }
+});
+test("missing worker lock but existing execution evidence blocks replay", () => {
+  const directory = path.join(root, "missing-worker-claim-evidence-" + counter++);
+  fs.mkdirSync(directory);
+  const prompt = path.join(directory, "prompt.txt"), job = path.join(directory, "job");
+  fs.writeFileSync(prompt, "SYNTHETIC INPUT");
+  const launch = supervisor.start(job, ["--prompt-file", prompt], { spawnWorker: () => {
+    const { EventEmitter } = require("node:events");
+    const mock = new EventEmitter(); mock.unref = () => {}; return mock;
+  }});
+  assert.equal(launch.status, "unknown");
+  fs.writeFileSync(path.join(job, "started.json"), '{"wrapper_pid":123}');
+  const run = spawnSync(process.execPath, [path.resolve(__dirname, "../scripts/zcode-run.js"), "worker", job], { encoding:"utf8" });
+  assert.equal(run.status,1);
+  assert.equal(fs.existsSync(path.join(job,"worker.lock")),false);
+});
 test("durable jobs snapshot inputs and a second worker cannot replay the request", async () => {
   const directory = path.join(root, `supervised-inputs-${counter++}`);
   fs.mkdirSync(directory);

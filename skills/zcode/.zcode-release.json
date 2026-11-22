@@ -11,12 +11,12 @@
     "scripts/review.js": "f4a6a4522bb5d07d48db6b3ac83bda25a08dff5bbd0cde7b05618d54520c9c83",
     "scripts/zcode-batch.js": "53d282be36d9dacee80f7d6314d2f5f5a221f2512e1d15c6b66693793fe4948c",
     "scripts/zcode-chat.js": "96d5d86209cdfba1a4f29bab5f4761444a2fe1b6ff7c70a56ec6b0f42bd10dd1",
-    "scripts/zcode-run.js": "f3bac46194fc54b8823aac5072bd1e2e3d195e731d5948d9956982f630a16022",
+    "scripts/zcode-run.js": "5fd8c5d93e1f950391430517e09118ee4099187e290df138cfb1977e114427ea",
     "tests/fixtures/fake-zcode.cjs": "a2e5648cdcf8d1fe270c012625553528366d01d89ff4e430424991b8d9a480df",
     "tests/repin-release.test.js": "04c9eb364d50693732a619f3cda7c2dde58bb1f28103a40bb406301acb7e8320",
     "tests/review-golden.test.js": "e36ffebea6e6456f6b3c6362eab3429e43fa4beac9cf91e61e9155792ce6d04e",
     "tests/zcode-batch.test.js": "c4662f2239ecc1b52ec44b5a4d73c0aebc7b95e06aae4984647d3b508f2ab1d4",
-    "tests/zcode-chat.test.js": "3adca2b313d2c32b40070a6f75df8064b200093c86d3a3b5d0947ba6b044b884"
+    "tests/zcode-chat.test.js": "c7438ed7027ad11c2cb4298938e1aeed5b216f181c1c979ed232832297006a45"
   },
   "review_sha256": "f4a6a4522bb5d07d48db6b3ac83bda25a08dff5bbd0cde7b05618d54520c9c83"
 }
