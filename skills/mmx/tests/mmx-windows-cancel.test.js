@@ -45,7 +45,10 @@ test("Windows cancel waits for a cooperative batch acknowledgement before force"
   timeout: 20000,
 }, async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "mmx-windows-coop-"));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  // On Windows, the exited supervisor can briefly retain its job cwd/handle.
+  // Let the OS release it; persistent EBUSY still fails this test teardown.
+  t.after(() => fs.rmSync(root, { recursive: true, force: true,
+    maxRetries: 15, retryDelay: 100 }));
   const prompt = path.join(root, "prompt.txt");
   const fake = path.join(root, "cooperative-batch.cjs");
   const ready = path.join(root, "ready.txt");
