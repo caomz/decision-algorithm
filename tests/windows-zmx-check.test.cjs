@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const vm = require("node:vm");
 const { parseArgs, hostClass, targetMatch, supportStatus, hardlinkProbe, versionToken, probeVersion, testFiles, readHost, run } = require("../scripts/windows-zmx-check.cjs");
 
 test("host classification distinguishes Windows 10, Windows 11 and Server on the same NT major", () => {
@@ -230,4 +231,94 @@ test("OperatingSystemSKU is captured and allowlisted without leaking unrelated h
     assert.equal(safe.operating_system_sku, 164);
     assert.equal(safe.unrelated, undefined);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+test("real preflight run() is fail-closed before CLI lookup and launch; fake compliant host probes both", t => {
+  const source = fs.readFileSync(path.join(__dirname, "../scripts/windows-zmx-check.cjs"), "utf8").replace(/^#![^\n]*\n/, "");
+  const checkoutDir = path.join(__dirname, "../scripts");
+  function inspect(name, winOverrides = {}, envOverrides = {}, doctorOk = true) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "zmx-preflight-" + name + "-"));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const host = path.join(root, "host.json");
+    const report = path.join(root, "report.json");
+    const baseWindows = {
+      caption: "Microsoft Windows 11 Home", version: "10.0.26200", build_number: "26200",
+      product_type: 1, os_architecture: "64-bit", native_machine: 0x8664,
+      process_machine: 0, processor_architecture_code: 9, operating_system_sku: 101,
+    };
+    fs.writeFileSync(host, JSON.stringify({ windows: { ...baseWindows, ...winOverrides },
+      powershell: { version: "5.1.26100.1" }, jobs_volume: { file_system: "NTFS", drive_type: 3 } }));
+    const lookup = { zcode: 0, mmx: 0 }, requests = { zcode: 0, mmx: 0 };
+    const fakeSpawnSync = (command, args) => {
+      if (command === "git") {
+        const operation = args.slice(2).join(" ");
+        return { status: 0, stdout: operation === "rev-parse HEAD" ? "a".repeat(40) + "\n"
+          : operation === "branch --show-current" ? "windows-zmx-validation-20261121\n" : "" };
+      }
+      if (command === "fake-zcode") {
+        assert.deepEqual(Array.from(args), ["--version"]);
+        requests.zcode++;
+        return { status: 0, stdout: "zcode-runtime 0.17.1\n" };
+      }
+      if (command === "fake-mmx") {
+        assert.deepEqual(Array.from(args), ["--version"]);
+        requests.mmx++;
+        return { status: 0, stdout: "mmx-cli v1.0.29\n" };
+      }
+      throw new Error("unexpected executable in fake preflight: " + command);
+    };
+    const fakeRequire = id => {
+      if (id === "node:child_process") return { spawnSync: fakeSpawnSync };
+      if (id.endsWith("/skills/zcode-mmx-review/scripts/review-run.js"))
+        return { doctorOffline: () => ({ status: doctorOk ? "ok" : "blocked",
+          checks: doctorOk ? [] : [{ name: "protocol", ok: false }] }) };
+      if (id.endsWith("/skills/zcode/scripts/zcode-chat.js"))
+        return { findCli: () => { lookup.zcode++; return "fake-zcode"; },
+          resolveLaunch: () => ({ command: "fake-zcode", prefix: [], entry: "fake-zcode" }) };
+      if (id.endsWith("/skills/mmx/scripts/mmx-chat.js"))
+        return { findMmx: () => { lookup.mmx++; return { cmd: "fake-mmx", argsPrefix: [] }; },
+          cliLaunch: () => ({ argsPrefix: [], env: {}, fetch_timeout_guard: "fake-only" }) };
+      if (id.startsWith("node:")) return require(id);
+      throw new Error("unexpected import in fake preflight: " + id);
+    };
+    const moduleUnderTest = { exports: {} };
+    const fakeProcess = { platform: "win32", arch: "x64",
+      versions: { node: "22.23.5" }, execPath: "fake-node", env: envOverrides };
+    vm.runInNewContext(source, {
+      require: fakeRequire, module: moduleUnderTest, __dirname: checkoutDir,
+      process: fakeProcess, Buffer, console, setTimeout, clearTimeout,
+    }, { filename: "windows-zmx-check.fake-preflight.cjs" });
+    const actual = moduleUnderTest.exports.run({
+      offline: false, targetOs: "windows11", hostFile: host,
+      report, jobsRoot: path.join(root, "jobs"),
+    }, root);
+    assert.deepEqual(JSON.parse(fs.readFileSync(report, "utf8")).cli, JSON.parse(JSON.stringify(actual.report.cli)),
+      "persisted report must match in-memory CLI evidence");
+    return { actual, lookup, requests };
+  }
+  const valid = inspect("compliant");
+  assert.equal(valid.actual.exitCode, 0);
+  assert.equal(valid.actual.report.readiness, "preflight_ready");
+  assert.deepEqual(valid.lookup, { zcode: 1, mmx: 1 });
+  assert.deepEqual(valid.requests, { zcode: 1, mmx: 1 });
+  const disallowed = [
+    ["expired", { build_number: "22631", version: "10.0.22631" }, {}, true, "windows11_support"],
+    ["arm64", { native_machine: 0xAA64, processor_architecture_code: 12, os_architecture: "ARM64" },
+      {}, true, "windows11_target"],
+    ["native-unknown", { native_machine: null }, {}, true, "windows11_target"],
+    ["sku-mismatch", { caption: "Windows 11 Pro Education", operating_system_sku: 121 },
+      {}, true, "windows11_support"],
+    ["global-slot", {}, { MMX_GLOBAL_SLOT: "1" }, true, "windows_global_slot_disabled"],
+    ["inherited-cancel", {}, { ZCODE_CANCEL_REQUEST_FILE: "fake-cancel-path" }, true, "no_inherited_cancellation"],
+    ["doctor-blocked", {}, {}, false, "release_and_protocol"],
+  ];
+  for (const [name, metadata, env, doctorOk, expectedFailure] of disallowed) {
+    const result = inspect(name, metadata, env, doctorOk);
+    assert.equal(result.actual.exitCode, 2, name);
+    assert.equal(result.actual.report.readiness, "blocked", name);
+    assert.ok(result.actual.report.failed.includes(expectedFailure), name + " failed reason");
+    assert.deepEqual(result.lookup, { zcode: 0, mmx: 0 }, name + " must not even look up a CLI");
+    assert.deepEqual(result.requests, { zcode: 0, mmx: 0 }, name + " must not launch a CLI");
+    assert.equal(result.actual.report.cli.zcode.status, "not_probed", name);
+    assert.equal(result.actual.report.cli.mmx.status, "not_probed", name);
+  }
 });

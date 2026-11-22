@@ -216,7 +216,8 @@ function run(options, root = ROOT) {
   fs.mkdirSync(path.dirname(options.report), { recursive: true });
   const reportFd = fs.openSync(options.report, "wx", 0o600);
   const report = { format: 1, checked_at: new Date().toISOString(), mode: options.offline ? "offline" : "preflight",
-    readiness: "blocked", provider_auth: "not_run", real_provider_requests: 0, real_provider_acceptance: "not_run", checks: [] };
+    readiness: "blocked", provider_auth: "not_run", real_provider_requests: 0, real_provider_acceptance: "not_run",
+    checks: [], tests: [], cli: { zcode: { status: "not_probed" }, mmx: { status: "not_probed" } } };
   try {
     const metadata = readHost(options.hostFile);
     report.environment = { ...metadata, host_class: hostClass(metadata), platform: process.platform,
@@ -261,10 +262,14 @@ function run(options, root = ROOT) {
     if (process.platform === "win32") add("local_ntfs", metadata.jobs_volume?.file_system === "NTFS" && metadata.jobs_volume?.drive_type === 3, "Durable jobs require a verified local NTFS volume; do not use a network or synchronized job folder.");
     const doctor = require(path.join(root, "skills/zcode-mmx-review/scripts/review-run.js")).doctorOffline(path.join(root, "skills"));
     add("release_and_protocol", doctor.status === "ok", doctor.checks.filter(check => !check.ok).map(check => check.name));
-    report.cli = { zcode: { status: "not_probed" }, mmx: { status: "not_probed" } };
     if (!options.offline) {
       add("windows_global_slot_disabled", process.env.MMX_GLOBAL_SLOT !== "1", "Windows global slot is intentionally unavailable.");
       add("no_inherited_cancellation", !process.env.MMX_CANCEL_REQUEST_FILE && !process.env.ZCODE_CANCEL_REQUEST_FILE, "Run the preflight from a normal terminal, outside a managed job.");
+      // These checks (host, OS support, storage, release/protocol, inherited
+      // cancellation and global-slot policy) MUST gate CLI lookup and launch,
+      // not just the final readiness string. Both CLIs remain not_probed on
+      // every precondition failure. No user/env flag can bypass this gate.
+      if (report.checks.every(check => check.ok)) {
       try {
         const zcode = require(path.join(root, "skills/zcode/scripts/zcode-chat.js"));
         const launcher = zcode.findCli();
@@ -282,6 +287,7 @@ function run(options, root = ROOT) {
         report.cli.mmx = { ...result, command: found.cmd, entry: found.argsPrefix[0] || found.cmd, fetch_timeout_guard: launch.fetch_timeout_guard };
         add("mmx_cli", result.ok, "Version is observed locally; auth, model and remote endpoint are not verified.");
       } catch { report.cli.mmx = { status: "unavailable_or_unsupported" }; add("mmx_cli", false, "CLI missing or custom shell launcher unsupported by this preflight."); }
+      }
     }
     report.tests = options.offline ? runOfflineTests(root, options.report) : [];
     for (const suite of report.tests) add(`tests:${suite.name}`, suite.ok, suite.summary);

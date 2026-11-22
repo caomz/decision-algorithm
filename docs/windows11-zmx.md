@@ -28,7 +28,7 @@
 
 各阶段检查退出码；一旦失败停止，不跳过清理 hook、不重跑到绿色。读取报告中的真实 target_match 和 support_status，不把 helper 初始的 real_provider_requests=0 冒充全机网络监测。
 
-只有全部离线测试成功、目标身份匹配、support_status=supported 后，才允许进行只读 CLI --version 预检：
+只有全部离线测试成功、目标身份匹配、support_status=supported 后，才允许进行只读 CLI --version 预检。若平台、支持周期、架构、Node、PowerShell、NTFS、发布清单、全局槽或继承取消任一前置条件失败，预检会先写入 blocked 报告，并让 ZCode/MMX 均保持 not_probed；不会执行 CLI 查找、启动或版本探测：
 
     powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows-zmx-check.ps1 -TargetOs windows11
 
