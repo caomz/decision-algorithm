@@ -66,15 +66,48 @@ function targetMatch(metadata, targetOs, platform = process.platform, nodeArch =
 }
 // Windows client identity and security support are independent. Unknown OS
 // edition is never silently treated as supported.
+// Win32_OperatingSystem.OperatingSystemSKU is independent of the caption.
+// These are explicit GetProductInfo values, not a fuzzy word search. LTSC and
+// unknown SKUs are intentionally outside this annual-servicing contract.
+const SKU_EDITION = new Map([
+  ...[98, 99, 100, 101].map(id => [id, "home"]),
+  ...[48, 49].map(id => [id, "pro"]),
+  [164, "pro_education"],
+  ...[161, 162].map(id => [id, "pro_workstations"]),
+  ...[121, 122].map(id => [id, "education"]),
+  ...[4, 27].map(id => [id, "enterprise"]),
+  [188, "iot_enterprise"],
+  ...[125, 126, 191].map(id => [id, "ltsc"]),
+]);
+function captionEdition(value) {
+  if (typeof value !== "string" || !value.trim()) return null;
+  let caption = value.toLowerCase();
+  if (/l t s c|ltsc|ltsb|long.term.servicing/i.test(caption)) return "ltsc";
+  const matches = new Set();
+  const consume = (edition, re) => {
+    if (re.test(caption)) { matches.add(edition); caption = caption.replace(re, " "); }
+  };
+  consume("pro_education", /\bpro\s+education\b|专业教育/g);
+  consume("pro_workstations", /\bpro\s+for\s+workstations\b|工作站专业/g);
+  consume("iot_enterprise", /\biot\s+enterprise\b|物联网企业/g);
+  consume("enterprise", /\benterprise\b|企业/g);
+  consume("education", /\beducation\b|教育/g);
+  consume("home", /\bhome\b|家庭/g);
+  consume("pro", /\bpro(?:fessional)?\b|专业/g);
+  return matches.size === 1 ? [...matches][0] : matches.size > 1 ? "conflicting" : null;
+}
 function supportStatus(metadata, targetOs, at = new Date()) {
   if (targetOs !== "windows11") return "not_assessed";
   const win = metadata?.windows, periods = WINDOWS11_EOL[Number(win?.build_number)];
   if (!periods) return "unknown_build";
-  const caption = String(win?.caption || "");
-  const enterprise = /enterprise|education|iot|企业|教育/i.test(caption);
-  const homePro = /home|pro(?:fessional)?|家庭|专业/i.test(caption);
-  if (!enterprise && !homePro) return "unknown_edition";
-  const end = enterprise ? periods[1] : periods[0];
+  const sku = win?.operating_system_sku;
+  const skuEdition = Number.isInteger(sku) ? SKU_EDITION.get(sku) : null;
+  const declaredEdition = captionEdition(win?.caption);
+  if (skuEdition === "ltsc" || declaredEdition === "ltsc") return "unsupported_channel";
+  if (!skuEdition || !declaredEdition) return "unknown_edition";
+  if (skuEdition !== declaredEdition) return "conflicting_edition";
+  const longServicing = ["enterprise", "education", "iot_enterprise"].includes(skuEdition);
+  const end = longServicing ? periods[1] : periods[0];
   return at.getTime() <= Date.parse(end + "T23:59:59Z") ? "supported" : "out_of_support";
 }
 
@@ -166,7 +199,7 @@ function readHost(file) {
   // Only accept the fields this script actually reports. Never forward arbitrary metadata.
   const safe = {};
   for (const [section, keys] of Object.entries({ powershell: ["version", "edition"], windows: ["caption", "version", "build_number", "product_type", "os_architecture",
-      "native_machine", "process_machine", "processor_architecture_code"], jobs_volume: ["file_system", "drive_type"] })) {
+      "native_machine", "process_machine", "processor_architecture_code", "operating_system_sku"], jobs_volume: ["file_system", "drive_type"] })) {
     if (!host[section]) continue;
     safe[section] = {};
     for (const key of keys) {

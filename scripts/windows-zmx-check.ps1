@@ -80,6 +80,7 @@ public static class ZmxNativeMachineProbe {
             native_machine = $nativeMachine
             process_machine = $processMachine
             processor_architecture_code = $processorArchitectureCode
+            operating_system_sku = [int]$osInfo.OperatingSystemSKU
         }
     } catch { }
     $volume = $null

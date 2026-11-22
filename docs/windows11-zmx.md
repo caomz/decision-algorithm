@@ -6,8 +6,9 @@
 
 - PowerShell 入口新参数：-TargetOs windows11；Node helper 新参数：--target-os windows11；默认仍为 windows10。
 - 新报告独立记录 requested_target、observed_host、target_match、support_status、acceptance_scope。离线 offline_pass 只说明离线诊断成功，不等于平台兼容或安全支持通过。
+- 支持周期以 Win32_OperatingSystem.OperatingSystemSKU 与版别 Caption 独立核对：Pro Education 属于 Home/Pro 短周期，不属于 Education 长周期；缺失、SKU/Caption 冲突或 LTSC 渠道均保守阻断，LTSC 不套用年度渠道日期。
 - GitHub Windows Server CI 的 target_match 必须为 false；未知未来 Windows build、非客户端、未知版本或非 x64 均不自动放行。
-- 截至 2026-11-22，Windows 11 Home 23H2（Build 22631）与 Home/Pro 24H2（Build 26100）已结束更新支持。对可识别但已过支持期的版本，平台身份可以正确匹配，但 CLI preflight 保持 blocked。升级系统需要用户单独授权。
+- 截至 2026-11-22，Windows 11 Home 23H2（Build 22631）与 Home/Pro/Pro Education/Pro for Workstations 24H2（Build 26100）已结束更新支持。对可识别但已过支持期的版本，平台身份可以正确匹配，但 CLI preflight 保持 blocked。升级系统需要用户单独授权。
 - 保留 Node 22 x64、PowerShell 5.1、ZCode runtime 0.17.1、MMX 安全启动器、本地 NTFS、发布清单、默认禁止收费重试、永久 worker.lock 与真实审核后端关闭等保护。
 
 ## 新目录、固定 SHA、严格串行执行

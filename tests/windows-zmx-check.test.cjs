@@ -112,16 +112,16 @@ test("Windows 11 explicit target accepts only reviewed x64 client builds", () =>
 });
 test("Windows 11 lifecycle remains separate from Windows 11 host identity", () => {
   const at = new Date("2026-11-22T00:00:00Z");
-  const win = (build, caption) => ({ windows: { build_number: String(build), caption } });
-  assert.equal(supportStatus(win(22631, "Windows 11 Home"), "windows11", at), "out_of_support");
-  assert.equal(supportStatus(win(26100, "Windows 11 Pro"), "windows11", at), "out_of_support");
-  assert.equal(supportStatus(win(26100, "Windows 11 Enterprise"), "windows11", at), "supported");
-  assert.equal(supportStatus(win(26200, "Windows 11 家庭中文版"), "windows11", at), "supported");
-  assert.equal(supportStatus(win(26300, "Windows 11 Home"), "windows11", at), "supported");
-  assert.equal(supportStatus(win(28000, "Windows 11 Home"), "windows11", at), "supported");
-  assert.equal(supportStatus(win(30000, "Windows 11 Home"), "windows11", at), "unknown_build");
-  assert.equal(supportStatus(win(26200, "Windows 11"), "windows11", at), "unknown_edition");
-  assert.equal(supportStatus(win(22631, "Windows 11 Home"), "windows10", at), "not_assessed");
+  const win = (build, caption, sku) => ({ windows: { build_number: String(build), caption, operating_system_sku: sku } });
+  assert.equal(supportStatus(win(22631, "Windows 11 Home", 101), "windows11", at), "out_of_support");
+  assert.equal(supportStatus(win(26100, "Windows 11 Pro", 48), "windows11", at), "out_of_support");
+  assert.equal(supportStatus(win(26100, "Windows 11 Enterprise", 4), "windows11", at), "supported");
+  assert.equal(supportStatus(win(26200, "Windows 11 家庭中文版", 101), "windows11", at), "supported");
+  assert.equal(supportStatus(win(26300, "Windows 11 Home", 101), "windows11", at), "supported");
+  assert.equal(supportStatus(win(28000, "Windows 11 Home", 101), "windows11", at), "supported");
+  assert.equal(supportStatus(win(30000, "Windows 11 Home", 101), "windows11", at), "unknown_build");
+  assert.equal(supportStatus(win(26200, "Windows 11", 101), "windows11", at), "unknown_edition");
+  assert.equal(supportStatus(win(22631, "Windows 11 Home", 101), "windows10", at), "not_assessed");
 });
 test("OS target defaults Windows 10, supports explicit Win11 and rejects invalid flags", () => {
   const base = ["--jobs-root", "jobs 中文", "--report", "check.json"];
@@ -174,5 +174,60 @@ test("PowerShell captures separate native host and WMI architecture with failure
     assert.equal(safe.process_machine, 0x8664);
     assert.equal(safe.processor_architecture_code, 12);
     assert.equal(safe.extra_secret, undefined);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+test("Windows 11 Pro Education follows consumer EOL, not Education or Enterprise", () => {
+  const asOf = new Date("2026-11-22T00:00:00Z");
+  const status = (caption, sku, build = 26100, at = asOf) =>
+    supportStatus({ windows: { caption, operating_system_sku: sku, build_number: String(build) } }, "windows11", at);
+  assert.equal(status("Windows 11 Pro Education", 164), "out_of_support");
+  assert.equal(status("Windows 11 专业教育版", 164), "out_of_support");
+  assert.equal(status("Windows 11 Pro for Workstations", 161), "out_of_support");
+  assert.equal(status("Windows 11 Education", 121), "supported");
+  assert.equal(status("Windows 11 Enterprise", 4), "supported");
+  assert.equal(status("Windows 11 Pro", 48), "out_of_support");
+  assert.equal(status("Windows 11 Home", 101), "out_of_support");
+  assert.equal(status("Windows 11 Home", 101, 26300), "supported", "GA 26H2 must be retained");
+  assert.equal(status("Windows 11 Home", 101, 28000), "supported", "GA 26H1 must be retained");
+});
+
+test("Windows lifecycle SKU and caption conflicts, unknowns and LTSC fail closed", () => {
+  const asOf = new Date("2026-11-22T00:00:00Z");
+  const status = (caption, sku, build = 26100) =>
+    supportStatus({ windows: { caption, operating_system_sku: sku, build_number: String(build) } }, "windows11", asOf);
+  assert.equal(status("Windows 11 Pro Education", 121), "conflicting_edition");
+  assert.equal(status("Windows 11 Education", 164), "conflicting_edition");
+  assert.equal(status("Windows 11 Enterprise", 101), "conflicting_edition");
+  assert.equal(status("Windows 11 Home", 48), "conflicting_edition");
+  assert.equal(status("Windows 11 Pro Education Enterprise", 164), "conflicting_edition");
+  assert.equal(status("Windows 11 Pro Education", null), "unknown_edition");
+  assert.equal(status("Windows 11 Pro Education", "164"), "unknown_edition");
+  assert.equal(status("Windows 11 Pro Education", 777777), "unknown_edition");
+  assert.equal(status("Windows 11", 164), "unknown_edition");
+  assert.equal(status("Windows 11 Enterprise LTSC", 125), "unsupported_channel");
+  assert.equal(status("Windows 11 Enterprise LTSC", 4), "unsupported_channel");
+  assert.equal(status("Windows 11 Enterprise", 125), "unsupported_channel");
+  assert.equal(status("Windows 11 Pro Education", 164, 99999), "unknown_build");
+});
+
+test("Windows 11 lifecycle boundary dates distinguish exact expiration and SKU class", () => {
+  const metadata = (caption, sku) => ({ windows: { build_number: "26100", caption, operating_system_sku: sku } });
+  assert.equal(supportStatus(metadata("Windows 11 Pro Education", 164), "windows11", new Date("2026-10-13T23:59:59Z")), "supported");
+  assert.equal(supportStatus(metadata("Windows 11 Pro Education", 164), "windows11", new Date("2026-10-14T00:00:00Z")), "out_of_support");
+  assert.equal(supportStatus(metadata("Windows 11 Education", 121), "windows11", new Date("2027-10-12T23:59:59Z")), "supported");
+  assert.equal(supportStatus(metadata("Windows 11 Education", 121), "windows11", new Date("2027-10-13T00:00:00Z")), "out_of_support");
+});
+
+test("OperatingSystemSKU is captured and allowlisted without leaking unrelated host keys", () => {
+  const ps = fs.readFileSync(path.join(__dirname, "../scripts/windows-zmx-check.ps1"), "utf8");
+  assert.match(ps, /OperatingSystemSKU/);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "zmx-sku-"));
+  try {
+    const host = path.join(root, "host.json");
+    fs.writeFileSync(host, JSON.stringify({ windows: { caption: "Windows 11 Pro Education",
+      operating_system_sku: 164, unrelated: "secret" } }));
+    const safe = readHost(host).windows;
+    assert.equal(safe.operating_system_sku, 164);
+    assert.equal(safe.unrelated, undefined);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
