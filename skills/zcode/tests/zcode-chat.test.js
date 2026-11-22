@@ -727,6 +727,36 @@ test("without execution.json the liveness probe decides running, interrupted or 
   // The default probe sees that pid 99999999 does not exist.
   assert.equal(supervisor.status(job).status, "interrupted");
 });
+test("launch publication failure cancels before any wrapper invocation", { timeout: 15000 }, async () => {
+  const directory=path.join(root,"launch-failure-"+counter++);
+  fs.mkdirSync(directory);
+  const prompt=path.join(directory,"prompt.txt"),job=path.join(directory,"job");
+  const injector=path.join(directory,"inject.cjs"),fake=path.join(directory,"fake-wrapper.cjs");
+  const called=path.join(directory,"wrapper-started"),script=path.resolve(__dirname,"../scripts/zcode-run.js");
+  fs.writeFileSync(prompt,"SYNTHETIC ONLY");
+  fs.writeFileSync(fake,"require('node:fs').writeFileSync("+JSON.stringify(called)+",'SENT');process.exit(40);");
+  fs.writeFileSync(injector,`
+    const fs=require("node:fs"),path=require("node:path"),old=fs.linkSync;
+    fs.linkSync=function(from,to){
+      if(path.basename(to)==="launch.json")throw Object.assign(new Error("synthetic EACCES"),{code:"EACCES"});
+      return old.apply(this,arguments);
+    };
+  `);
+  const code=`
+    const s=require(${JSON.stringify(script)});
+    try{s.start(${JSON.stringify(job)},["--prompt-file",${JSON.stringify(prompt)}],
+      {wrapperPath:${JSON.stringify(fake)}});process.exit(40);}
+    catch{process.exit(0);}
+  `;
+  const result=spawnSync(process.execPath,["--require",injector,"-e",code],{encoding:"utf8",timeout:12000});
+  assert.equal(result.status,0,result.stderr);
+  await waitUntil(()=>fs.existsSync(path.join(job,"cancel.request")),5000);
+  assert.equal(fs.existsSync(path.join(job,"launch.json")),false);
+  assert.equal(fs.existsSync(called),false,"wrapper must never be invoked");
+  assert.equal(supervisor.status(job).status,"unknown");
+  assert.equal(supervisor.verify(job).integrity,"incomplete");
+});
+
 test("new job records exact raw bytes, pinned role paths, and immutable request digest", () => {
   const directory=path.join(root,"raw-job-"+counter++);
   fs.mkdirSync(directory);

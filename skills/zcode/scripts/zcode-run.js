@@ -201,7 +201,7 @@ function start(jobPath, wrapperArgs, { wrapperPath = WRAPPER, spawnWorker = spaw
   save(requestFile, { format: 2, created_at: new Date().toISOString(), wrapper: wrapperFile,
     wrapper_digest: rawFingerprint(wrapperFile), args, inputs: pinnedInputs });
   save(path.join(job, "request-digest.json"), rawFingerprint(requestFile));
-  readPinnedRequest(job);
+  const pinned = readPinnedRequest(job);
   const log = fs.openSync(path.join(job, "supervisor.log"), "wx", 0o600);
   let child;
   const recordLaunchError = error => {
@@ -215,12 +215,40 @@ function start(jobPath, wrapperArgs, { wrapperPath = WRAPPER, spawnWorker = spaw
   } catch (error) {
     recordLaunchError(error);
   } finally { fs.closeSync(log); }
-  save(path.join(job, "launch.json"), { supervisor_pid: child?.pid ?? null, started_at: new Date().toISOString(), job_dir: job });
-  child?.unref();
+  try {
+    save(path.join(job, "launch.json"), { format: 2, request_sha256: pinned.requestSha256,
+      supervisor_pid: child?.pid ?? null, started_at: new Date().toISOString(), job_dir: job });
+  } catch (error) {
+    // Even when the detached worker is alive, an unpublished launch is NOT
+    // permission to send a provider request. Leave the existing claim intact.
+    try { writeCancel(job); } catch {}
+    throw error;
+  } finally { child?.unref(); }
   return { status: child?.pid ? "started" : "unknown", job_dir: job, supervisor_pid: child?.pid ?? null };
 }
 
+async function waitForLaunchRecord(job, requestSha256) {
+  const target = path.join(job, "launch.json");
+  const deadline = Date.now() + 12000;
+  while (Date.now() < deadline) {
+    if (fs.existsSync(target)) {
+      const launch = read(target);
+      if (launch.format !== 2 || launch.request_sha256 !== requestSha256 ||
+          launch.job_dir !== job || typeof launch.started_at !== "string") {
+        throw new Error("launch role or request digest mismatch");
+      }
+      return;
+    }
+    if (fs.existsSync(path.join(job, "cancel.request"))) throw new Error("launch not published; cancelled before provider");
+    await new Promise(resolve => setTimeout(resolve, 30));
+  }
+  throw new Error("launch record not published; do not start model");
+}
+
 async function worker(job) {
+  // Historical, unpinned jobs are strictly read-only even when someone
+  // invokes the worker entry point manually.
+  if (!fs.existsSync(path.join(job, "request-digest.json"))) throw new Error("legacy job cannot execute");
   // A removed worker.lock is never permission to resubmit a job that
   // already has any execution evidence. Check before claiming the new lock.
   for (const name of ["attempt.json", "started.json", "stdout.json", "stderr.log", "execution.json", "completion.json", "run"]) {
@@ -228,6 +256,7 @@ async function worker(job) {
   }
   fs.mkdirSync(path.join(job, "worker.lock"), { mode: 0o700 });
   const { request, options, requestSha256 } = readPinnedRequest(job);
+  await waitForLaunchRecord(job, requestSha256);
   // Durable attempt evidence precedes any possible wrapper/provider launch.
   // Even a lost worker.lock cannot turn this attempt into permission to replay.
   save(path.join(job, "attempt.json"), { format: 2, request_sha256: requestSha256,
