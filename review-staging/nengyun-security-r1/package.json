@@ -1,0 +1,11 @@
+{
+  "name": "nengyun-security-fix-kit",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Standalone offline security primitives for local integration; NOT a complete patched production skill",
+  "scripts": {
+    "test": "node --test",
+    "probe:windows": "node scripts/ny_windows_probe.js"
+  },
+  "engines": { "node": ">=20" }
+}
