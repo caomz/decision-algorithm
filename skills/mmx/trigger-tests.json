@@ -1,0 +1,12 @@
+[
+  {"query": "用 MMX 问一下：这段结论靠谱吗？", "should_trigger": true},
+  {"query": "帮我用 MiniMax 复核一下这个方案的失败模式和维护成本", "should_trigger": true},
+  {"query": "把这个文件发给 MiniMax 审一遍，按 P1/P2 标记问题", "should_trigger": true},
+  {"query": "拿一个和主模型不同家族的通道，对下面三条断言做独立交叉验证，输出同意/反驳和 P1/P2 标记", "should_trigger": true},
+  {"query": "我不确定这个架构方案有没有漏掉的边界条件，让 MiniMax 从对抗角度挑战一遍", "should_trigger": true},
+  {"query": "用 ZCode 复核这段结论", "should_trigger": false},
+  {"query": "用即梦帮我生成一张小红书封面图", "should_trigger": false},
+  {"query": "查一下 getCallVolumeByApiCode 本月调用量", "should_trigger": false},
+  {"query": "登录能云平台处理接口治理工单", "should_trigger": false},
+  {"query": "在这批主机上批量更新 4A 口令并验证 SSH 登录", "should_trigger": false}
+]

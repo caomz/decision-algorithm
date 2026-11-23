@@ -27,6 +27,10 @@ const REQUIRED_FILES = [
   "scripts/review.js",
   "references/review-v1.schema.json",
 ];
+// Test fixtures are evaluation assets, not release artifacts: evaluator
+// snapshots deliberately omit them, and a manifest referencing them would
+// fail checkInstall() on every such snapshot. They must never be pinned.
+const TEST_FIXTURES = ["test-prompts.json", "trigger-tests.json"];
 // The wrapper rejects any path segment outside this set, so a file that does
 // not match can never be listed in a manifest it would accept.
 const SAFE_SEGMENT = /^[A-Za-z0-9_.-]+$/;
@@ -94,6 +98,12 @@ function main() {
   walk(root, "", files, skipped);
   // The marker cannot list itself: its own bytes change when it is written.
   files.splice(files.indexOf(RELEASE_MARKER), 1);
+  // Fixtures likewise cannot be listed: a snapshot without them would fail
+  // install verification through no fault of its own.
+  for (const fixture of TEST_FIXTURES) {
+    const index = files.indexOf(fixture);
+    if (index !== -1) files.splice(index, 1);
+  }
 
   const digests = {};
   for (const relative of files.sort()) {

@@ -62,6 +62,8 @@ cd <skill-dir> && OUTPUT_DIR="<笔记目录>" node scripts/sync.js
 
 ## 当前工作区的定时同步接入
 
+> 以下为 macOS / OpenClaw 环境专属接入说明，Windows 与 WorkBuddy 环境下不适用，可跳过。
+
 本机 OpenClaw 的个人笔记链路使用 `/Volumes/WorkSSD/Dev/openclaw_mz/scripts/get_biji_personal_cron.py`：
 
 - `sync`：调用本技能的 API 和格式化模块，增量归档笔记，保存逐字稿待补抓状态与运行清单。

@@ -7,7 +7,7 @@
     "agents/openai.yaml": "e9b77f7b33258700dfae902efc91a4058f7fc76f6d5f675641eb201fb9fd2052",
     "references/review-v1.schema.json": "f269a080098ecb4ab34ed8fd5aa4e76206ba662a6358be7fbd5451e9392bc546",
     "references/verification.md": "9656289b42976335db8e5a6e366011355bcc17f48501800c0ce095fc630741ef",
-    "scripts/repin-release.js": "03b66e58ddc551735a9a8293c20b7f38ce4c239acaf8405b28f260b5f47e7c35",
+    "scripts/repin-release.js": "928bb86b6eefc77088ab590f850d6701191e9265f1f244bb9fb5ba86e846b1e3",
     "scripts/review.js": "f4a6a4522bb5d07d48db6b3ac83bda25a08dff5bbd0cde7b05618d54520c9c83",
     "scripts/zcode-batch.js": "671169b40b7e56730d6379bcf3e84d1c1918260e9630677d86f2827000609553",
     "scripts/zcode-chat.js": "d1a30df85b622a8d35342b645e112917e7a16a6355e2b913039024b10d779c08",

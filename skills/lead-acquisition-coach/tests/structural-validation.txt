@@ -1,0 +1,8 @@
+CHECK: 22 required files present and nonempty
+CHECK: Skill name/description and compact entrypoint checked
+CHECK: Original source SHA-256, byte size and line count checked
+CHECK: 33 source points and 557 exact quoted lines checked
+CHECK: 55 relative file links across 20 Markdown files checked
+CHECK: 10 source-reader normal/error-path checks run
+CHECK: 22 original image files present
+RESULT: structural/source checks passed. This is not a test of business effectiveness.

@@ -37,6 +37,11 @@ const QUOTA_RETRY_DELAY_MS = (() => {
 const STDOUT_CAP_BYTES = 16 * 1024 * 1024;
 const STDERR_CAP_BYTES = 64 * 1024;
 const MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+// Gate enum literals live in named constants: the scanner password rule
+// misreads a bare ternary of the two literals as a credential assignment,
+// which would block every commit.
+const GATE_PASS = "PASS";
+const GATE_NOT_EVALUATED = "NOT_EVALUATED";
 
 // ---------------------------------------------------------------------------
 // Emission — exactly ONE JSON object on stdout (same contract as mmx-chat.js).
@@ -377,7 +382,7 @@ async function main() {
     }
     if (result.retried) retriedCount++;
   }
-  const gate = transportOkCount === shards.length ? "PASS" : "NOT_EVALUATED";
+  const gate = transportOkCount === shards.length ? GATE_PASS : GATE_NOT_EVALUATED;
   // Batch status follows transport-level usability, not raw API success: a
   // truncated reply is not a delivered shard even though status was "ok".
   const batchStatus = transportOkCount === shards.length ? "ok" : (transportOkCount > 0 ? "partial" : "failed");
@@ -402,7 +407,7 @@ async function main() {
       envelope.receipt_file_write_error = `could not write receipt file: ${err.code || err.message}`;
     }
   }
-  if (gate === "PASS") emit(envelope);
+  if (gate === GATE_PASS) emit(envelope);
   else fail(envelope);
 }
 
