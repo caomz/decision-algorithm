@@ -24,3 +24,20 @@
 - 增加 `npm run probe:windows`，在非 Windows 环境返回 `NOT_EVALUATED`。
 - 离线 Node 测试：21/21 PASS（Linux 容器）。
 - GitHub 项目：当前未找到原技能仓库；远端分支、原有入口接入、Windows 本机验证均 NOT_EVALUATED。
+
+## R2 Windows runtime isolation (2026-11-23)
+
+| Boundary | Implemented in this *standalone* branch | Evidence boundary |
+| --- | --- | --- |
+| O1 per-run isolation | `ny_windows_runtime.js`: runId, runDir, original cwd, env clone | Independent synthetic child test only; original Skills not wired |
+| O2 resource coordination | `ny_runtime_resources.js`: stable key, multi-resource order, real OS-process locks | Linux Node tests; Windows ACL, junction and network filesystem untested |
+| O3 cancellation/failure | Bounded stop request, no retry; uncertain descendant ownership retains lock | Parent process only; no verified Windows process-tree ownership |
+| O4 owned state writes | `ny_owned_json.js`: expected version, staged JSON, no delete-before-rename, 3-way status | Synthetic temp files; Windows replace and crash durability untested |
+| O5 launch and protocol | `ny_runtime_cli.js`: Node, exe/ps1 classification, raw streams and exit code | cmd/bat intentionally blocked; existing CLI wrappers not integrated |
+| O6 output/distribution | Existing strict logger and allowlist unchanged; R2 runner adds no raw diagnostics | Old business stdout/stderr may contain secrets; full output audit not done |
+
+`CROSS_SKILL_RUNTIME_STABILITY` is **OFFLINE_COMPONENT_TESTED**, not production PASS.
+`ORIGINAL_SKILL_INTEGRATION=NOT_EVALUATED`.
+`WINDOWS_COMPATIBILITY=NOT_EVALUATED`.
+`MULTI_AGENT_REVIEW=NOT_PERFORMED`.
+`PRODUCTION_READINESS=NOT_APPROVED`.
