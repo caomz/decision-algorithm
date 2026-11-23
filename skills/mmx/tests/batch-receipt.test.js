@@ -34,3 +34,9 @@ test("helper never reflects synthetic sensitive stderr content", () => {
   const r=verifyWrapperReceipt(good(),7,null);
   assert.equal(JSON.stringify(r).includes(secret),false);
 });
+
+test("legitimate max_tokens truncation stays eligible for existing budget retry", () => {
+  const partial={...good(),complete:false,truncated:true,stop_reason:"max_tokens"};
+  assert.equal(verifyWrapperReceipt(partial,0,null),partial);
+  assert.equal(verifyWrapperReceipt(partial,7,null).status,"child_error");
+});

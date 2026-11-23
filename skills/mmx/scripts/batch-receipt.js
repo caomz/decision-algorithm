@@ -13,9 +13,10 @@ function verifyWrapperReceipt(receipt, actualExitCode, actualSignal) {
       error: "wrapper terminated by signal" };
   }
   if (receipt.status !== "ok") return receipt;
+  const validCompletion = (receipt.complete === true && receipt.truncated === false) ||
+    (receipt.complete === false && receipt.truncated === true);
   if (actualExitCode !== 0 || receipt.exit_code !== 0 ||
-      receipt.complete !== true || receipt.truncated !== false ||
-      typeof receipt.text !== "string" || !receipt.text.trim()) {
+      !validCompletion || typeof receipt.text !== "string" || !receipt.text.trim()) {
     return { status: "child_error", exit_code: actualExitCode,
       error: "successful wrapper receipt contradicted process outcome or required fields" };
   }
