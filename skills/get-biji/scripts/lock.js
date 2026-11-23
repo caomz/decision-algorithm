@@ -9,8 +9,8 @@
  *   进程退出自动释放。锁文件本身保留在磁盘上。
  * - `portable-exclusive`（Windows / Linux）：Node 没有暴露 flock/O_EXLOCK，
  *   改用「原子独占创建 holder 文件 + 持有者 PID」实现互斥。
- *   holder 文件在临界区结束或进程退出后被回收；持有者进程崩溃留下的
- *   残留由 PID 存活检测判定为陈旧并接管。
+ *   正常释放只清除自己的 holder；进程崩溃的 holder 不自动接管。
+ *   基于锁龄或 PID 读后删除的自动接管无法保证两个写者互斥。
  *
  * 两种后端都保证：
  * - 互斥：同一时刻只有一个进程持有同一个锁；
@@ -21,12 +21,13 @@
 
 const fs = require('fs');
 const path = require('path');
+const { randomUUID } = require('crypto');
 
 const LOCK_NAMES = new Set(['sync.lock', 'auth.lock']);
 
-/** holder 文件读不出 PID 且超过这个时长，判定为陈旧。 */
+/** 保留历史导出；portable 后端不按此时间接管。 */
 const UNREADABLE_STALE_MS = 30 * 60 * 1000;
-/** 持有者 PID 仍存活但持锁超过这个时长，判定为陈旧（兜底 PID 复用）。 */
+/** 保留历史导出；活锁永远不得按锁龄夺取。 */
 const LIVE_TOO_OLD_MS = 2 * 60 * 60 * 1000;
 
 const SUPPORTED_PLATFORMS = new Set(['darwin', 'win32', 'linux']);
@@ -77,82 +78,46 @@ function acquirePosixExlock(lockPath) {
 }
 
 /**
- * 判断 holder 是否陈旧，可以被接管。
- * 返回 false 表示「还锁着」或「状态读不准，不敢动」。
- */
-function reclaimableHolder(holderPath) {
-    let before;
-    let content;
-    try {
-        before = fs.statSync(holderPath);
-        content = fs.readFileSync(holderPath, 'utf8');
-    } catch {
-        // holder 已经没了：让调用方重试一次抢占。
-        return true;
-    }
-
-    let pid = null;
-    try {
-        const parsed = JSON.parse(content);
-        if (Number.isInteger(parsed.pid)) pid = parsed.pid;
-    } catch {
-        pid = null;
-    }
-
-    const age = Date.now() - before.mtimeMs;
-    if (pid === null) {
-        // 读不出持有者：只在放够久之后才敢接管，避免抢掉刚写的 holder。
-        return age > UNREADABLE_STALE_MS;
-    }
-    if (!pidAlive(pid)) return true;
-    // PID 还活着：只有持锁时长异常长才接管（兜底 PID 复用）。
-    return age > LIVE_TOO_OLD_MS;
-}
-
-/**
  * 可移植独占锁：原子创建 holder 文件即拿到锁。
  */
 function acquirePortableExclusive(lockPath) {
     const holderPath = `${lockPath}.holder`;
-
-    // canonical 锁文件永久保留，只创建不删除、不替换。
     fs.closeSync(fs.openSync(lockPath, 'a', 0o600));
-
-    for (let round = 0; round < 3; round++) {
-        let fd;
-        try {
-            fd = fs.openSync(holderPath, 'wx', 0o600);
-        } catch (cause) {
-            if (cause.code !== 'EEXIST') throw cause;
-            if (!reclaimableHolder(holderPath)) throw new Error('SYNC_LOCK_BUSY');
-            // 陈旧 holder：先确认它没被别人换掉，再删掉重试。
-            try {
-                fs.unlinkSync(holderPath);
-            } catch {
-                throw new Error('SYNC_LOCK_BUSY');
-            }
-            continue;
-        }
-
-        try {
-            fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, acquiredAt: Date.now() }), 'utf8');
-            fs.fsyncSync(fd);
-        } catch (cause) {
-            fs.closeSync(fd);
-            try { fs.unlinkSync(holderPath); } catch { /* ignore */ }
-            throw cause;
-        }
-
-        let released = false;
-        return () => {
-            if (released) return;
-            released = true;
-            fs.closeSync(fd);
-            try { fs.unlinkSync(holderPath); } catch { /* 已被接管，忽略 */ }
-        };
+    let fd;
+    try {
+        fd = fs.openSync(holderPath, 'wx', 0o600);
+    } catch (cause) {
+        if (cause.code === 'EEXIST') throw new Error('SYNC_LOCK_BUSY');
+        throw cause;
     }
 
-    throw new Error('SYNC_LOCK_BUSY');
+    const owner = randomUUID();
+    try {
+        fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, acquiredAt: Date.now(), owner }), 'utf8');
+        fs.fsyncSync(fd);
+    } catch (cause) {
+        try { fs.closeSync(fd); } catch {}
+        try { fs.unlinkSync(holderPath); } catch {}
+        throw cause;
+    }
+
+    let released = false;
+    return () => {
+        if (released) return;
+        released = true;
+        let held;
+        try { held = fs.fstatSync(fd); } catch {}
+        try { fs.closeSync(fd); } catch {}
+        // A mismatch means the previous holder is no longer ours: do not unlink.
+        // This does not claim to be an atomic CAS against a malicious local swap.
+        try {
+            const current = fs.statSync(holderPath);
+            if (!held || current.dev !== held.dev || current.ino !== held.ino) return;
+            const record = JSON.parse(fs.readFileSync(holderPath, 'utf8'));
+            if (record.owner !== owner || record.pid !== process.pid) return;
+            fs.unlinkSync(holderPath);
+        } catch { /* Unknown identity: leave the holder for manual review. */ }
+    };
 }
 
 /**
