@@ -123,7 +123,8 @@ test("a re-pin pins the whole release and reports every path it leaves out", () 
   const expected = [...Object.keys(SIBLINGS),
     ...skillFiles().map(relative => `mmx/${relative}`)
       .filter(relative => !TEST_FIXTURES.includes(path.basename(relative)))].sort();
-  assert.ok(!TEST_FIXTURES.some(name => name in release.files), "fixtures must not be pinned");
+  assert.ok(!Object.keys(release.files).some(relative => TEST_FIXTURES.includes(path.basename(relative))),
+    "fixtures must not be pinned");
   assert.deepEqual(Object.keys(release.files), expected);
   for (const name of expected) {
     assert.equal(release.files[name], sha256(fs.readFileSync(path.join(managed, ...name.split("/")))), name);
