@@ -34,12 +34,17 @@ function observation(directory, policy, modelRequests) {
   }
   const blocked = exists("blocked");
   let blockedReason = null;
+  let blockedDetail;
   if (blocked) {
-    const raw = fs.readFileSync(path.join(directory, "blocked"), "utf8").trim();
+    const [raw, detail] = fs.readFileSync(path.join(directory, "blocked"), "utf8").trim().split("/");
     blockedReason = ["request_budget_exceeded", "output_limit_unverified", "output_limit_exceeded",
       "request_transport_unverified"].includes(raw) ? raw : "request_budget_unverified";
+    if (blockedReason === "output_limit_unverified" && ["method", "endpoint", "body_type", "body_read", "body_size",
+      "body_timeout", "body_aborted", "body_unavailable", "body_utf8", "json", "field_absent", "fields_ambiguous",
+      "field_invalid", "http_stream"].includes(detail)) blockedDetail = detail;
   }
   return { limit: 1, attempts: Number(dispatched), blocked, blocked_reason: blockedReason,
+    ...(blockedDetail ? { blocked_detail: blockedDetail } : {}),
     verified: exists("armed"), level: policy.level, entry_sha256: policy.entry_sha256, model_request_events: modelRequests,
     max_output_tokens: policy.max_output_tokens, wire_max_output_tokens: wireLimit,
     output_limit_verified: Number.isSafeInteger(wireLimit) && wireLimit <= policy.max_output_tokens };

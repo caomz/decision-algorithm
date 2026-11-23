@@ -44,7 +44,7 @@ node <MMX_SKILL_DIR>/scripts/mmx-batch.js --prompt-file <f1> [--prompt-file <f2>
 ```
 
 - 每片仍是一次完整 `mmx-chat.js` 调用（单发语义不变，wrapper 契约原样继承）。批级回执含每片完整回执、`batch` 统计与**传输层 gate**：全片 `status=ok` 且 `complete` 且未截断 → `PASS`；任一片截断/超时/失败 → `NOT_EVALUATED`（与 zcode-mmx-review 的 COMPLETED 语义对齐）。findings 级 P1/P2 判定仍由宿主完成，批级 gate 不冒充内容判定。
-- 默认每片一次。明确使用 `--allow-paid-retry` 时，仅对已终止的 `quota_error` 在原输出上限内追加一次尝试；预算不足时还需显式提供 `--retry-max-tokens N` 才可提高上限，N 须在该 profile 和 524288 的双重上限内。两次回执分别保留，超时、取消、断线和结果未知均不重发。
+- 默认每片一次。明确使用 `--allow-paid-retry` 时，终态限流或原因未细分的 `quota_error` 可在原输出上限内追加一次尝试。已确认的时段额度耗尽、余额/权益阻断会停止。提高输出预算还需显式提供 `--retry-max-tokens N`，N 须在该 profile 和 524288 的双重上限内。两次回执分别保留，超时、取消、断线和结果未知均不重发。
 - `--concurrency` 默认 2（上限 8）；分片目录按 `pN.txt` 命名可被 `--prompts-dir` 按自然序（p2 在 p10 前）整批读取。外层工具超时按 `ceil(片数/并发) × (2×wrap-timeout + 30s) + 60s` 预留——**必须含 2 倍 wrap-timeout**：单片最坏情况 = 首次调用 + 一次自愈重发（+30s 限流退避），漏算重试会把重试中的批次误判为超时。
 - **NEVER 裸调 `mmx text chat` 送评审**：CLI 自身默认 `--max-tokens 4096`，服务端思考轻易超限（2026-11-18 实证：6 断言评审即截断）；一切评审调用必须经 `mmx-chat.js` / `mmx-batch.js`。
 

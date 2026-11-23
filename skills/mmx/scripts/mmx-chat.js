@@ -557,14 +557,32 @@ function readInput(file, label) {
   }
 }
 
-function apiFailure(exitCode, code) {
+// Only copy fixed categories into receipts. The native CLI's message/hint may
+// include upstream text or identifiers; its exit code 4 combines several causes.
+function quotaCause(code, nativeMessage) {
+  if ([1008, 2053].includes(code)) return "insufficient_balance_or_credit";
+  if (code === 402) return "billing_or_quota_unspecified";
+  if (code === 2056) return "plan_window_exhausted";
+  if ([1002, 1045].includes(code)) return "rate_limit";
+  if ([1028, 1030].includes(code)) return "quota_exhausted";
+  if ([2061, 2068].includes(code)) return "model_not_in_plan";
+  if (typeof nativeMessage !== "string") return "unspecified";
+  if (nativeMessage.startsWith("Quota or balance exhausted.")) return "billing_or_quota_unspecified";
+  if (nativeMessage.startsWith("Quota exhausted.")) return "quota_exhausted";
+  if (nativeMessage.startsWith("This model is not available on your current ")) return "model_not_in_plan";
+  return "unspecified";
+}
+
+function apiFailure(exitCode, code, nativeMessage) {
   const result = { status: "api_error", exit_code: exitCode, code };
-  if (exitCode === 3 || [3, 401, 403].includes(code)) {
+  if (exitCode === 3 || (exitCode !== 4 && [3, 401, 403].includes(code))) {
     return { ...result, status: "auth_error",
       error: "MMX authentication failed. Run `mmx auth login` locally, then retry." };
   }
-  if (exitCode === 4 || [429, 1028, 1030].includes(code)) {
-    return { ...result, status: "quota_error", error: "MMX quota or rate limit blocked the request." };
+  const quota = quotaCause(code, nativeMessage);
+  if (exitCode === 4 || code === 429 || quota !== "unspecified") {
+    return { ...result, status: "quota_error", quota_cause: quota,
+      error: "MMX quota or rate limit blocked the request." };
   }
   if (exitCode === 5 || [408, 504].includes(code)) {
     return { ...result, status: "timeout", error: "The MMX CLI reported a request timeout.",
@@ -581,8 +599,15 @@ function schemaFailure(exitCode, note) {
 }
 
 function classifyReply(out, err, exitCode) {
-  if ([3, 4, 5, 130].includes(exitCode)) return apiFailure(exitCode, null);
+  if ([3, 5, 130].includes(exitCode)) return apiFailure(exitCode, null);
   const body = parseUpstream(out || err);
+  if (exitCode === 4) {
+    // CLIError.toJSON() uses its own process exit code as error.code.
+    // Preserve the prior public code=null in that case, even with a subtype.
+    const number = body?.base_resp?.status_code ?? body?.error?.code;
+    const code = Number.isSafeInteger(number) && number !== 4 ? number : null;
+    return apiFailure(exitCode, code, body?.error?.message);
+  }
   if (body === undefined) {
     return { status: out ? "invalid_json" : "empty_stdout", exit_code: exitCode };
   }

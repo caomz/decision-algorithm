@@ -337,7 +337,8 @@ async function runShardWithRetries(shard, fixedArgs, effectiveBudget, retryBudge
   const first = await runWrapperOnce(shard.file, fixedArgs);
   let retryReason = null;
   let backoffSeconds = 0;
-  if (first.receipt.status === "quota_error") retryReason = "quota_error";
+  if (first.receipt.status === "quota_error" &&
+      [undefined, "unspecified", "rate_limit"].includes(first.receipt.quota_cause)) retryReason = "quota_error";
   else if ((first.receipt.status === "thinking_budget_exhausted" ||
             (first.receipt.status === "ok" && first.receipt.truncated === true)) &&
            effectiveBudget !== null && retryBudget > effectiveBudget) {

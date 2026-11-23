@@ -141,6 +141,20 @@ function display(text) {
   return String(text ?? "").replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "");
 }
 
+// Use only fixed, parsed categories from a receipt whose archive just replayed.
+function quotaExplanation(runDir) {
+  const receipt = JSON.parse(fs.readFileSync(path.join(runDir, "mmx-stdout.json"), "utf8"));
+  switch (receipt.quota_cause) {
+    case "plan_window_exhausted": return "MMX 套餐时段额度已耗尽。请在账户显示的重置时间后核对剩余额度。";
+    case "rate_limit": return "MMX 触发请求频率或 Token 速率限制。";
+    case "insufficient_balance_or_credit": return "MMX 报告余额或可用信用额度不足，请核对账户。";
+    case "model_not_in_plan": return "当前 MMX 套餐不包含所请求的模型。";
+    case "quota_exhausted": return "MMX 报告额度耗尽，需在账户中确认额度类型和重置时间。";
+    case "billing_or_quota_unspecified": return "MMX 将可用额度和余额合并报告，请先核对套餐窗口及账户余额。";
+    default: return "MMX 未提供可区分额度不足与限流的原因。可用同一账号的官方只读额度查询核对。";
+  }
+}
+
 function report(out) {
   const verdict = verifyReviewArchive(out);
   const lines = [`归档目录 ${display(out)}`, `归档核验 ${verdict.integrity} / ${verdict.replay ?? "未复算"}`];
@@ -159,6 +173,10 @@ function report(out) {
         lines.push("", `${label}　${display(side.model || "模型未知")}　${side.gate || "NOT_EVALUATED"}`);
         if (side.reason) lines.push(display(side.reason));
         if (!side.eligible && side.diagnostic?.receipt_status) lines.push("供应方回执 " + display(side.diagnostic.receipt_status));
+        if (key === "mmx" && side.diagnostic?.receipt_status === "quota_error") {
+          const runDir = result.sharded ? path.join(out, "parts", round.id, "run") : out;
+          lines.push(quotaExplanation(runDir));
+        }
         if (side.review) {
           lines.push(display(side.review.summary));
           for (const finding of side.review.findings) {

@@ -48,6 +48,7 @@ if (prompt.includes("OK_SIGNAL")) { process.stdout.write(JSON.stringify(ok()) + 
 if (prompt.includes("FAIL_SHARD")) { emit({ status: "api_error", error: "upstream failed", exit_code: 1 }); return; }
 if (prompt.includes("TRUNCATE") && invocations === 0) { emit(ok({ stop_reason: "max_tokens", complete: false, truncated: true })); process.exitCode = 1; return; }
 if (prompt.includes("THINK") && invocations === 0) { emit({ status: "thinking_budget_exhausted", exit_code: 1, note: "budget consumed by thinking" }); process.exitCode = 1; return; }
+if (prompt.includes("WINDOW_EXHAUSTED")) { emit({ status: "quota_error", quota_cause: "plan_window_exhausted", exit_code: 4 }); process.exitCode = 1; return; }
 if (prompt.includes("QUOTA") && invocations === 0) { emit({ status: "quota_error", error: "rate limited", exit_code: 1 }); process.exitCode = 1; return; }
 if (prompt.includes("SLOW_CANCEL")) { setTimeout(() => emit(ok()), 750); return; }
 emit(ok());
@@ -431,6 +432,15 @@ test("child garbage stdout: child_error without a batch crash", () => {
   const receipt = receiptOf(run);
   assert.equal(run.status, 1);
   assert.equal(receipt.shards[0].status, "child_error");
+});
+
+test("known exhausted billing window never spends an opt-in retry", () => {
+  const file = shardFile("blocked-window.txt", "WINDOW_EXHAUSTED");
+  const result = receiptOf(runBatch(["--prompt-file", file, "--allow-paid-retry"]));
+  assert.equal(result.shards[0].status, "quota_error");
+  assert.equal(result.shards[0].quota_cause, "plan_window_exhausted");
+  assert.equal(result.shards[0].retried, false);
+  assert.equal(result.gate, "NOT_EVALUATED");
 });
 
 test("a complete receipt cannot turn an unsuccessful wrapper exit into PASS", () => {

@@ -38,6 +38,12 @@ Mac 上自定义 MMX shell 启动器如果无法证明实际执行链，程序�
 
 复验只读取本地归档。审核退出码 0 表示 `PASS`，1 表示存在有效 `FAIL`，2 表示无法完成评价、输入错误或运行错误。`round_status=COMPLETED` 表示两方都完成有效复核。多片运行的输入和覆盖计划在 `run/coverage/`，各片原始回执在 `run/parts/`。整轮结论要求每片双侧输入绑定、回执复验和验收条件覆盖；需要跨片证据才能判断的条件应报告证据缺口。遇到中断时先查看该轮归档，未知状态不会触发重发。
 
+## 核对请求失败原因
+
+若 ZCode 返回 `output_limit_unverified`，原始回执中的 `native_request_budget.blocked_detail` 会在能够定位时说明原因，例如正文缺少上限字段（`field_absent`）或正文无法读取（`body_read`）。`attempts` 记录实际放行的请求数。旧回执可能只有总的拒绝原因。
+
+若 MMX 返回 `quota_error`，先看摘要中的原因。若为套餐时段耗尽，用同一账户和原生 npm CLI 的 `quota show` 确认何时重置；若为请求或 Token 速率限制，按供应商的限流窗口处理。仅有退出码 4 或通用 HTTP 429 时无法判定是否需要充值。确认恢复前，请保留本轮结果。
+
 ## 本机依赖
 
 启动器使用本机 Node.js 及已登录的 `zcode`、`mmx` 原生 CLI。项目自带这两侧的审核 wrapper、投票规则与复验工具。运行 `./Mac交叉验证.command --help` 可查看用法，运行以下命令可检查项目文件及发布清单。

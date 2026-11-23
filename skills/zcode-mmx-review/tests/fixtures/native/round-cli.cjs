@@ -30,6 +30,11 @@ exports.main = async function (side, directory) {
     }
   }
   if (side === "zcode") return require("./fake-zcode-cli.cjs").run();
+  if (scenario.mmx === "window-exhausted") {
+    process.stdout.write(JSON.stringify({ base_resp: { status_code: 2056 } }));
+    process.exitCode = 4;
+    return;
+  }
 
   const findings = scenario.mmx === "fail" ? [{
     kind: "confirmed_defect", severity: "P1", title: "Fixture defect",

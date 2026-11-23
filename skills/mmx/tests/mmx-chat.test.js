@@ -73,6 +73,7 @@ switch (process.env.FAKE_MODE || "success") {
   case "network": process.stderr.write(JSON.stringify({ error: { code: 6, message: "Network request failed." } })); process.exitCode = 6; break;
   case "api_stderr": process.stderr.write(JSON.stringify({ error: { code: 500, message: "Bearer synthetic-authorization-value and private prompt", hint: "sk-synthetic-secret" } })); process.exitCode = 1; break;
   case "quota": process.exitCode = 4; break;
+  case "quota_detail": process.stderr.write(JSON.stringify(JSON.parse(process.env.QUOTA_DETAIL))); process.exitCode = 4; break;
   case "quota_api": process.stderr.write(JSON.stringify({ error: { code: 429 } })); process.exitCode = 1; break;
   case "base_error": process.stdout.write(JSON.stringify({ base_resp: { status_code: 1001, status_msg: "bad request" } })); process.exitCode = 1; break;
   case "schema": process.stdout.write(JSON.stringify({ content: [], model: "MiniMax-M3" })); break;
@@ -563,8 +564,31 @@ test("unexpected stop reasons, tool blocks and malformed code types fail closed"
 
 test("CLI and API quota failures have a fixed error classification", () => {
   writeInputs("quota");
-  assert.equal(jsonResult(runChat([], { FAKE_MODE: "quota" })).status, "quota_error");
-  assert.equal(jsonResult(runChat([], { FAKE_MODE: "quota_api" })).status, "quota_error");
+  for (const mode of ["quota", "quota_api"]) {
+    const receipt = jsonResult(runChat([], { FAKE_MODE: mode }));
+    assert.equal(receipt.status, "quota_error");
+    assert.equal(receipt.quota_cause, "unspecified");
+  }
+});
+
+test("quota diagnostics preserve allowlisted distinctions without copying native messages", () => {
+  writeInputs("quota class");
+  const privateSuffix = "PRIVATE_DIAGNOSTIC_SENTINEL";
+  for (const [code, message, cause] of [
+    [4, "Quota or balance exhausted.", "billing_or_quota_unspecified"],
+    [4, "Rate limit or quota exceeded.", "unspecified"],
+    [4, "This model is not available on your current Token Plan.", "model_not_in_plan"],
+    [2056, "usage limit exceeded", "plan_window_exhausted"],
+    [1002, "rate limit", "rate_limit"],
+    [1008, "insufficient balance", "insufficient_balance_or_credit"],
+  ]) {
+    const body = { error: { code, message: message + " " + privateSuffix } };
+    const receipt = jsonResult(runChat([], { FAKE_MODE: "quota_detail", QUOTA_DETAIL: JSON.stringify(body) }));
+    assert.equal(receipt.status, "quota_error");
+    assert.equal(receipt.quota_cause, cause);
+    assert.equal(receipt.code, code === 4 ? null : code);
+    assert.ok(!JSON.stringify(receipt).includes(privateSuffix));
+  }
 });
 
 

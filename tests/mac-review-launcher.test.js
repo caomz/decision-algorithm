@@ -130,6 +130,14 @@ describe("Mac command from a separate working directory", { skip: process.platfo
     for (const side of ["zcode", "mmx"]) assert.equal(box.count(side), 0);
   });
 
+  test("an exhausted MMX allowance is reported without a paid retry", () => {
+    const box = sandbox({ mmx: "window-exhausted" });
+    const run = box.run("--results-dir", path.join(box.cwd, "quota result"), box.input("材料.txt", "Example text"));
+    assert.equal(run.status, 2, run.stdout + run.stderr);
+    assert.match(run.stdout, /MMX 套餐时段额度已耗尽/);
+    for (const side of ["zcode", "mmx"]) assert.equal(box.count(side), 1);
+  });
+
   test("preflight reports the full multi-shard budget without writing a job or dispatching", () => {
     const box = sandbox();
     const name = box.input("长 材料.md", "ALPHA ".repeat(4400));
