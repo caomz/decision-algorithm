@@ -6,7 +6,7 @@
  * - 互斥：同一时刻只有一个持有者；
  * - 忙时快速失败：错误码必须是 SYNC_LOCK_BUSY（定时任务依赖它）；
  * - 释放干净：释放后 holder 消失，canonical 锁文件保留；
- * - 崩溃可恢复：持有者进程死了，残留 holder 能被接管；
+ * - 崩溃默认拒绝自动接管：残留 holder 需要外部核验；
  * - 活着的持有者不会被抢。
  */
 const {test} = require('node:test');
@@ -59,16 +59,13 @@ test('a live holder is never reclaimed', () => {
     release();
 });
 
-test('a holder whose owner died is reclaimed', () => {
+test('a dead holder is still busy without safe atomic takeover', () => {
     const dir = tmp('lock-stale-');
     const holder = path.join(dir, 'sync.lock.holder');
     fs.writeFileSync(holder, JSON.stringify({pid: 999999, acquiredAt: Date.now()}), 'utf8');
-    assert.equal(pidAlive(999999), false, 'test pid must not be alive');
-
-    const release = acquireLock({stateDir: dir, lockName: 'sync.lock', platform: 'win32'});
-    const payload = JSON.parse(fs.readFileSync(holder, 'utf8'));
-    assert.equal(payload.pid, process.pid, 'the new owner wrote its own pid');
-    release();
+    assert.equal(pidAlive(999999), false);
+    assert.throws(() => acquireLock({stateDir: dir, lockName: 'sync.lock', platform: 'win32'}),
+        /SYNC_LOCK_BUSY/);
 });
 
 test('an unreadable but fresh holder is left alone', () => {
@@ -102,8 +99,7 @@ test('the darwin backend is exclusive and releases on demand', {skip: process.pl
     again();
 });
 
-test('a crashed holder releases the lock for the next process', () => {
-    // The child grabs the portable lock and dies without releasing it.
+test('crashed holder does not get stolen automatically', () => {
     const dir = tmp('lock-crash-');
     const child = spawnSync(process.execPath, ['-e', `
         const {acquireLock} = require(${JSON.stringify(LOCK_PATH)});
@@ -111,8 +107,29 @@ test('a crashed holder releases the lock for the next process', () => {
         process.exit(0);
     `], {encoding: 'utf8'});
     assert.equal(child.status, 0);
+    assert.throws(() => acquireLock({stateDir: dir, lockName: 'sync.lock', platform: 'win32'}),
+        /SYNC_LOCK_BUSY/);
+});
 
-    // The dead holder's pid is gone, so the next acquire must succeed.
+test('two-hour boundary and clock jump do not steal a live lock', () => {
+    const dir = tmp('lock-old-live-');
     const release = acquireLock({stateDir: dir, lockName: 'sync.lock', platform: 'win32'});
+    const holder = path.join(dir, 'sync.lock.holder');
+    const old = new Date(Date.now() - 30 * 60 * 60 * 1000);
+    fs.utimesSync(holder, old, old);
+    assert.throws(() => acquireLock({stateDir: dir, lockName: 'sync.lock', platform: 'win32'}),
+        /SYNC_LOCK_BUSY/);
     release();
+    assert.ok(!fs.existsSync(holder));
+});
+
+test('release does not remove an owner-mismatched holder', () => {
+    const dir = tmp('lock-owner-');
+    const release = acquireLock({stateDir: dir, lockName: 'auth.lock', platform: 'win32'});
+    const holder = path.join(dir, 'auth.lock.holder');
+    const swapped = JSON.parse(fs.readFileSync(holder, 'utf8'));
+    swapped.owner = 'synthetic-another-owner';
+    fs.writeFileSync(holder, JSON.stringify(swapped));
+    release();
+    assert.ok(fs.existsSync(holder));
 });

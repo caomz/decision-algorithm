@@ -41,9 +41,12 @@ const ok = extra => Object.assign({
 const emit = receipt => { process.stdout.write(JSON.stringify(receipt) + "\\n"); process.exitCode = 0; };
 if (prompt.includes("CHILD_ERR")) { process.stdout.write("definitely not json"); process.exitCode = 1; return; }
 if (prompt.includes("FAIL_SHARD")) { emit({ status: "api_error", error: "upstream failed", exit_code: 1 }); return; }
-if (prompt.includes("TRUNCATE") && invocations === 0) { emit(ok({ stop_reason: "max_tokens", complete: false, truncated: true })); process.exitCode = 1; return; }
+if (prompt.includes("TRUNCATE") && invocations === 0) { emit(ok({ stop_reason: "max_tokens", complete: false, truncated: true })); process.exitCode = 0; return; }
 if (prompt.includes("THINK") && invocations === 0) { emit({ status: "thinking_budget_exhausted", exit_code: 1, note: "budget consumed by thinking" }); process.exitCode = 1; return; }
 if (prompt.includes("QUOTA") && invocations === 0) { emit({ status: "quota_error", error: "rate limited", exit_code: 1 }); process.exitCode = 1; return; }
+if (prompt.includes("FAKE_NONZERO_OK")) { emit(ok()); process.exitCode = 7; return; }
+if (prompt.includes("FAKE_MISSING_TRUNCATED")) { const r = ok(); delete r.truncated; emit(r); return; }
+if (prompt.includes("FAKE_STDERR_SECRET")) { process.stderr.write("SYNTHETIC_SECRET_CANARY_918273"); process.exitCode = 1; return; }
 emit(ok());
 `);
 
@@ -223,4 +226,25 @@ test("module exports: parseArgs / collectShardFiles contracts", () => {
   const labels = collectShardFiles({ promptFiles: [path.join(root, "p2.txt"), path.join(root, "p1.txt")], promptsDir: null });
   assert.deepEqual(labels.map(s => s.label), ["p2", "p1"]);
   assert.equal(readProfileBudget(path.join(skillRoot, "profiles", "local.json")), 524288);
+});
+
+test("actual nonzero wrapper exit cannot create PASS from successful JSON", () => {
+  const run = runBatch(["--prompt-file", shardFile("nonzero.txt", "FAKE_NONZERO_OK")]);
+  const receipt = receiptOf(run);
+  assert.equal(run.status, 1);
+  assert.equal(receipt.gate, "NOT_EVALUATED");
+  assert.equal(receipt.shards[0].status, "child_error");
+});
+test("missing truncated=false cannot create PASS", () => {
+  const run = runBatch(["--prompt-file", shardFile("missing-truncated.txt", "FAKE_MISSING_TRUNCATED")]);
+  const receipt = receiptOf(run);
+  assert.equal(run.status, 1);
+  assert.equal(receipt.gate, "NOT_EVALUATED");
+});
+test("raw stderr never appears in public batch receipt", () => {
+  const marker = "SYNTHETIC_SECRET_CANARY_918273";
+  const run = runBatch(["--prompt-file", shardFile("stderr.txt", "FAKE_STDERR_SECRET")]);
+  assert.equal(run.status, 1);
+  assert.equal(run.stdout.includes(marker), false);
+  assert.equal(JSON.stringify(receiptOf(run)).includes(marker), false);
 });
