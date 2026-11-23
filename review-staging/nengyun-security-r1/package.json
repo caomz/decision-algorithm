@@ -5,7 +5,10 @@
   "description": "Standalone offline security primitives for local integration; NOT a complete patched production skill",
   "scripts": {
     "test": "node --test",
-    "probe:windows": "node scripts/ny_windows_probe.js"
+    "probe:windows": "node scripts/ny_windows_probe.js",
+    "test:runtime": "node --test tests/ny_runtime_resources.test.js tests/ny_runtime_runner.test.js tests/ny_runtime_crossprocess.test.js tests/ny_owned_json.test.js tests/ny_runtime_cli.test.js"
   },
-  "engines": { "node": ">=20" }
+  "engines": {
+    "node": ">=20"
+  }
 }
