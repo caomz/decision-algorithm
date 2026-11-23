@@ -1,7 +1,7 @@
 "use strict";
 
 // Offline contract tests for zcode-batch.js. No real model calls: every shard
-// is served by a fake wrapper (ZCODE_BATCH_WRAPPER) that scripts replies from
+// is served by a test-injected fake wrapper that scripts replies from
 // the prompt content and a per-shard invocation counter.
 
 const { test, after } = require("node:test");
@@ -19,6 +19,19 @@ const argsDump = path.join(root, "args-dump.txt");
 const concLog = path.join(root, "conc.log");
 const stateDir = path.join(root, "state");
 const idsFile = path.join(root, "ids.json");
+
+const transportStub = path.join(root, "offline-batch.cjs");
+fs.writeFileSync(transportStub, `
+const cp = require("node:child_process");
+const spawn = cp.spawn;
+cp.spawn = (exe, args, options) => {
+  if (args[0] !== ${JSON.stringify(path.join(skillRoot, "scripts/zcode-chat.js"))}) throw new Error("unexpected offline wrapper");
+  return spawn(exe, [${JSON.stringify(fakeWrapper)}, ...args.slice(1)], options);
+};
+const schedule = global.setTimeout;
+global.setTimeout = (fn, ms, ...args) => schedule(fn, ms === 30000 ? 10 : ms, ...args);
+`);
+const batchCommand = ["--require", transportStub, batch];
 
 fs.mkdirSync(stateDir);
 after(() => { try { fs.rmSync(root, { recursive: true, force: true }); } catch {} });
@@ -83,10 +96,10 @@ emit(ok());
 `);
 
 function runBatch(args, extraEnv = {}) {
-  return spawnSync(process.execPath, [batch, ...args], {
+  return spawnSync(process.execPath, [...batchCommand, ...args], {
     encoding: "utf8", windowsHide: true, shell: false,
-    env: { ...process.env, ZCODE_BATCH_WRAPPER: fakeWrapper, FAKE_STATE_DIR: stateDir,
-           FAKE_ARGS_DUMP: argsDump, FAKE_CONC_LOG: concLog, ZCODE_BATCH_RETRY_MS: "10", ...extraEnv },
+    env: { ...process.env, FAKE_STATE_DIR: stateDir,
+           FAKE_ARGS_DUMP: argsDump, FAKE_CONC_LOG: concLog, ...extraEnv },
   });
 }
 
@@ -142,12 +155,12 @@ test("MAC-04 double SIGINT preserves ZCode completed shard and never starts queu
   const second = shardFile("cancel-z-second.txt", "CONC_PROBE in progress");
   const third = shardFile("cancel-z-third.txt", "queued only");
   const receipt = path.join(root, "cancel-z-final.json");
-  const child = spawn(process.execPath, [batch,
+  const child = spawn(process.execPath, [...batchCommand,
     "--prompt-file", first, "--prompt-file", second, "--prompt-file", third,
     "--concurrency", "1", "--receipt-file", receipt], {
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, ZCODE_BATCH_WRAPPER: fakeWrapper, FAKE_STATE_DIR: stateDir,
-      FAKE_ARGS_DUMP: argsDump, FAKE_CONC_LOG: concLog, ZCODE_BATCH_RETRY_MS: "10" },
+    env: { ...process.env, FAKE_STATE_DIR: stateDir,
+      FAKE_ARGS_DUMP: argsDump, FAKE_CONC_LOG: concLog },
   });
   let stdout = "";
   child.stdout.on("data", c=>{ stdout += c.toString(); });
@@ -203,10 +216,9 @@ test("MAC-03 post-request EIO fails closed without replay or lost initial call c
     "const e=new Error('synthetic post-request I/O failure'); e.code='EIO'; throw e; }",
     "return open.call(this,file,flags,mode); };"
   ].join("\n"));
-  const run=spawnSync(process.execPath,["--require",preload,batch,"--prompt-file",file,"--receipt-file",archive],{
+  const run=spawnSync(process.execPath,["--require",preload,...batchCommand,"--prompt-file",file,"--receipt-file",archive],{
     encoding:"utf8",shell:false,windowsHide:true,
-    env:{...process.env,ZCODE_BATCH_WRAPPER:fakeWrapper,FAKE_STATE_DIR:stateDir,
-      ZCODE_BATCH_RETRY_MS:"10"},
+    env:{...process.env,FAKE_STATE_DIR:stateDir},
   });
   const receipt=receiptOf(run);
   assert.equal(run.status,1);
@@ -219,8 +231,8 @@ test("MAC-03 post-request EIO fails closed without replay or lost initial call c
 test("MAC-03 two concurrent zcode batches cannot share the same receipt destination", { timeout: 15000 }, async () => {
   const file = shardFile("zcode-race-prompt.txt", "CONC_PROBE race");
   const destination = path.join(root, "zcode-race-output.json");
-  const argv = [batch, "--prompt-file", file, "--receipt-file", destination];
-  const env = { ...process.env, ZCODE_BATCH_WRAPPER:fakeWrapper, FAKE_STATE_DIR:stateDir, FAKE_CONC_LOG:concLog, ZCODE_BATCH_RETRY_MS:"10" };
+  const argv = [...batchCommand, "--prompt-file", file, "--receipt-file", destination];
+  const env = { ...process.env,  FAKE_STATE_DIR:stateDir, FAKE_CONC_LOG:concLog };
   const launch = () => {
     const child = spawn(process.execPath, argv, { env, stdio: ["ignore", "pipe", "pipe"], shell: false });
     let stdout = "";
@@ -314,13 +326,14 @@ test("pass-through: mode, evidence ids, cli path and timeout reach every shard",
   const before = fs.existsSync(argsDump) ? fs.readFileSync(argsDump, "utf8").split("\n").filter(Boolean).length : 0;
   const file = shardFile("pt.txt", "plain shard");
   const run = runBatch(["--prompt-file", file, "--mode", "review", "--evidence-ids-file", idsFile,
-    "--cli-path", "C:\\fake\\zcode.cmd", "--timeout-seconds", "123"]);
+    "--cli-path", "C:\\fake\\zcode.cmd", "--timeout-seconds", "123", "--max-output-tokens","1000"]);
   assert.equal(run.status, 0);
   const line = fs.readFileSync(argsDump, "utf8").split("\n").filter(Boolean).slice(before)[0];
   assert.ok(line.includes("--mode review"));
   assert.ok(line.includes("--evidence-ids-file"));
   assert.ok(line.includes("--cli-path"));
   assert.ok(line.includes("--timeout-seconds 123"));
+  assert.ok(line.includes("--max-output-tokens 1000"));
 });
 
 test("truth table: review votes require independently verified process, identity, cleanup and text", () => {
@@ -462,7 +475,7 @@ test("default never replays timed out or quota-rejected requests", () => {
     const receipt = receiptOf(runBatch(["--prompt-file", file]));
     assert.equal(receipt.shards[0].status, status, name);
     assert.equal(receipt.shards[0].retried, false, name);
-    assert.equal(receipt.shards[0].retry_skipped_reason, "paid_retry_not_authorized", name);
+    assert.equal(receipt.shards[0].retry_skipped_reason, status === "timeout" ? "remote_outcome_unknown" : "paid_retry_not_authorized", name);
     assert.equal(receipt.batch.paid_retry_authorized, false, name);
     assert.equal(fs.readFileSync(path.join(stateDir, name), "utf8"), "1", name);
   }
@@ -488,12 +501,14 @@ test("opt-in quota retry: first attempt retained", () => {
   assert.ok(shard.retry_backoff_seconds > 0);
 });
 
-test("opt-in timeout retry: one bounded replay", () => {
+test("timeout never replays, including when a paid quota retry was authorized", () => {
   const run = runBatch(["--prompt-file", shardFile("to.txt", "TIMEOUT_ONCE shard"), "--allow-paid-retry"]);
   const receipt = receiptOf(run);
-  assert.equal(run.status, 0);
-  assert.equal(receipt.shards[0].retry_reason, "timeout");
-  assert.equal(receipt.shards[0].status, "ok");
+  assert.equal(run.status, 1);
+  assert.equal(receipt.shards[0].retried, false);
+  assert.equal(receipt.shards[0].retry_skipped_reason, "remote_outcome_unknown");
+  assert.equal(receipt.shards[0].status, "timeout");
+  assert.equal(fs.readFileSync(path.join(stateDir, "to.txt"), "utf8"), "1");
 });
 
 test("opt-in persistent quota failure: exactly two attempts, no third", () => {

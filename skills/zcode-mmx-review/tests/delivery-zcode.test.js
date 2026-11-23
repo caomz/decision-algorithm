@@ -13,7 +13,6 @@ const { spawnSync } = require("node:child_process");
 const { createHash } = require("node:crypto");
 
 const runner = require("../scripts/review-run.js");
-const wrapperSource = fs.readFileSync(path.join(__dirname, "../../zcode/scripts/zcode-chat.js"), "utf8");
 const zcodeChat = path.resolve(__dirname, "../../zcode/scripts/zcode-chat.js");
 const fakeCli = path.join(__dirname, "fixtures/native/fake-zcode-cli.cjs");
 const ATTACHED_PROMPT = "The attached file contains the complete request material. Review it exactly as instructed below and answer from it only.";
@@ -45,7 +44,8 @@ function runDelivery(material, name) {
   fs.writeFileSync(materialPath, material);
   fs.writeFileSync(idsPath, '["F1"]\n');
   fs.writeFileSync(driver, `require(${JSON.stringify(zcodeChat)}).main(process.argv.slice(2), {setupMacKeychain:()=>null}).then(r=>{process.stdout.write(JSON.stringify(r)+"\\n");process.exitCode=["ok","usage","version"].includes(r.status)?0:1;});\n`);
-  const args = [driver, "--prompt-file", materialPath, "--mode", "review", "--evidence-ids-file", idsPath, "--cli-path", fakeCli, "--timeout-seconds", "60"];
+  const budgetFixture = require.resolve("../../zcode/tests/fixtures/install-budget-test.cjs");
+  const args = ["--require", budgetFixture, driver, "--prompt-file", materialPath, "--mode", "review", "--evidence-ids-file", idsPath, "--cli-path", fakeCli, "--timeout-seconds", "60"];
   const outputDir = path.join(directory, "artifacts");
   args.push("--output-dir", outputDir);
   const result = spawnSync(process.execPath, args, {
@@ -95,8 +95,11 @@ function assertDelivery(record, P, artifactsDir = null, material = null) {
   }
 }
 
-test("delivery contract version matches MAC-08 wrapper 1.5.2", () => {
-  assert.match(wrapperSource, /VERSION = "1\.5\.2"/);
+test("delivery contract release matches the checkout manifest", () => {
+  const manifest = JSON.parse(fs.readFileSync(path.resolve(path.dirname(zcodeChat), "../.zcode-release.json"), "utf8"));
+  const version = spawnSync(process.execPath, [zcodeChat, "--version"], { encoding: "utf8" });
+  assert.equal(version.status, 0);
+  assert.equal(JSON.parse(version.stdout).version, manifest.version);
 });
 
 test("P of exactly 24576 bytes is attached, not placed on argv", () => {

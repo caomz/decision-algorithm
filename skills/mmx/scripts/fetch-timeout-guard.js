@@ -17,6 +17,16 @@ try {
   if (!target) throw new Error("guard target missing");
   const { Agent, setGlobalDispatcher } = require(target);
   setGlobalDispatcher(new Agent({ headersTimeout: 0, bodyTimeout: 0 }));
+  if (process.env.MMX_CHAT_NATIVE_CLAIM) {
+    const budget = require("./mmx-native-budget.js");
+    if (statusFile) {
+      const path = require("node:path");
+      const entry = fs.realpathSync(process.argv[1]);
+      if (!budget.supportedEntry(entry, path.dirname(path.dirname(entry)))) throw new Error("native entry changed");
+    }
+    budget.installFetchBudget(process.env.MMX_CHAT_NATIVE_CLAIM,
+      Number(process.env.MMX_CHAT_NATIVE_MAX_TOKENS));
+  }
   if (statusFile) {
     fs.writeFileSync(statusFile, "applied\n", { flag: "wx", mode: 0o600 });
   }

@@ -19,8 +19,9 @@ MCode is explicitly **out of scope**. Leave its existing files unchanged.
 - GitHub main at planning time: `011a4848e4b40284d63b77e03b09705cd1a12778`.
 - PR #4, `mac-backport/mmx-pr1`, is open and contains the existing
   macOS-tested fetch 300-second guard; it is **not** yet part of main.
-- `review-run.js --backend real` currently fails closed. Fixture tests are
-  not evidence of live provider execution.
+- At this baseline, `review-run.js run --backend real` was disabled. Stage 5
+  adds an opt-in single-packet invocation and replayable per-side receipts.
+  See the unified runner README for usage and the Mac acceptance guide for live verification.
 - Local Mac worktree, installed launchers, account quotas, and proxy route are
   not visible to cloud GitHub tooling. Do not infer local deployment status.
 

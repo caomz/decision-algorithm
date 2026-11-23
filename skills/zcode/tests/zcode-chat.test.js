@@ -15,7 +15,7 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), "zcode-offline-"));
 fs.chmodSync(root, 0o700);
 const driver = path.join(root, "driver.cjs");
 // Integration tests use the real entry function but never access a real keychain.
-fs.writeFileSync(driver, `require(${JSON.stringify(wrapper)}).main(process.argv.slice(2), {setupMacKeychain:()=>null}).then(result=>{process.stdout.write(JSON.stringify(result)+'\\n');process.exitCode=['ok','usage','version'].includes(result.status)?0:1;});`);
+fs.writeFileSync(driver, `require(${JSON.stringify(require.resolve("./fixtures/install-budget-test.cjs"))});require(${JSON.stringify(wrapper)}).main(process.argv.slice(2), {setupMacKeychain:()=>null}).then(result=>{process.stdout.write(JSON.stringify(result)+'\\n');process.exitCode=['ok','usage','version'].includes(result.status)?0:1;});`);
 let counter = 0;
 
 function run(scenario = "ok", options = {}) {
@@ -205,7 +205,7 @@ test("existing output directories remain untouched", () => {
 });
 test("installed manifest mismatch blocks model invocation", () => {
   const directory = path.join(root, "install-fixture");
-  const names = ["SKILL.md", "scripts/zcode-chat.js", "scripts/zcode-run.js", "scripts/zcode-batch.js", "scripts/review.js", "references/review-v1.schema.json"];
+  const names = ["SKILL.md", "scripts/zcode-chat.js", "scripts/zcode-run.js", "scripts/zcode-batch.js", "scripts/request-budget.js", "scripts/request-budget-preload.cjs", "scripts/review.js", "references/review-v1.schema.json"];
   const files = {};
   for (const name of names) {
     const target = path.join(directory, name);
@@ -234,6 +234,12 @@ test("one manifest verifies both a CRLF and an LF copy of the same file", () => 
   const directory = path.join(root, "eol-fixture");
   fs.mkdirSync(path.join(directory, "scripts"), { recursive: true });
   fs.mkdirSync(path.join(directory, "references"), { recursive: true });
+  const budgetFiles = {};
+  for (const name of ["scripts/request-budget.js", "scripts/request-budget-preload.cjs"]) {
+    const bytes = fs.readFileSync(path.resolve(__dirname, "..", name));
+    fs.writeFileSync(path.join(directory, name), bytes);
+    budgetFiles[name] = createHash("sha256").update(bytes.toString("utf8").replace(/\r\n/g, "\n")).digest("hex");
+  }
   // Copy the real wrapper so checkInstall runs its actual verification path.
   const wrapperSource = fs.readFileSync(path.resolve(__dirname, "..", "scripts/zcode-chat.js"));
   const reviewSource = fs.readFileSync(path.resolve(__dirname, "..", "scripts/review.js"));
@@ -252,6 +258,7 @@ test("one manifest verifies both a CRLF and an LF copy of the same file", () => 
       "scripts/zcode-run.js": digest(Buffer.from("module.exports = {};\n", "utf8")),
       "scripts/zcode-batch.js": digest(Buffer.from("module.exports = {};\n", "utf8")),
       "scripts/review.js": digest(reviewSource),
+      ...budgetFiles,
       "references/review-v1.schema.json": digest(schemaSource),
     },
   }));

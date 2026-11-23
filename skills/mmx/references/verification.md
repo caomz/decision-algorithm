@@ -73,7 +73,7 @@ WSL 内 `node -p "process.platform"` 为 `linux` 时使用 POSIX 路径；调用
 `scripts/mmx-batch.js` 在单片契约之上做批量编排，每片仍是一次完整的 `mmx-chat.js` 调用（预算、超时、错误分类与回执结构原样继承）：
 
 - **stdout 契约**：恰好一个 JSON 对象，字段 `status`（ok|partial|failed，按传输可用性）、`gate`（PASS|NOT_EVALUATED，**传输层**：全片 `status=ok`、`complete=true`、未截断 → PASS）、`batch`（shards/ok/transport_ok/truncated_or_incomplete/retried/concurrency/wall_seconds/effective_max_tokens/retry_max_tokens）、`shards[]`（每片完整单片回执 + shard/prompt_file/retried/retry_reason/duration_seconds，重试时含 `first_attempt` 旧回执）。findings 级 P1/P2 判定仍由宿主完成，批级 gate 不冒充内容判定。可选 `--receipt-file` 落盘，内容与 stdout 字段一致。
-- **预算自愈**：片 `thinking_budget_exhausted` 或截断、且调用预算低于 profile 预算时，自动按 profile 预算（默认 524288）重发一次；`quota_error` 退避 30 秒重试一次。两类重试都显式记录（`retried`/`retry_reason`/`first_attempt`），不隐藏内部重试；`auth_error`、`schema_mismatch` 类与其余失败不重试。
+- 默认每片最多一次原生模型 fetch。显式 `--allow-paid-retry` 可对已确定的配额错误加试一次；提高输出预算还需要 `--retry-max-tokens N`。完整回执始终分别记录，未知状态禁止重发。
 - **退出码**：`gate=PASS` → 0，否则 1。
 - **调用面**：`--prompt-file`（可重复）与 `--prompts-dir` 互斥（`.txt` 自然序，≤32 片）；`--concurrency` 默认 2、上限 8；`--model`/`--max-tokens`/`--timeout`/`--wrap-timeout`/`--profile-file` 透传给每片。
 - **外层超时公式**：`ceil(片数/并发) × (2×wrap-timeout + 30s) + 60s`（两次完整尝试 + 30s 退避 + 批级余量）；漏算重试会把重试中的批次误判为超时。

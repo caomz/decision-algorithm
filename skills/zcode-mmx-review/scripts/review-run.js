@@ -1,11 +1,10 @@
 #!/usr/bin/env node
 "use strict";
 
-// zcode-mmx-review · 统一入口（离线原型，fixture 后端）。
+// zcode-mmx-review · 统一入口。只有显式选择 real 才会调用供应商。
 // 让 ZCode 与 MMX 两侧拿到同一个逻辑审核包 P，并用同一个校验器
 // （skills/zcode/scripts/review.js 的 validateReview）判定有效票。
-// 本文件不调用任何真实模型；`--backend real` 是保留值，读取任何输入
-// 之前即以退出码 2 拒绝。verify 只做相对本地记录的自洽核查。
+// verify 只做相对本地记录的自洽核查。
 
 const fs = require("node:fs");
 const path = require("node:path");
@@ -13,10 +12,11 @@ const { createHash } = require("node:crypto");
 const { spawn, spawnSync } = require("node:child_process");
 const { buildPrompt, validateReview, validateIds, strictJson } = require("../../zcode/scripts/review.js");
 
-const ENTRY_VERSION = "0.1.0";
+const ENTRY_VERSION = "0.3.0";
 const SKILLS = path.resolve(__dirname, "../.."); // <repo>/skills
 const LIMITS = Object.freeze({
   materialMaxBytes: 192 * 1024,
+  realAttachmentMaxBytes: 24 * 1024, // 单次零工具审核的附件预算，包括渲染指令和 schema
   patchMaxBytes: 128 * 1024,
   logTailBytes: 8 * 1024,
   fakeProcessMs: 30000,   // fixture 父进程对每个假 wrapper 的截止时间
@@ -44,6 +44,7 @@ const PROVENANCE_FILES = Object.freeze({
 });
 
 const USAGE = "usage: review-run.js doctor --offline [--json]\n" +
+  "       review-run.js run --backend real --packet FILE --out NEW_DIR [--max-shards 1..32] [--mmx-bin-dir ABS_DIR] [--timeout-seconds 1..3570] [--max-tokens N]\n" +
   "       review-run.js run --backend fixture --scenario NAME --packet FILE --out NEW_DIR [--timeout-seconds 1..3570] [--max-tokens N]\n" +
   "       review-run.js verify --run DIR\n" +
   "       review-run.js pack --out PACKET [--facts FILE] [--goal-file FILE] [--patch-file FILE --base SHA --kind KIND [--head SHA]] [--test-log FILE --test-cmd STR --test-exit N]... [--claims-file FILE]";
@@ -93,7 +94,10 @@ function checkObjectShape(value, keys, where) {
 
 function checkV2Sections(packet) {
   if (packet.goal !== undefined) {
-    checkObjectShape(packet.goal, ["request", "acceptance"], "goal");
+    checkObjectShape(packet.goal, ["request", "acceptance", "acceptance_scope"], "goal");
+    if (Object.hasOwn(packet.goal, "acceptance_scope") && !["whole_document", "per_shard"].includes(packet.goal.acceptance_scope)) {
+      fail("goal.acceptance_scope must be whole_document or per_shard");
+    }
     if (typeof packet.goal.request !== "string" || !packet.goal.request.trim()) fail("goal.request must be a nonempty string");
     if (!Array.isArray(packet.goal.acceptance) || !packet.goal.acceptance.length ||
         packet.goal.acceptance.some(value => typeof value !== "string" || !value.trim())) {
@@ -509,6 +513,7 @@ function materialFrom(packet, options = {}) {
   }
   const evidence = [];
   if (packet.goal !== undefined) {
+    if (Object.hasOwn(packet.goal, "acceptance_scope")) ordered.acceptance_scope = packet.goal.acceptance_scope;
     evidence.push({ id: "GOAL", text: packet.goal.request });
     packet.goal.acceptance.forEach((condition, index) => evidence.push({ id: `AC-${index + 1}`, text: condition }));
   }
@@ -567,12 +572,12 @@ function materialWarnings(packet) {
   return warnings;
 }
 
-function buildRunPacket(rawPacketBytes) {
-  const packet = packetFrom(rawPacketBytes.toString("utf8"));
+function buildRunPacket(rawPacketBytes, { forShardPlanning = false } = {}) {
+  const packet = packetFrom(new TextDecoder("utf-8", { fatal: true }).decode(rawPacketBytes));
   const isV2 = V2_KEYS.some(key => packet[key] !== undefined);
   if (isV2 && packet.changes !== undefined) verifyChanges(packet.changes);
-  const material = materialFrom(packet);
-  if (Buffer.byteLength(material, "utf8") > LIMITS.materialMaxBytes) {
+  const material = materialFrom(packet, { skipLimits: forShardPlanning });
+  if (!forShardPlanning && Buffer.byteLength(material, "utf8") > LIMITS.materialMaxBytes) {
     fail(`material exceeds ${LIMITS.materialMaxBytes} bytes; use the batch entry and shard by hand`);
   }
   const ids = evidenceIdsFrom(packet);
@@ -585,16 +590,45 @@ function buildRunPacket(rawPacketBytes) {
   };
 }
 
+function validateMaxShards(count) {
+  const { MAX_SHARDS } = require("./shard-coverage.js");
+  if (!Number.isSafeInteger(count) || count < 1 || count > MAX_SHARDS) fail(`--max-shards must be an integer in 1..${MAX_SHARDS}`);
+  return count;
+}
+
+function planRealReview(bytes, maxShards = 1) {
+  validateMaxShards(maxShards);
+  const { MAX_MATERIAL_BYTES } = require("./shard-coverage.js");
+  if (bytes.length > MAX_MATERIAL_BYTES) fail("real review packet exceeds the 512 KiB planning limit");
+  const input = buildRunPacket(bytes, { forShardPlanning: true });
+  const promptBytes = Buffer.byteLength(input.prompt, "utf8");
+  if (promptBytes <= LIMITS.realAttachmentMaxBytes) return { input, promptBytes, shardCount: 1 };
+  if (maxShards === 1) fail("rendered prompt exceeds 24 KiB; use --max-shards with an explicit multi-shard budget");
+  const plan = require("./sharded-review.js").prepareShardedReview(bytes, { maxShards });
+  return { input, promptBytes, shardCount: plan.shardCount, sharded: true };
+}
+
+function verifyReviewArchive(directory) {
+  if (["sharded-request.json", "coverage"].some(name => fs.existsSync(path.join(directory, name)))) {
+    return require("./sharded-review.js").verifyShardedReview(directory);
+  }
+  return verifyRun(directory);
+}
+
 // ---------------------------------------------------------------------------
 // 两侧 argv / 环境组装（入口与测试共用同一组函数）
 // ---------------------------------------------------------------------------
 
 // ZCode 与 MMX 的参数域不同：ZCode 用 --mode/--evidence-ids-file/--timeout-seconds；
 // MMX 用 --timeout/--wrap-timeout/--max-tokens，且从不接收 mode、IDs 或 system 文件。
-function assembleInputs({ materialPath, idsPath, promptPath, timeoutSeconds, maxTokens, zcodeOutputDir }) {
+function assembleInputs({ materialPath, idsPath, promptPath, timeoutSeconds, maxTokens, zcodeOutputDir, realOut }) {
   const zcodeArgv = ["--prompt-file", materialPath, "--mode", "review", "--evidence-ids-file", idsPath, "--timeout-seconds", String(timeoutSeconds)];
   if (zcodeOutputDir) zcodeArgv.push("--output-dir", zcodeOutputDir);
   const mmxArgv = ["--prompt-file", promptPath, "--timeout", String(timeoutSeconds), "--wrap-timeout", String(timeoutSeconds + 30), "--max-tokens", String(maxTokens)];
+  if (realOut) {
+    zcodeArgv.push("--observed-input-file", path.join(realOut, "zcode-observed-input.json"), "--max-output-tokens", String(maxTokens));
+    mmxArgv.push("--observed-input-file", path.join(realOut, "mmx-observed-input.json"), "--native-request-limit", "1");
+  }
   const envBase = {};
   for (const key of ["PATH", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL"]) {
     if (process.env[key] !== undefined) envBase[key] = process.env[key];
@@ -631,6 +665,19 @@ function evaluateSideCore(side, { execution, stdoutBytes, observed, expected }) 
     if (receipt === null || typeof receipt !== "object" || Array.isArray(receipt)) throw new Error("not an object");
   } catch { return { eligible: false, gate: null, reason: "invalid_receipt:stdout_not_one_json_object", model: null, model_family: null, material_bound: false, review: null, diagnostic }; }
   keep(receipt);
+  if (expected.backend === "real") {
+    const budget = receipt.native_request_budget;
+    const tokenFlag = side === "zcode" ? "--max-output-tokens" : "--max-tokens";
+    const tokenIndex = expected.argv.indexOf(tokenFlag);
+    const outputLimit = tokenIndex < 0 ? null : Number(expected.argv[tokenIndex + 1]);
+    if (!budget || budget.limit !== 1 || budget.verified !== true || budget.attempts !== 1 || budget.blocked !== false ||
+        !Number.isSafeInteger(outputLimit) || outputLimit < 1 || outputLimit > LIMITS.defaultMaxTokens ||
+        budget.output_limit_verified !== true || budget.max_output_tokens !== outputLimit ||
+        !expected.nativeEntry || budget.entry_sha256 !== expected.nativeEntry ||
+        (side === "zcode" && budget.model_request_events !== 1)) {
+      return { eligible: false, gate: null, reason: "receipt:native_request_budget", model: null, model_family: null, material_bound: false, review: null, diagnostic };
+    }
+  }
   // 计划合同要求 wrapper 正常结束且退出码为 0、没有信号；进程级退出码/信号
   // 独立于回执字段检查——stdout 恰好带一份合法回执不能替代进程正常结束。
   // 诊断已保留（keep），便于事后翻查非零退出方到底说了什么。
@@ -670,6 +717,12 @@ function evaluateSideCore(side, { execution, stdoutBytes, observed, expected }) 
   try {
     const argvOk = JSON.stringify(observed.argv) === JSON.stringify(expected.argv);
     if (!argvOk) throw new Error("argv differs from the assembled invocation");
+    if (expected.backend === "real") {
+      const method = side === "zcode" ? "attachment" : "messages-file";
+      if (observed.delivery?.method !== method || observed.delivery?.prompt_sha256 !== hash(expected.promptBytes)) {
+        throw new Error("native delivery does not match the rendered prompt");
+      }
+    }
     if (side === "zcode") {
       const material = Buffer.from(observed.prompt_file_b64, "base64");
       const idsBytes = Buffer.from(observed.evidence_ids_file_b64, "base64");
@@ -763,7 +816,7 @@ function installSignalHub() {
         }
         ctx.interrupting = Promise.all(Object.values(ctx.sides).filter(entry => entry && entry.child && !entry.closeDone)
           .map(entry => stopAndAwait(entry.child, ctx.cancelGraceMs)));
-      } else {
+      } else if (!ctx.real) {
         // 第二次及以后：不再等宽限期，立即 SIGKILL 尚未 close 的子进程，然后照常
         // 写完记录（cancelled、NOT_EVALUATED、退出码 2）。已 spawn_error 或已退出
         // （closeDone=true / exitCode、signalCode 已设）的跳过。
@@ -780,22 +833,27 @@ function installSignalHub() {
   process.on("SIGTERM", onSignal);
 }
 
-async function runFixtureRound(inputs, { out, scenario, timeoutSeconds, maxTokens, argv, envBase, fakeProcessMs = LIMITS.fakeProcessMs, cancelGraceMs = LIMITS.cancelGraceMs, onSpawn = null, onSideClosed = null }) {
+async function runReviewRound(inputs, { out, scenario, argv, envBase, realBackend = null, fakeProcessMs = LIMITS.fakeProcessMs, cancelGraceMs = LIMITS.cancelGraceMs, onSpawn = null, onSideClosed = null }) {
   fs.mkdirSync(path.join(out, "tmp"), { mode: 0o700 });
+  const backend = realBackend ? "real" : "fixture";
+  const deadlineMs = realBackend ? realBackend.deadlineMs : fakeProcessMs;
+  const graceMs = realBackend ? 12000 : cancelGraceMs;
   const expected = {
+    backend,
     materialBytes: inputs.materialBytes,
     idsBytes: inputs.idsBytes,
     ids: inputs.ids,
     prompt: inputs.prompt,
     promptBytes: Buffer.from(inputs.prompt, "utf8"),
   };
-  const wrappers = { zcode: checkFixtureFile(ZCODE_WRAPPER, path.dirname(SCENARIOS_FILE)), mmx: checkFixtureFile(MMX_WRAPPER, path.dirname(SCENARIOS_FILE)) };
+  const wrappers = realBackend?.wrappers ?? { zcode: checkFixtureFile(ZCODE_WRAPPER, path.dirname(SCENARIOS_FILE)), mmx: checkFixtureFile(MMX_WRAPPER, path.dirname(SCENARIOS_FILE)) };
+  const archiveErrors = [];
   const sides = {};
   // 取消状态机：信号枢纽只同步置 cancelRequested 并终止进程；最终状态在 close
   // 处理完成的那一处统一决定（cancelRequested → cancelled；terminating → timed_out；
   // 其余 completed），不依赖监听器执行顺序。close 已处理完的一侧不受迟到信号影响。
   // onSpawn / onSideClosed 只供测试注入（无 CLI 入口），默认 null 时零行为差异。
-  const ctx = { sides, cancelled: false, interrupting: null, signalCount: 0, cancelGraceMs };
+  const ctx = { sides, cancelled: false, interrupting: null, signalCount: 0, cancelGraceMs: graceMs, real: Boolean(realBackend) };
   installSignalHub();
   signalHub.rounds.add(ctx);
 
@@ -804,7 +862,7 @@ async function runFixtureRound(inputs, { out, scenario, timeoutSeconds, maxToken
     sides[side] = entry;
     const startedAt = new Date().toISOString();
     const argvFull = [...argv[side]];
-    const env = {
+    const env = realBackend?.env[side] ?? {
       ...envBase,
       TMPDIR: path.join(out, "tmp"), TMP: path.join(out, "tmp"), TEMP: path.join(out, "tmp"),
       REVIEW_SIDE: side, REVIEW_SCENARIO: scenario, REVIEW_RUN_DIR: out,
@@ -814,7 +872,7 @@ async function runFixtureRound(inputs, { out, scenario, timeoutSeconds, maxToken
       // ZMX_TEST_SPAWN_EXECUTABLE 只供测试注入（如指向不存在的可执行文件，复现
       // 异步 spawn 失败）。不进入子进程 env（env 由固定键组装）、不进入任何记录
       // （execution.argv 记逻辑参数，不含可执行文件）。
-      const childExec = process.env.ZMX_TEST_SPAWN_EXECUTABLE || process.execPath;
+      const childExec = realBackend ? process.execPath : (process.env.ZMX_TEST_SPAWN_EXECUTABLE || process.execPath);
       entry.child = spawn(childExec, [wrappers[side], ...argvFull], { env, shell: false, stdio: ["ignore", "pipe", "pipe"] });
       entry.child.stdout.on("data", chunk => entry.stdout.push(chunk));
       entry.child.stderr.on("data", chunk => entry.stderr.push(chunk));
@@ -844,9 +902,9 @@ async function runFixtureRound(inputs, { out, scenario, timeoutSeconds, maxToken
         // 不标超时：close 会走正常完成路径。
         if (entry.child.exitCode !== null || entry.child.signalCode !== null) return;
         entry.state = "terminating";
-        stopAndAwait(entry.child, cancelGraceMs).catch(() => {});
+        stopAndAwait(entry.child, graceMs).catch(() => {});
       }
-    }, fakeProcessMs);
+    }, deadlineMs);
     await new Promise(resolve => {
       entry.child.once("close", resolve);
       // 正常情况下 spawn 失败后 close 仍会派发；此兜底仅防其缺席导致挂死。
@@ -857,7 +915,7 @@ async function runFixtureRound(inputs, { out, scenario, timeoutSeconds, maxToken
     // Test-only cross-process synchronization: signal only after ZCode's
     // close event has been observed. No provider input or archive receipt
     // is modified, and the flag is absent outside this explicit test mode.
-    if (side === "zcode" && process.env.ZMX_TEST_CLOSE_MARKER === "1") {
+    if (!realBackend && side === "zcode" && process.env.ZMX_TEST_CLOSE_MARKER === "1") {
       fs.writeFileSync(path.join(out, "tmp", "zcode-closed.marker"), "closed\n", { flag: "wx", mode: 0o600 });
     }
     // 单点定态：取消优先于超时，超时优先于正常完成；spawn_error 已是终态，不改写。
@@ -874,6 +932,10 @@ async function runFixtureRound(inputs, { out, scenario, timeoutSeconds, maxToken
   const finishSide = (side, entry, startedAt, code, signal) => {
     const stdoutBytes = Buffer.concat(entry.stdout.map(chunk => Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
     const stderrBytes = Buffer.concat(entry.stderr.map(chunk => Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    if (realBackend) {
+      try { archiveSideStreams(out, side, stdoutBytes, stderrBytes); }
+      catch (error) { archiveErrors.push(error); }
+    }
     // 状态已由 runSide 在 close 后单点决定（或 spawn_error/not_started 路径直接给定）。
     const state = entry.state;
     entry.child = null;
@@ -889,13 +951,14 @@ async function runFixtureRound(inputs, { out, scenario, timeoutSeconds, maxToken
       if (observed === null || typeof observed !== "object" || Array.isArray(observed)) observed = {};
     }
     const execution = {
+      ...(realBackend ? { backend, wrapper: side + "/scripts/" + side + "-chat.js" } : {}),
       state, exit_code: code, signal: signal ?? null,
       started_at: startedAt, ended_at: new Date().toISOString(),
       stdout_sha256: hash(stdoutBytes), stderr_sha256: hash(stderrBytes),
       observed_input: observed ? sha256File(observedPath) : "unobserved",
       argv: argv[side],
       env_keys: entry.envKeys,
-      deadline_ms: fakeProcessMs,
+      deadline_ms: deadlineMs,
     };
     return { side, execution, stdoutBytes, stderrBytes, observed };
   };
@@ -903,7 +966,7 @@ async function runFixtureRound(inputs, { out, scenario, timeoutSeconds, maxToken
   const results = {};
   try {
     // 两侧并发启动；取消发生在某侧启动之前时，该侧不再启动，记 not_started。
-    await Promise.all(["zcode", "mmx"].map(async side => {
+    const settlements = await Promise.allSettled(["zcode", "mmx"].map(async side => {
       if (ctx.cancelled && !sides[side]) {
         results[side] = finishSide(side, { child: null, state: "not_started", stdout: [], stderr: [], envKeys: [] }, new Date().toISOString(), null, null);
         return;
@@ -911,6 +974,8 @@ async function runFixtureRound(inputs, { out, scenario, timeoutSeconds, maxToken
       results[side] = await runSide(side);
     }));
     if (ctx.interrupting) await ctx.interrupting;
+    for (const result of settlements) if (result.status === "rejected") throw result.reason;
+    if (archiveErrors.length) throw new Error("could not archive wrapper output; inspect original run before retry: " + archiveErrors.map(error => error.code || error.message).join(", "));
   } finally {
     // 监听器本身进程级不卸载；只注销本轮上下文。信号在 round 结束后、记录写完
     // 前到达时由枢纽以 no-op 接住（入口存活、记录照常写出、不记取消）。
@@ -925,7 +990,7 @@ async function runFixtureRound(inputs, { out, scenario, timeoutSeconds, maxToken
       execution: results[side].execution,
       stdoutBytes: results[side].stdoutBytes,
       observed: results[side].observed,
-      expected: { ...expected, argv: argv[side] },
+      expected: { ...expected, argv: argv[side], nativeEntry: realBackend?.nativeEntries[side] },
     });
   }
   const outcome = tally({ cancelled: effectiveCancelled, sides: evaluated });
@@ -951,7 +1016,18 @@ function writeRunInputs(out, { packetBytes, inputs }) {
   saveNew(path.join(out, "prompt.txt"), Buffer.from(inputs.prompt, "utf8"));
 }
 
-function writeRunRecords(out, { scenario, timeoutSeconds, maxTokens, argv, envKeys, round, warnings = [] }) {
+function writeRunRequest(out, { backend = "fixture", scenario, timeoutSeconds, maxTokens, argv, envKeys, nativeEntries }) {
+  const provenanceFiles = backend === "real" ? {
+    "real-round.js": path.join(__dirname, "real-round.js"),
+    "zcode-chat.js": PROVENANCE_FILES["zcode-chat.js"],
+    "mmx-chat.js": PROVENANCE_FILES["mmx-chat.js"],
+    "mmx-profile": PROVENANCE_FILES["mmx-profile"],
+    "zcode-release": path.join(SKILLS, "zcode/.zcode-release.json"),
+    "zcode-request-budget": path.join(SKILLS, "zcode/scripts/request-budget.js"),
+    "zcode-budget-preload": path.join(SKILLS, "zcode/scripts/request-budget-preload.cjs"),
+    "mmx-request-budget": path.join(SKILLS, "mmx/scripts/mmx-native-budget.js"),
+    "mmx-fetch-guard": path.join(SKILLS, "mmx/scripts/fetch-timeout-guard.js"),
+  } : PROVENANCE_FILES;
   // 输入组的摘要从已落盘的归档文件重算，保证记录与字节一致。
   const request = {
     entry_version: ENTRY_VERSION,
@@ -959,24 +1035,48 @@ function writeRunRecords(out, { scenario, timeoutSeconds, maxTokens, argv, envKe
     material_sha256: sha256File(path.join(out, "material.txt")),
     evidence_ids_sha256: sha256File(path.join(out, "evidence-ids.json")),
     prompt_sha256: sha256File(path.join(out, "prompt.txt")),
-    backend: "fixture", scenario, timeout_seconds: timeoutSeconds, max_tokens: maxTokens,
+    backend, scenario, timeout_seconds: timeoutSeconds, max_tokens: maxTokens,
+    ...(backend === "real" ? { native_entries: nativeEntries } : {}),
     argv,
     // 组装时的基础环境键名（不含 fixture 机制注入的 TMPDIR/TMP/TEMP/REVIEW_*）；
     // 子进程实际键集见 <side>-observed-input.json 的 env_keys。
     env_keys: envKeys,
     adjudication_code: Object.fromEntries(Object.entries(ADJUDICATION_FILES).map(([name, file]) => [name, sha256File(file)])),
-    provenance_code: Object.fromEntries(Object.entries(PROVENANCE_FILES).map(([name, file]) => [name, sha256File(file)])),
+    provenance_code: Object.fromEntries(Object.entries(provenanceFiles).map(([name, file]) => [name, sha256File(file)])),
   };
   saveNew(path.join(out, "request.json"), JSON.stringify(request, null, 2) + "\n");
+  return request;
+}
+
+function archiveSideStreams(out, side, stdoutBytes, stderrBytes) {
+  saveNew(path.join(out, `${side}-stdout.json`), stdoutBytes);
+  saveNew(path.join(out, `${side}-stderr.log`), stderrBytes);
+}
+
+function writeRunRecords(out, { backend = "fixture", scenario, timeoutSeconds, maxTokens, argv, envKeys, round, warnings = [], request }) {
+  if (backend === "real") {
+    const expected = Buffer.from(JSON.stringify(request, null, 2) + "\n", "utf8");
+    if (!request || !fs.readFileSync(path.join(out, "request.json")).equals(expected)) {
+      throw new Error("pre-dispatch request record is missing or has changed");
+    }
+  } else {
+    writeRunRequest(out, { backend, scenario, timeoutSeconds, maxTokens, argv, envKeys });
+  }
   for (const side of ["zcode", "mmx"]) {
     const record = round.executions[side];
-    saveNew(path.join(out, `${side}-stdout.json`), record.stdoutBytes);
-    saveNew(path.join(out, `${side}-stderr.log`), record.stderrBytes);
+    if (backend === "real") {
+      for (const [name, bytes] of [[`${side}-stdout.json`, record.stdoutBytes], [`${side}-stderr.log`, record.stderrBytes]]) {
+        const file = path.join(out, name);
+        if (!fs.lstatSync(file).isFile() || !fs.readFileSync(file).equals(bytes)) throw new Error(`closed wrapper stream changed: ${name}`);
+      }
+    } else {
+      archiveSideStreams(out, side, record.stdoutBytes, record.stderrBytes);
+    }
     saveNew(path.join(out, `${side}-execution.json`), JSON.stringify(record.execution, null, 2) + "\n");
   }
   const result = {
     entry_version: ENTRY_VERSION,
-    backend: "fixture",
+    backend,
     scenario, timeout_seconds: timeoutSeconds, max_tokens: maxTokens,
     cancelled: round.cancelled,
     round_status: round.outcome.round_status,
@@ -986,7 +1086,9 @@ function writeRunRecords(out, { scenario, timeoutSeconds, maxTokens, argv, envKe
     independent: round.outcome.independent,
     material_warnings: warnings,
     providers: Object.fromEntries(["zcode", "mmx"].map(side => [side, round.evaluated[side]])),
-    note: "backend=fixture: served by repository fixtures, not an external review",
+    note: backend === "real"
+      ? "backend=real: checkout wrappers; see per-side observations, receipts and execution records"
+      : "backend=fixture: served by repository fixtures, not an external review",
     completed_at: new Date().toISOString(),
   };
   saveNew(path.join(out, "result.json"), JSON.stringify(result, null, 2) + "\n");
@@ -995,7 +1097,8 @@ function writeRunRecords(out, { scenario, timeoutSeconds, maxTokens, argv, envKe
     const file = path.join(out, name);
     if (fs.existsSync(file)) manifest[name] = sha256File(file);
   }
-  saveNew(path.join(out, "record-manifest.json"), JSON.stringify({ format: 1, files: manifest }, null, 2) + "\n");
+  const header = backend === "real" ? { format: 2, backend } : { format: 1 };
+  saveNew(path.join(out, "record-manifest.json"), JSON.stringify({ ...header, files: manifest }, null, 2) + "\n");
   return result;
 }
 
@@ -1015,6 +1118,7 @@ function verifyRun(directory) {
   };
   let manifest = null;
   try {
+    if (fs.lstatSync(directory).isSymbolicLink()) problem("run directory must not be a symbolic link");
     const manifestPath = path.join(directory, "record-manifest.json");
     // 清单自身同样不得是链接、不得逃出运行目录。
     const manifestStat = fs.lstatSync(manifestPath);
@@ -1024,7 +1128,9 @@ function verifyRun(directory) {
     else {
       const raw = fs.readFileSync(manifestPath);
       manifest = strictJson(raw.toString("utf8"));
-      if (manifest === null || typeof manifest !== "object" || manifest.format !== 1 || manifest.files === null || typeof manifest.files !== "object" || Array.isArray(manifest.files)) problem("record-manifest.json is malformed");
+      if (manifest === null || typeof manifest !== "object" || ![1, 2].includes(manifest.format) || manifest.files === null || typeof manifest.files !== "object" || Array.isArray(manifest.files)) problem("record-manifest.json is malformed");
+      if (manifest?.format === 2 && manifest.backend !== "real") problem("format 2 requires backend=real");
+      if (manifest?.format === 1 && manifest.backend !== undefined && manifest.backend !== "fixture") problem("format 1 requires a fixture archive");
     }
   } catch { problem("record-manifest.json is missing or not strict JSON"); }
   const listed = new Set(manifest && manifest.files ? Object.keys(manifest.files) : []);
@@ -1040,6 +1146,8 @@ function verifyRun(directory) {
       if (sha256File(file) !== digest) problem(`record digest mismatch: ${name}`);
     } catch { problem(`record unreadable: ${name}`); }
   }
+  if (problems.length) return { integrity: "corrupt", problems, replay: null, exit_code: 2 };
+  const backend = manifest.format === 2 ? "real" : "fixture";
   const read = name => { try { return fs.readFileSync(path.join(directory, name)); } catch { problem(`cannot read ${name}`); return null; } };
   const executions = {};
   for (const side of ["zcode", "mmx"]) {
@@ -1047,6 +1155,10 @@ function verifyRun(directory) {
     if (!raw) continue;
     try {
       const execution = strictJson(raw.toString("utf8"));
+      if (backend === "real" && (execution?.backend !== "real" || execution.wrapper !== `${side}/scripts/${side}-chat.js`)) {
+        problem(`${side}-execution.json: real wrapper identity mismatch`);
+      }
+      if (backend === "fixture" && execution?.backend === "real") problem(`${side}-execution.json: unexpected real backend`);
       if (!["completed", "timed_out", "cancelled", "not_started", "spawn_error"].includes(execution?.state)) problem(`${side}-execution.json: bad state`);
       for (const field of ["state", "exit_code", "signal", "started_at", "ended_at", "stdout_sha256", "stderr_sha256", "observed_input", "argv", "env_keys"]) {
         if (execution[field] === undefined) problem(`${side}-execution.json: ${field} missing`);
@@ -1063,7 +1175,7 @@ function verifyRun(directory) {
       // execution 里声明的 stdout/stderr 摘要必须与归档文件（经 manifest 校验）一致。
       for (const stream of ["stdout", "stderr"]) {
         const archive = `${side}-${stream}${stream === "stdout" ? ".json" : ".log"}`;
-        if (typeof execution[`${stream}_sha256`] === "string" && listed.has(archive) && manifest.files[archive] !== execution[`${stream}_sha256`]) {
+        if (manifest.files[archive] !== execution[`${stream}_sha256`]) {
           problem(`${side}: execution ${stream} digest disagrees with the archive`);
         }
       }
@@ -1075,6 +1187,9 @@ function verifyRun(directory) {
   if (requestRaw) {
     try {
       request = strictJson(requestRaw.toString("utf8"));
+      if (request?.backend !== backend) problem("request.json: backend disagrees with manifest");
+      if (backend === "real" && request?.scenario !== undefined) problem("request.json: real backend cannot have a fixture scenario");
+      if (backend === "real" && !/^[a-f0-9]{64}$/.test(request?.provenance_code?.["real-round.js"])) problem("request.json: missing real dispatch fingerprint");
       for (const key of ["packet_sha256", "material_sha256", "evidence_ids_sha256", "prompt_sha256", "argv", "adjudication_code"]) {
         if (request?.[key] === undefined) problem(`request.json: ${key} missing`);
       }
@@ -1117,6 +1232,9 @@ function verifyRun(directory) {
   const cancelled = ["zcode", "mmx"].some(side => executions[side]?.state === "cancelled");
   const sides = {};
   for (const side of ["zcode", "mmx"]) {
+    if (JSON.stringify(executions[side].argv) !== JSON.stringify(request.argv[side])) {
+      replayProblems.push(`${side}: executed argv differs from the request`);
+    }
     let observed = null;
     if (executions[side].observed_input !== "unobserved") {
       try { observed = readJsonFile(path.join(directory, `${side}-observed-input.json`)); } catch { observed = {}; }
@@ -1127,7 +1245,7 @@ function verifyRun(directory) {
       stdoutBytes: read(`${side}-stdout.json`),
       observed,
       expected: {
-        materialBytes, idsBytes,
+        backend, materialBytes, idsBytes, nativeEntry: request.native_entries?.[side],
         ids: inputs ? inputs.ids : [],
         prompt: promptBytes.toString("utf8"),
         promptBytes,
@@ -1146,6 +1264,8 @@ function verifyRun(directory) {
   if (!result) {
     if (!replayProblems.some(problem => problem.startsWith("result.json"))) replayProblems.push("result.json missing or unusable");
   } else {
+    if (result.backend !== backend) replayProblems.push("result.json backend differs from the manifest");
+    if (result.scenario !== request.scenario) replayProblems.push("result.json scenario differs from the request");
     if (result.round_status !== outcome.round_status) replayProblems.push(`result.json round_status ${result.round_status} != replayed ${outcome.round_status}`);
     if (result.review_gate !== outcome.review_gate) replayProblems.push(`result.json review_gate ${result.review_gate} != replayed ${outcome.review_gate}`);
     if (result.cancelled !== cancelled) replayProblems.push(`result.json cancelled ${result.cancelled} != replayed ${cancelled}`);
@@ -1172,6 +1292,7 @@ function verifyRun(directory) {
   return {
     integrity: "ok",
     replay: replayProblems.length ? "mismatch" : "match",
+    backend,
     problems: replayProblems,
     replayed: { round_status: outcome.round_status, review_gate: outcome.review_gate, cancelled },
     exit_code: replayProblems.length ? 2 : 0,
@@ -1187,9 +1308,13 @@ function doctorOffline(root = SKILLS) {
   const checks = [];
   const required = [
     "zcode/scripts/review.js", "zcode/scripts/zcode-chat.js", "zcode/references/review-v1.schema.json",
+    "zcode/scripts/request-budget.js", "zcode/scripts/request-budget-preload.cjs",
     "zcode/.zcode-release.json",
     "mmx/scripts/mmx-chat.js", "mmx/references/review-v1.schema.json", "mmx/profiles/local.json",
-    "zcode-mmx-review/scripts/review-run.js", "zcode-mmx-review/examples/packet.json", "zcode-mmx-review/examples/packet-v2.json",
+    "mmx/scripts/mmx-native-budget.js", "mmx/scripts/fetch-timeout-guard.js",
+    "zcode-mmx-review/scripts/review-run.js", "zcode-mmx-review/scripts/real-round.js",
+    "zcode-mmx-review/scripts/sharded-review.js", "zcode-mmx-review/scripts/shard-coverage.js",
+    "zcode-mmx-review/examples/packet.json", "zcode-mmx-review/examples/packet-v2.json",
     "zcode-mmx-review/tests/fixtures/backends/zcode-fake-wrapper.cjs",
     "zcode-mmx-review/tests/fixtures/backends/mmx-fake-wrapper.cjs",
     "zcode-mmx-review/tests/fixtures/backends/scenarios.json",
@@ -1353,11 +1478,11 @@ function argsFrom(argv) {
   const action = argv[0];
   if (!["doctor", "run", "verify", "pack"].includes(action)) fail(USAGE);
   if (action === "pack") return parsePackArgs(argv);
-  const args = { action, timeout: LIMITS.defaultTimeout, maxTokens: LIMITS.defaultMaxTokens };
+  const args = { action, timeout: LIMITS.defaultTimeout, maxTokens: LIMITS.defaultMaxTokens, maxShards: 1 };
   const allowed = action === "doctor" ? ["--offline", "--json"]
     : action === "verify" ? ["--run"]
-    : ["--backend", "--scenario", "--packet", "--out", "--timeout-seconds", "--max-tokens"];
-  const names = { "--packet": "packet", "--out": "out", "--run": "run", "--backend": "backend", "--scenario": "scenario", "--timeout-seconds": "timeout", "--max-tokens": "maxTokens" };
+    : ["--backend", "--scenario", "--packet", "--out", "--timeout-seconds", "--max-tokens", "--max-shards", "--mmx-bin-dir"];
+  const names = { "--packet": "packet", "--out": "out", "--run": "run", "--backend": "backend", "--scenario": "scenario", "--timeout-seconds": "timeout", "--max-tokens": "maxTokens", "--max-shards": "maxShards", "--mmx-bin-dir": "mmxBinDir" };
   const seen = new Set();
   for (let i = 1; i < argv.length; i++) {
     const flag = argv[i];
@@ -1371,13 +1496,18 @@ function argsFrom(argv) {
   }
   if (action === "run") {
     if (!args.backend) fail("--backend is required and has no default");
-    if (args.backend === "real") fail("the real backend is not enabled in this version");
-    if (args.backend !== "fixture") fail(`unsupported backend: ${args.backend}`);
-    if (!args.scenario || !args.packet || !args.out) fail("run requires --scenario, --packet and --out");
+    if (!["fixture", "real"].includes(args.backend)) fail(`unsupported backend: ${args.backend}`);
+    if (!args.packet || !args.out) fail("run requires --packet and --out");
+    if (args.backend === "fixture" && !args.scenario) fail("fixture requires --scenario");
+    if (args.backend === "real" && args.scenario) fail("--scenario only applies to the fixture backend");
     args.timeout = Number(args.timeout);
     args.maxTokens = Number(args.maxTokens);
+    args.maxShards = validateMaxShards(Number(args.maxShards));
+    if (args.backend !== "real" && seen.has("--max-shards")) fail("--max-shards applies only to the real backend");
+    if (args.mmxBinDir && (args.backend !== "real" || !path.isAbsolute(args.mmxBinDir))) fail("--mmx-bin-dir requires real mode and an absolute directory");
     if (!Number.isSafeInteger(args.timeout) || args.timeout < LIMITS.timeoutMin || args.timeout > LIMITS.timeoutMax) fail(`--timeout-seconds must be an integer in ${LIMITS.timeoutMin}..${LIMITS.timeoutMax}`);
     if (!Number.isSafeInteger(args.maxTokens) || args.maxTokens < 1) fail("--max-tokens must be a positive safe integer");
+    if (args.backend === "real" && args.maxTokens > LIMITS.defaultMaxTokens) fail(`--max-tokens exceeds the supported ceiling of ${LIMITS.defaultMaxTokens}`);
   }
   if (action === "verify" && !args.run) fail("verify requires --run");
   return args;
@@ -1395,29 +1525,49 @@ async function main(argv) {
     return report.status === "ok" ? 0 : 1;
   }
   if (args.action === "verify") {
-    const report = verifyRun(path.resolve(args.run));
+    const report = verifyReviewArchive(path.resolve(args.run));
     process.stdout.write(JSON.stringify(report) + "\n");
     return report.exit_code;
   }
   if (args.action === "run") {
-    // 场景表与 wrapper 同样必须是 fixtures/backends 目录内的普通文件、非符号链接。
-    checkFixtureFile(SCENARIOS_FILE, path.dirname(SCENARIOS_FILE));
-    const scenarios = readJsonFile(SCENARIOS_FILE);
-    if (!Object.hasOwn(scenarios, args.scenario)) fail(`--scenario must name a key of tests/fixtures/backends/scenarios.json; got ${JSON.stringify(args.scenario)}`);
+    const real = args.backend === "real";
+    if (!real) {
+      checkFixtureFile(SCENARIOS_FILE, path.dirname(SCENARIOS_FILE));
+      const scenarios = readJsonFile(SCENARIOS_FILE);
+      if (!Object.hasOwn(scenarios, args.scenario)) fail(`--scenario must name a key of tests/fixtures/backends/scenarios.json; got ${JSON.stringify(args.scenario)}`);
+    }
     const packetBytes = fs.readFileSync(args.packet);
-    const inputs = buildRunPacket(packetBytes);
+    const plan = real ? planRealReview(packetBytes, args.maxShards) : null;
     const out = path.resolve(args.out);
     if (fs.existsSync(out)) fail(`--out must be a new directory: ${out} already exists`);
+    const assembled = assembleInputs({
+      materialPath: path.join(out, "material.txt"), idsPath: path.join(out, "evidence-ids.json"),
+      promptPath: path.join(out, "prompt.txt"), timeoutSeconds: args.timeout, maxTokens: args.maxTokens,
+      realOut: real ? out : undefined,
+    });
+    const argvBySide = { zcode: assembled.zcode.argv, mmx: assembled.mmx.argv };
+    const options = { backend: args.backend, out, scenario: args.scenario, timeoutSeconds: args.timeout,
+      maxTokens: args.maxTokens, argv: argvBySide, envBase: assembled.zcode.env };
+    const realBackend = real ? require("./real-round.js").createRealBackend({ ...options, mmxBinDir: args.mmxBinDir }) : null;
+    if (plan?.sharded) {
+      const result = await require("./sharded-review.js").runShardedReview({
+        packetBytes, out, maxShards: args.maxShards, timeoutSeconds: args.timeout, maxTokens: args.maxTokens, mmxBinDir: args.mmxBinDir,
+        nativeEntries: realBackend.nativeEntries,
+      });
+      process.stdout.write(JSON.stringify(result) + "\n");
+      return result.exit_code;
+    }
+    const inputs = plan ? plan.input : buildRunPacket(packetBytes);
     fs.mkdirSync(out, { mode: 0o700 });
     writeRunInputs(out, { packetBytes, inputs });
-    const assembled = assembleInputs({ materialPath: path.join(out, "material.txt"), idsPath: path.join(out, "evidence-ids.json"), promptPath: path.join(out, "prompt.txt"), timeoutSeconds: args.timeout, maxTokens: args.maxTokens });
-    const argvBySide = { zcode: assembled.zcode.argv, mmx: assembled.mmx.argv };
-    const round = await runFixtureRound(inputs, { out, scenario: args.scenario, timeoutSeconds: args.timeout, maxTokens: args.maxTokens, argv: argvBySide, envBase: assembled.zcode.env });
+    const envKeys = Object.keys(assembled.zcode.env).sort();
+    const request = real ? writeRunRequest(out, { ...options, envKeys, nativeEntries: realBackend.nativeEntries }) : undefined;
+    const round = await runReviewRound(inputs, { ...options, realBackend });
     // 只供测试：撑开"两侧 close 之后、记录写完之前"的窗口，供 CLI 层信号用例
     // 确定性发信号。默认 0，生产路径无延迟。该 env 不进入子进程环境与任何记录。
-    const holdMs = Number(process.env.ZMX_TEST_HOLD_BEFORE_RECORDS_MS ?? 0);
+    const holdMs = real ? 0 : Number(process.env.ZMX_TEST_HOLD_BEFORE_RECORDS_MS ?? 0);
     if (Number.isSafeInteger(holdMs) && holdMs > 0) await new Promise(resolve => setTimeout(resolve, holdMs));
-    const result = writeRunRecords(out, { scenario: args.scenario, timeoutSeconds: args.timeout, maxTokens: args.maxTokens, argv: argvBySide, envKeys: Object.keys(assembled.zcode.env).sort(), round, warnings: inputs.warnings });
+    const result = writeRunRecords(out, { ...options, envKeys, request, round, warnings: inputs.warnings });
     process.stdout.write(JSON.stringify(result) + "\n");
     return result.exit_code;
   }
@@ -1433,6 +1583,14 @@ async function main(argv) {
   fail("unreachable action");
 }
 
+module.exports = {
+  ENTRY_VERSION, LIMITS, USAGE, SKILLS,
+  packetFrom, materialFrom, evidenceIdsFrom, buildRunPacket, assembleInputs,
+  materialWarnings, tailUtf8, parsePatch, diffstatText, verifyChanges, coverageDeclared,
+  family, evaluateSide, tally, runFixtureRound: runReviewRound, verifyRun, doctorOffline, argsFrom, ADJUDICATION_FILES,
+  writeRunInputs, writeRunRecords, validateMaxShards, planRealReview, verifyReviewArchive,
+};
+
 if (require.main === module) {
   // 入口兜底：未预期的异常（promise 链之外：事件回调、流 error、定时器）统一
   // 退出码 2，不与 FAIL=1 混淆。只在直跑入口时安装，被 require 的库用法（测试）
@@ -1447,11 +1605,3 @@ if (require.main === module) {
       process.exitCode = error.usage ? 2 : 2;
     });
 }
-
-module.exports = {
-  ENTRY_VERSION, LIMITS, USAGE, SKILLS,
-  packetFrom, materialFrom, evidenceIdsFrom, buildRunPacket, assembleInputs,
-  materialWarnings, tailUtf8, parsePatch, diffstatText, verifyChanges, coverageDeclared,
-  family, evaluateSide, tally, runFixtureRound, verifyRun, doctorOffline, argsFrom, ADJUDICATION_FILES,
-  writeRunInputs, writeRunRecords,
-};

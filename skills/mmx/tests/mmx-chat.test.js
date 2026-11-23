@@ -9,6 +9,8 @@ const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
 const { safeCmdArgument, npmShimEntry, mmxPackageEntry, linkedEntry, cliLaunch, withFetchLimitHint, findMmx, terminateChildTree } = require(path.join(__dirname, "..", "scripts", "mmx-chat.js"));
 
+const fixturePreload = require.resolve("./fixtures/native-budget-fixture.cjs");
+const budgetFixture = require(fixturePreload);
 const skillRoot = path.resolve(__dirname, "..");
 const wrapper = path.join(skillRoot, "scripts", "mmx-chat.js");
 const profile = path.join(skillRoot, "profiles", "local.json");
@@ -58,6 +60,10 @@ const ok = {
 };
 switch (process.env.FAKE_MODE || "success") {
   case "success": process.stdout.write(JSON.stringify(ok)); break;
+  case "second_model_fetch":
+    fetch("https://mmx-fixture.invalid/anthropic/v1/messages", {method:"POST", body:'{"max_tokens":16}'})
+      .catch(() => {}).then(() => process.stdout.write(JSON.stringify(ok)));
+    break;
   case "prefix": process.stdout.write("Detecting region...\\n" + JSON.stringify(ok)); break;
   case "truncated": ok.stop_reason = "max_tokens"; process.stdout.write(JSON.stringify(ok)); break;
   case "auth": process.stderr.write(JSON.stringify({ error: { code: 3, message: "No credentials" } })); process.exitCode = 3; break;
@@ -120,11 +126,7 @@ switch (process.env.FAKE_MODE || "success") {
 }
 `, "utf8");
 
-if (process.platform === "win32") {
-  fs.writeFileSync(fakeMmxPath, `@echo off\r\n"${process.execPath}" "${fakeJsPath}" %*\r\n`, "utf8");
-} else {
-  fs.writeFileSync(fakeMmxPath, `#!/usr/bin/env node\nrequire(${JSON.stringify(fakeJsPath)});\n`, { mode: 0o755 });
-}
+budgetFixture.install(binDir, fakeJsPath);
 
 function writeInputs(prompt = "hello", system = null) {
   fs.writeFileSync(promptPath, prompt, "utf8");
@@ -149,7 +151,7 @@ function runWrapper(args = [], extraEnv = {}, includeFake = true) {
     FAKE_MESSAGES_DUMP: messagesDumpPath,
     ...extraEnv,
   };
-  return spawnSync(process.execPath, [wrapper, ...args], {
+  return spawnSync(process.execPath, ["--require", fixturePreload, wrapper, ...args], {
     env, encoding: "utf8", timeout: 15000, maxBuffer: 16 * 1024 * 1024,
   });
 }
@@ -198,14 +200,19 @@ test("the version constant and the SKILL.md frontmatter stay in sync", () => {
 
 test("success preserves the public JSON schema and skips auth status", () => {
   writeInputs("hello");
-  const run = runChat([], { MINIMAX_BASE_URL: undefined });
+  const run = runChat([], { MINIMAX_BASE_URL: undefined, ...Object.fromEntries(["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"].map(key => [key, undefined])) });
   assert.equal(run.status, 0);
   assert.equal(run.stderr, "");
   assert.deepEqual(jsonResult(run), {
     status: "ok", exit_code: 0, requested_model: null, cli_invoked: true, text: "MMX_OK", model: "MiniMax-M3",
     model_identity_source: "response.model", stop_reason: "end_turn", complete: true,
     input_tokens: 12, output_tokens: 3, truncated: false,
-    fetch_timeout_guard: "custom_launcher", base_url_env: "unset",
+    native_request_budget: {
+      scope: "native_fetch", limit: 1, attempts: 1, blocked: false, verified: true,
+      max_output_tokens: 524288, output_limit_verified: true, cli_version: "1.0.29",
+      entry_sha256: createHash("sha256").update(fs.readFileSync(findMmx(process.platform, binDir).argsPrefix[0])).digest("hex"),
+    },
+    fetch_timeout_guard: "preloaded", base_url_env: "unset",
   });
   const args = JSON.parse(fs.readFileSync(argsDumpPath, "utf8"));
   assert.deepEqual(args.slice(0, 2), ["text", "chat"]);
@@ -214,6 +221,15 @@ test("success preserves the public JSON schema and skips auth status", () => {
   assert.equal(args[args.indexOf("--max-tokens") + 1], "524288");
   assert.equal(args[args.indexOf("--timeout") + 1], "600");
   assert.equal(JSON.parse(fs.readFileSync(profile, "utf8")).wrapper_timeout_seconds, 630);
+});
+
+test("a blocked second native fetch invalidates even a successful CLI envelope", () => {
+  writeInputs("single model fetch");
+  const result = jsonResult(runChat([], { FAKE_MODE: "second_model_fetch" }));
+  assert.equal(result.status, "native_budget_exceeded");
+  assert.equal(result.native_request_budget.attempts, 1);
+  assert.equal(result.native_request_budget.blocked, true);
+  assert.equal(result.cli_invoked, true);
 });
 
 test("BOM, Chinese, shell metacharacters, system, and model are preserved without argv leakage", () => {
@@ -347,10 +363,13 @@ test("profile and explicit overrides determine effective request args", () => {
   fs.writeFileSync(overrideProfilePath, JSON.stringify({
     format: 1, model: "MiniMax-M3", max_tokens: 4000, request_timeout_seconds: 10, wrapper_timeout_seconds: 15,
   }));
-  const result = jsonResult(runChat(["--profile-file", overrideProfilePath, "--max-tokens", "5000"]));
+  const overBudget = jsonResult(runChat(["--profile-file", overrideProfilePath, "--max-tokens", "5000"]));
+  assert.equal(overBudget.status, "usage_error");
+  assert.equal(fs.readFileSync(invocationLog, "utf8"), "");
+  const result = jsonResult(runChat(["--profile-file", overrideProfilePath, "--max-tokens", "3500"]));
   assert.equal(result.requested_model, "MiniMax-M3");
   const args = JSON.parse(fs.readFileSync(argsDumpPath, "utf8"));
-  assert.equal(args[args.indexOf("--max-tokens") + 1], "5000");
+  assert.equal(args[args.indexOf("--max-tokens") + 1], "3500");
   assert.equal(args[args.indexOf("--timeout") + 1], "10");
   for (const invalid of ["0", "1.2", "1e3", "9007199254740992"]) {
     assert.equal(jsonResult(runChat(["--max-tokens", invalid])).status, "usage_error");
@@ -475,10 +494,10 @@ test("POSIX CLI path with spaces, Chinese, and metacharacters is direct", () => 
   const specialBin = path.join(root, "bin 中文 & space");
   fs.mkdirSync(specialBin);
   const cli = path.join(specialBin, "mmx");
-  fs.writeFileSync(cli, `#!${process.execPath}\nrequire(${JSON.stringify(fakeJsPath)});\n`, { mode: 0o755 });
+  const { pkgRoot, pkgBin, entry } = budgetFixture.install(specialBin, fakeJsPath);
   writeInputs("special path");
   assert.equal(jsonResult(runChat([], { PATH: `${specialBin}${path.delimiter}${process.env.PATH || ""}` })).status, "ok");
-  fs.unlinkSync(cli); fs.rmdirSync(specialBin);
+  removeFakePackage(pkgRoot, pkgBin, entry);
 });
 
 test("launch error yields one JSON object", () => {
@@ -488,7 +507,7 @@ test("launch error yields one JSON object", () => {
   fs.writeFileSync(cli, "#!/definitely/missing/interpreter\n", { mode: 0o755 });
   writeInputs("launch failure");
   const run = runChat([], { PATH: bin });
-  assert.equal(jsonResult(run).status, "api_error");
+  assert.equal(jsonResult(run).status, "native_budget_unavailable");
   assert.equal(run.stdout.trim().split(/\r?\n/).length, 1);
   fs.unlinkSync(cli); fs.rmdirSync(bin);
 });
@@ -511,7 +530,7 @@ test("SIGTERM cancellation yields one final JSON object", async () => {
   const env = { ...process.env, PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`,
     TMPDIR: wrapperTmp, TMP: wrapperTmp, TEMP: wrapperTmp, FAKE_MODE: "hang",
     FAKE_ARGS_DUMP: argsDumpPath, FAKE_MESSAGES_DUMP: messagesDumpPath };
-  const child = spawn(process.execPath, [wrapper, "--prompt-file", promptPath], { env, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(process.execPath, ["--require", fixturePreload, wrapper, "--prompt-file", promptPath], { env, stdio: ["ignore", "pipe", "pipe"] });
   const chunks = [];
   child.stdout.on("data", chunk => chunks.push(chunk));
   for (let i = 0; i < 40 && !fs.existsSync(argsDumpPath); i++) await new Promise(resolve => setTimeout(resolve, 50));
@@ -555,6 +574,7 @@ test("managed release rejects mixed or interrupted installation before launching
   const files = {
     "agy/scripts/agy_runner.py": Buffer.from("# fixture runner"),
     "mmx/scripts/mmx-chat.js": fs.readFileSync(wrapper),
+    "mmx/scripts/mmx-native-budget.js": fs.readFileSync(path.join(skillRoot, "scripts/mmx-native-budget.js")),
     "mmx/scripts/fetch-timeout-guard.js": fs.readFileSync(path.join(skillRoot, "scripts", "fetch-timeout-guard.js")),
     "mmx/scripts/mmx-provider-slot.js": fs.readFileSync(path.join(skillRoot, "scripts", "mmx-provider-slot.js")),
     "mmx/profiles/local.json": fs.readFileSync(profile),
@@ -572,7 +592,7 @@ test("managed release rejects mixed or interrupted installation before launching
   const installedWrapper = path.join(managed, "mmx", "scripts", "mmx-chat.js");
   function run(extraEnv = {}) {
     fs.writeFileSync(invocationLog, "");
-    return jsonResult(spawnSync(process.execPath, [installedWrapper, "--prompt-file", promptPath], {
+    return jsonResult(spawnSync(process.execPath, ["--require", fixturePreload, installedWrapper, "--prompt-file", promptPath], {
       env: { ...process.env, PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`, TMPDIR: wrapperTmp,
         TMP: wrapperTmp, TEMP: wrapperTmp, FAKE_INVOCATIONS: invocationLog, ...extraEnv },
       encoding: "utf8", timeout: 15000,
@@ -618,6 +638,7 @@ test("a managed layout without a release marker fails closed before the CLI runs
   const files = {
     "agy/scripts/agy_runner.py": Buffer.from("# fixture runner"),
     "mmx/scripts/mmx-chat.js": fs.readFileSync(wrapper),
+    "mmx/scripts/mmx-native-budget.js": fs.readFileSync(path.join(skillRoot, "scripts/mmx-native-budget.js")),
     "mmx/profiles/local.json": fs.readFileSync(profile),
     "cross-validation/scripts/cross_validate.py": Buffer.from("# fixture coordinator"),
   };
@@ -647,6 +668,8 @@ test("a plain install without siblings and without a marker is not treated as ma
   const plain = path.join(root, "plain-layout");
   const files = {
     "mmx/scripts/mmx-chat.js": fs.readFileSync(wrapper),
+    "mmx/scripts/fetch-timeout-guard.js": fs.readFileSync(path.join(skillRoot, "scripts/fetch-timeout-guard.js")),
+    "mmx/scripts/mmx-native-budget.js": fs.readFileSync(path.join(skillRoot, "scripts/mmx-native-budget.js")),
     "mmx/profiles/local.json": fs.readFileSync(profile),
   };
   for (const [name, bytes] of Object.entries(files)) {
@@ -656,7 +679,7 @@ test("a plain install without siblings and without a marker is not treated as ma
   }
   writeInputs("plain install");
   fs.writeFileSync(invocationLog, "");
-  const run = spawnSync(process.execPath, [path.join(plain, "mmx", "scripts", "mmx-chat.js"),
+  const run = spawnSync(process.execPath, ["--require", fixturePreload, path.join(plain, "mmx", "scripts", "mmx-chat.js"),
     "--prompt-file", promptPath], {
     env: { ...process.env, PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`, TMPDIR: wrapperTmp,
       TMP: wrapperTmp, TEMP: wrapperTmp, FAKE_INVOCATIONS: invocationLog },
@@ -673,26 +696,14 @@ test("a plain install without siblings and without a marker is not treated as ma
 // link and Windows uses the .cmd shim resolved by the production launcher.
 function buildFakePackage() {
   const pkgBin = path.join(root, "pkg-bin");
-  const pkgRoot = path.join(pkgBin, "node_modules", "mmx-cli");
-  fs.mkdirSync(path.join(pkgRoot, "dist"), { recursive: true });
-  fs.mkdirSync(path.join(pkgRoot, "node_modules", "undici"), { recursive: true });
-  const entry = path.join(pkgRoot, "dist", "mmx.mjs");
-  fs.writeFileSync(path.join(pkgRoot, "package.json"), JSON.stringify({ name: "mmx-cli", bin: { mmx: "dist/mmx.mjs" } }));
-  fs.writeFileSync(entry, `#!${process.execPath}\nimport { createRequire } from 'node:module';\ncreateRequire(import.meta.url)(${JSON.stringify(fakeJsPath)});\n`, { mode: 0o755 });
-  fs.writeFileSync(path.join(pkgRoot, "node_modules", "undici", "package.json"), JSON.stringify({ name: "undici", main: "index.js" }));
-  fs.writeFileSync(path.join(pkgRoot, "node_modules", "undici", "index.js"),
-    "class Agent { constructor(options) { this.options = options; } }\n" +
-    "module.exports = { Agent, setGlobalDispatcher(dispatcher) { globalThis.__fakeGuard = dispatcher.options; } };\n");
-  if (process.platform === "win32") {
-    fs.writeFileSync(path.join(pkgBin, "mmx.cmd"), '@echo off\r\n"%_prog%" "%dp0%\\node_modules\\mmx-cli\\dist\\mmx.mjs" %*\r\n');
-  } else fs.symlinkSync(entry, path.join(pkgBin, "mmx"));
-  return { pkgRoot, pkgBin, entry };
+  return budgetFixture.install(pkgBin, fakeJsPath);
 }
 
 function removeFakePackage(pkgRoot, pkgBin, entry) {
   unlinkKnown(path.join(pkgBin, "mmx"));
   unlinkKnown(path.join(pkgBin, "mmx.cmd"));
   unlinkKnown(entry);
+  unlinkKnown(path.join(pkgRoot, "driver.json"));
   unlinkKnown(path.join(pkgRoot, "package.json"));
   unlinkKnown(path.join(pkgRoot, "node_modules", "undici", "package.json"));
   unlinkKnown(path.join(pkgRoot, "node_modules", "undici", "index.js"));
@@ -706,8 +717,7 @@ test("package entry resolution accepts linked mmx-cli entries and rejects other 
     if (process.platform !== "win32") assert.equal(linkedEntry(path.join(pkgBin, "mmx")), fs.realpathSync(entry));
     assert.equal(fs.realpathSync(findMmx(process.platform, pkgBin).argsPrefix[0]), fs.realpathSync(entry));
     assert.equal(mmxPackageEntry(entry)?.root, fs.realpathSync(pkgRoot));
-    // The default fake is a custom launcher, not an mmx-cli package.
-    assert.equal(linkedEntry(fakeMmxPath), null);
+    assert.equal(mmxPackageEntry(fakeJsPath), null);
     fs.writeFileSync(path.join(pkgRoot, "package.json"), JSON.stringify({ name: "other-cli", bin: { mmx: "dist/mmx.cjs" } }));
     assert.equal(mmxPackageEntry(entry), null);
     fs.writeFileSync(path.join(pkgRoot, "package.json"), JSON.stringify({ name: "mmx-cli", bin: { mmx: "dist/elsewhere.cjs" } }));
@@ -755,11 +765,8 @@ test("the mmx-cli package entry launches with the fetch guard preloaded and a no
     const withoutUndici = jsonResult(runChat([], {
       PATH: `${pkgBin}${path.delimiter}${process.env.PATH || ""}`, FAKE_ENV_DUMP: envDumpPath, ...noProxy,
     }));
-    assert.equal(withoutUndici.status, "ok");
-    assert.equal(withoutUndici.fetch_timeout_guard, "undici_not_found");
-    const unguarded = JSON.parse(fs.readFileSync(envDumpPath, "utf8"));
-    assert.equal(unguarded.undici_path, null);
-    assert.equal(unguarded.guard, null);
+    assert.equal(withoutUndici.status, "native_budget_unavailable");
+    assert.equal(fs.existsSync(envDumpPath), false);
   } finally {
     removeFakePackage(pkgRoot, pkgBin, entry);
     unlinkKnown(envDumpPath);
@@ -772,12 +779,8 @@ test("a selected fetch guard fails before invoking the CLI if initialization thr
   const secret = "synthetic-private-dependency-detail";
   try {
     writeInputs("guard initialization must precede request");
-    for (const broken of [
-      `throw new Error(${JSON.stringify(secret)});`,
-      "module.exports = { Agent: class {}, setGlobalDispatcher() { throw new Error('dispatcher rejected'); } };",
-    ]) {
-      fs.writeFileSync(undiciFile, broken);
-      const run = runChat([], { PATH: `${pkgBin}${path.delimiter}${process.env.PATH || ""}` });
+    for (const failure of ["import", "dispatcher"]) {
+      const run = runChat([], { PATH: `${pkgBin}${path.delimiter}${process.env.PATH || ""}`, FAKE_GUARD_FAILURE: failure });
       const receipt = jsonResult(run);
       assert.equal(run.status, 1);
       assert.equal(receipt.status, "guard_error");
@@ -793,13 +796,8 @@ test("a selected fetch guard fails before invoking the CLI if initialization thr
 test("fetch guard acknowledgement does not break inherited Worker preloads", () => {
   const { pkgRoot, pkgBin, entry } = buildFakePackage();
   try {
-    fs.writeFileSync(entry, "import { Worker } from 'node:worker_threads';\n" +
-      "import { createRequire } from 'node:module';\n" +
-      "const worker = new Worker('0', { eval: true });\n" +
-      "worker.on('exit', code => { if (code) process.exit(code); else createRequire(import.meta.url)(" +
-      JSON.stringify(fakeJsPath) + "); });\n");
     writeInputs("worker preload");
-    const result = jsonResult(runChat([], { PATH: `${pkgBin}${path.delimiter}${process.env.PATH || ""}` }));
+    const result = jsonResult(runChat([], { FAKE_GUARD_WORKER: "1", PATH: `${pkgBin}${path.delimiter}${process.env.PATH || ""}` }));
     assert.equal(result.status, "ok");
     assert.notEqual(result.fetch_timeout_guard, "preload_failed");
     assert.deepEqual(fs.readdirSync(wrapperTmp), []);
@@ -809,11 +807,9 @@ test("fetch guard acknowledgement does not break inherited Worker preloads", () 
 test("a blocked guard import preserves timeout without claiming initialization", () => {
   const { pkgRoot, pkgBin, entry } = buildFakePackage();
   try {
-    fs.writeFileSync(path.join(pkgRoot, "node_modules", "undici", "index.js"),
-      "Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30000);\n");
     writeInputs("blocked preload");
     const run = runChat(["--timeout", "1", "--wrap-timeout", "2"],
-      { PATH: `${pkgBin}${path.delimiter}${process.env.PATH || ""}` });
+      { FAKE_GUARD_FAILURE: "hang", PATH: `${pkgBin}${path.delimiter}${process.env.PATH || ""}` });
     const result = jsonResult(run);
     assert.equal(run.status, 1);
     assert.equal(result.status, "timeout");
@@ -925,7 +921,7 @@ test("the CLI child gets MINIMAX_BASE_URL without a trailing /v1 and the receipt
       const result = jsonResult(runChat([], { FAKE_ENV_DUMP: envDumpPath, MINIMAX_BASE_URL: value }));
       assert.equal(result.status, "ok");
       assert.equal(result.base_url_env, state, String(value));
-      assert.equal(result.fetch_timeout_guard, "custom_launcher");
+      assert.ok(["preloaded", "proxy_limited"].includes(result.fetch_timeout_guard));
       assert.equal(JSON.parse(fs.readFileSync(envDumpPath, "utf8")).minimax_base_url, base, String(value));
     }
   } finally {

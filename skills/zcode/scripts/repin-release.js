@@ -25,6 +25,8 @@ const RELEASE_MARKER = ".zcode-release.json";
 const REQUIRED_FILES = [
   "SKILL.md",
   "scripts/zcode-chat.js",
+  "scripts/request-budget.js",
+  "scripts/request-budget-preload.cjs",
   "scripts/zcode-run.js",
   "scripts/zcode-batch.js",
   "scripts/review.js",

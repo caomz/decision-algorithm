@@ -1,6 +1,6 @@
 # zcode skill
 
-ZCode CLI 的文本复核封装：单轮 chat、review、challenge。当前 SKILL / wrapper 版本 **1.5.2**，目标 ZCode runtime CLI `0.17.1`。
+ZCode CLI 的文本复核封装支持单轮 chat、review、challenge。当前 SKILL / wrapper 版本 **1.6.0**，目标 ZCode runtime CLI `0.17.1`。Mac 请求预算绑定到经过传输审计的 bundle 字节，升级原生 CLI 后应核对传输实现并更新指纹。单次调用的原生请求预算证据记在 `native_request_budget`。
 
 > **1.5.2 MAC-08（隔离源码修复）**：chat/review/challenge 统一用 `--attach` 发送完整 `buildPrompt` 渲染后的私有 UTF-8 文件，argv 只保留短指令，不再有 24 KiB 小输入泄漏。离线 fake CLI 验证了正文、schema 与 E IDs、哈希、拒绝回退和禁用工具；**真实 ZCode 0.17.1 对附件的模型输入消费尚未验证**，不得视作真实供应商或敏感材料验收通过。Mac 正本未切换。
 >

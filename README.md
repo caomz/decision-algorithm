@@ -1,5 +1,7 @@
 # decision-algorithm · 人生与思维 Skills 集合
 
+**Mac 双模型交叉验证**　双击根目录的 `Mac交叉验证.command`，选择一份 Markdown、TXT 或审核包 JSON，即可通过本机 ZCode 和 MMX 审核。[使用说明](Mac使用说明.md) · [示例材料](示例审核材料.md)
+
 > *"做重大人生决策不靠一时的热情，而靠可重复的决策算法。"*
 
 一套围绕**人生决策与思维工具**的 AI skills 集合仓库，收录三个互补的决策 skill，外加一个笔记检索工具：

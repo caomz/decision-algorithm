@@ -27,16 +27,10 @@ const MAX_CONCURRENCY = 8;
 const MAX_SHARDS = 32;
 const DEFAULT_TIMEOUT_SECONDS = 1200;
 const MAX_TIMEOUT_SECONDS = 21600;
-// Test hook only: a production run never overrides the quota/timeout backoff.
-const RETRY_DELAY_MS = (() => {
-  const raw = process.env.ZCODE_BATCH_RETRY_MS;
-  if (raw === undefined) return 30000;
-  if (!/^\d+$/.test(raw) || Number(raw) > 30000) return 30000;
-  return Number(raw);
-})();
+const RETRY_DELAY_MS = 30000;
 const STDOUT_CAP_BYTES = 16 * 1024 * 1024;
 const MODES = ["chat", "review", "challenge"];
-const RETRYABLE = new Set(["quota_error", "timeout"]);
+const RETRYABLE = new Set(["quota_error"]);
 
 // ---------------------------------------------------------------------------
 // Emission — exactly ONE JSON object on stdout (same contract as zcode-chat.js).
@@ -108,7 +102,7 @@ function positiveInteger(value) {
 
 function parseArgs(argv) {
   const out = { promptFiles: [], promptsDir: null, concurrency: null, mode: "chat",
-    evidenceIdsFile: null, cliPath: null, timeout: null, receiptFile: null, allowPaidRetry: false };
+    evidenceIdsFile: null, cliPath: null, timeout: null, maxOutputTokens: null, receiptFile: null, allowPaidRetry: false };
   const seen = new Set();
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -133,6 +127,12 @@ function parseArgs(argv) {
       case "--mode": out.mode = next(); break;
       case "--evidence-ids-file": out.evidenceIdsFile = path.resolve(next()); break;
       case "--cli-path": out.cliPath = next(); break;
+      case "--max-output-tokens": {
+        const value = next();
+        if (!/^[1-9][0-9]{0,5}$/.test(value) || Number(value) > 524288) usageError("--max-output-tokens must be in 1..524288.");
+        out.maxOutputTokens = Number(value);
+        break;
+      }
       case "--timeout-seconds": {
         const value = next();
         if (!/^\d+$/.test(value) || !positiveInteger(Number(value))) {
@@ -216,8 +216,7 @@ let cancellationEscalation = null;
 
 function runWrapperOnce(promptFile, fixedArgs) {
   return new Promise(resolve => {
-    const wrapperPath = process.env.ZCODE_BATCH_WRAPPER || DEFAULT_WRAPPER;
-    const args = [wrapperPath, "--prompt-file", promptFile, ...fixedArgs];
+    const args = [DEFAULT_WRAPPER, "--prompt-file", promptFile, ...fixedArgs];
     let child;
     try {
       child = spawn(process.execPath, args, {
@@ -295,7 +294,8 @@ async function runShardWithRetries(shard, fixedArgs, allowPaidRetry) {
   // Local cleanup/timeout never proves the remote provider did not execute.
   if (!allowPaidRetry || !RETRYABLE.has(first.receipt.status) || cancelled) {
     return { shard: shard.label, prompt_file: shard.file, retried: false, retry_reason: null,
-      ...(!allowPaidRetry && RETRYABLE.has(first.receipt.status) ? { retry_skipped_reason: "paid_retry_not_authorized" } : {}),
+      ...(first.receipt.status === "timeout" ? { retry_skipped_reason: "remote_outcome_unknown" } :
+        !allowPaidRetry && RETRYABLE.has(first.receipt.status) ? { retry_skipped_reason: "paid_retry_not_authorized" } : {}),
       duration_seconds: first.duration, ...first.receipt };
   }
   const retryReason = first.receipt.status;
@@ -402,7 +402,7 @@ async function main() {
     return;
   }
   if (argv.length === 1 && argv[0] === "--help") {
-    process.stdout.write(JSON.stringify({ status: "usage", usage: "node zcode-batch.js --prompt-file FILE [--prompt-file FILE ...] | --prompts-dir DIR [--concurrency 2] [--mode chat|review|challenge --evidence-ids-file FILE] [--timeout-seconds 1200] [--cli-path EXECUTABLE] [--receipt-file FILE] [--allow-paid-retry]" }) + "\n");
+    process.stdout.write(JSON.stringify({ status: "usage", usage: "node zcode-batch.js --prompt-file FILE [--prompt-file FILE ...] | --prompts-dir DIR [--concurrency 2] [--mode chat|review|challenge --evidence-ids-file FILE] [--timeout-seconds 1200] [--max-output-tokens N] [--cli-path EXECUTABLE] [--receipt-file FILE] [--allow-paid-retry]" }) + "\n");
     return;
   }
 
@@ -425,6 +425,7 @@ async function main() {
   const fixedArgs = ["--mode", args.mode, "--timeout-seconds", String(timeout)];
   if (args.evidenceIdsFile !== null) fixedArgs.push("--evidence-ids-file", args.evidenceIdsFile);
   if (args.cliPath !== null) fixedArgs.push("--cli-path", args.cliPath);
+  if (args.maxOutputTokens !== null) fixedArgs.push("--max-output-tokens", String(args.maxOutputTokens));
 
   // Claim the final receipt BEFORE a wrapper may send any provider request.
   let archive;

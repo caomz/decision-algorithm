@@ -138,7 +138,7 @@ describe("packet v1 parsing and canonical bytes", () => {
 describe("cli rejections", () => {
   const cases = [
     ["missing --backend", ["run", "--scenario", "both-pass", "--packet", packetFile, "--out", path.join(root, "reject-a")]],
-    ["real backend is disabled before reading input", ["run", "--backend", "real", "--scenario", "both-pass", "--packet", path.join(root, "no-such-packet.json"), "--out", path.join(root, "reject-b")]],
+    ["real backend rejects fixture scenarios before dispatch", ["run", "--backend", "real", "--scenario", "both-pass", "--packet", packetFile, "--out", path.join(root, "reject-b")]],
     ["unknown backend", ["run", "--backend", "other", "--scenario", "both-pass", "--packet", packetFile, "--out", path.join(root, "reject-c")]],
     ["unknown scenario", ["run", "--backend", "fixture", "--scenario", "nope", "--packet", packetFile, "--out", path.join(root, "reject-d")]],
     ["timeout below range", ["run", "--backend", "fixture", "--scenario", "both-pass", "--packet", packetFile, "--out", path.join(root, "reject-e"), "--timeout-seconds", "0"]],
@@ -154,7 +154,7 @@ describe("cli rejections", () => {
   ];
   for (const [name, args] of cases) {
     test(name, () => {
-      const result = runCli(args);
+      const result = runCli(args, { PATH: "" });
       assert.equal(result.status, 2, `${name}: expected exit 2, got ${result.status}; stderr=${result.stderr}`);
       for (const flag of ["--out"]) {
         const at = args.indexOf(flag);

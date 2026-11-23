@@ -12,6 +12,10 @@ MMX 一方的文本复核 skill：`/mmx <问题>`、`/mmx review <文件>`、`/m
 >
 > **2026-11-19 v2.7.0**：从 macOS 线回传三项修复：预加载 fetch 防护，取消 Node fetch 的 300 秒响应头上限；`thinking_budget_exhausted` 只在 `stop_reason=max_tokens` 时成立；只对子进程去掉 `MINIMAX_BASE_URL` 末尾的 `/v1`，并给 HTTP 404 诊断。wrapper 版本与 `SKILL.md` 统一为 2.7.0，并加一致性测试。只在 macOS 实测过，Windows 待测，见 [test-matrix](references/test-matrix.md)。
 
+### Mac 原生单次收费请求
+
+当前文字入口校验已审 npm CLI 1.0.29 的原生入口 SHA、完整请求上的输出额度，并在首个模型 POST 前领取独占许可。选择了身份不明的启动器时预检会拒绝运行。用 `native_request_budget` 核对本地请求次数、所用 CLI 和输出预算；代理内部重试或供应商账单仍需单独取证。批量默认每片一次，明确授权重试额度的参数见 [SKILL.md](SKILL.md)。
+
 ## 外部依赖
 
 | 依赖 | 说明 |

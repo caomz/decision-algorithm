@@ -18,16 +18,11 @@ const fakeMmxSource = path.join(__dirname, "fixtures/native/mmx");
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "zmx-delivery-m-"));
 
-// PATH 只含假 mmx 所在目录；fixture 的 shebang 是 node 的绝对路径。
-// 若本机 node 与 shebang 声明不同（异机环境），复制 fixture 并重写 shebang，
-// 行为逻辑仍是同一份固定文件。
+// Use a native npm fixture whose fetch sends no network traffic.
 const binDir = path.join(root, "bin");
 fs.mkdirSync(binDir, { mode: 0o700 });
-const sourceText = fs.readFileSync(fakeMmxSource, "utf8");
-const shebang = sourceText.split("\n")[0];
-const localShebang = `#!${process.execPath}`;
-const installed = path.join(binDir, "mmx");
-fs.writeFileSync(installed, shebang === localShebang ? sourceText : sourceText.replace(/^#![^\n]*/, localShebang), { mode: 0o755 });
+const budgetFixture = require.resolve("../../mmx/tests/fixtures/native-budget-fixture.cjs");
+require(budgetFixture).install(binDir, fakeMmxSource);
 
 const wrapperTmp = path.join(root, "wrapper-tmp");
 fs.mkdirSync(wrapperTmp, { mode: 0o700 });
@@ -50,7 +45,7 @@ function runDelivery(material, name) {
   const promptPath = path.join(directory, "prompt.txt");
   const dumpPath = path.join(directory, "mmx-dump.json");
   fs.writeFileSync(promptPath, Buffer.from(material, "utf8"));
-  const result = spawnSync(process.execPath, [mmxChat,
+  const result = spawnSync(process.execPath, ["--require", budgetFixture, mmxChat,
     "--prompt-file", promptPath, "--timeout", "30", "--wrap-timeout", "60", "--max-tokens", "1024"], {
     encoding: "utf8", timeout: 60000, maxBuffer: 32 * 1024 * 1024,
     env: {

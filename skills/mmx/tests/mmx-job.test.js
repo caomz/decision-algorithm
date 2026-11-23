@@ -142,7 +142,8 @@ test("MAC-10 verified runtime binds Node, MMX wrapper, guard and CLI before work
   const runtime=runtimeBinding();
   assert.equal(runtime.format,1);
   assert.equal(runtime.node_version,process.version);
-  assert.equal(runtime.files.length,4);
+  assert.equal(runtime.files.length,5);
+  assert.ok(runtime.files.some(v=>v.file.endsWith("mmx-native-budget.js")));
   assert.ok(runtime.files.some(v=>v.file.endsWith("fetch-timeout-guard.js")));
   for(const record of runtime.files)assert.equal(record.sha256,fileDigest(record.file).sha256);
   for(const [name,mutate]of [
@@ -638,9 +639,11 @@ test("MAC-01 durable job to real batch to fake wrapper sends one request on quot
     'fs.appendFileSync(process.env.MMX_E2E_COUNT, "1\\n");',
     'process.stdout.write(JSON.stringify({status:"quota_error",cli_invoked:true,complete:false,truncated:false,error:"synthetic 429"})+"\\n");',
   ].join("\n")+"\n");
-  const oldWrapper = process.env.MMX_BATCH_WRAPPER;
+  const previousOptions = process.env.NODE_OPTIONS;
+  process.env.NODE_OPTIONS = "--require " + JSON.stringify(require.resolve("./fixtures/batch-wrapper-preload.cjs"));
+  const oldWrapper = process.env.MMX_TEST_WRAPPER;
   const oldCount = process.env.MMX_E2E_COUNT;
-  process.env.MMX_BATCH_WRAPPER = wrapper;
+  process.env.MMX_TEST_WRAPPER = wrapper;
   process.env.MMX_E2E_COUNT = independentCount;
   let job;
   try {
@@ -653,8 +656,9 @@ test("MAC-01 durable job to real batch to fake wrapper sends one request on quot
     assert.equal(fs.readFileSync(independentCount, "utf8").trim().split("\n").length, 1);
     assert.equal(verify(job).integrity, "match");
   } finally {
-    if (oldWrapper === undefined) delete process.env.MMX_BATCH_WRAPPER;
-    else process.env.MMX_BATCH_WRAPPER = oldWrapper;
+    if (previousOptions === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = previousOptions;
+    if (oldWrapper === undefined) delete process.env.MMX_TEST_WRAPPER;
+    else process.env.MMX_TEST_WRAPPER = oldWrapper;
     if (oldCount === undefined) delete process.env.MMX_E2E_COUNT;
     else process.env.MMX_E2E_COUNT = oldCount;
     if (job && status(job).status !== "finished") cancel(job);
@@ -676,8 +680,10 @@ process.on("SIGTERM",()=>{
 child.on("close",()=>{fs.writeFileSync(${JSON.stringify(cleaned)},"cleaned");process.exit(0);});
 setInterval(()=>{},100);
 `);
-  const saved=process.env.MMX_BATCH_WRAPPER;
-  process.env.MMX_BATCH_WRAPPER=wrapper;
+  const previousOptions = process.env.NODE_OPTIONS;
+  process.env.NODE_OPTIONS = "--require " + JSON.stringify(require.resolve("./fixtures/batch-wrapper-preload.cjs"));
+  const saved=process.env.MMX_TEST_WRAPPER;
+  process.env.MMX_TEST_WRAPPER=wrapper;
   let job;
   try {
     job=start(path.join(root,"batch-cleanup"),["--prompt-file",prompt,"--concurrency","1"]).job_dir;
@@ -690,7 +696,8 @@ setInterval(()=>{},100);
     assert.ok(fs.existsSync(cleaned),"wrapper must receive TERM and observe its detached CLI exit before batch closes");
     assert.equal(verify(job).integrity,"match");
   } finally {
-    if(saved===undefined) delete process.env.MMX_BATCH_WRAPPER; else process.env.MMX_BATCH_WRAPPER=saved;
+    if (previousOptions === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = previousOptions;
+    if(saved===undefined) delete process.env.MMX_TEST_WRAPPER; else process.env.MMX_TEST_WRAPPER=saved;
     if(fs.existsSync(ready)) try { process.kill(-Number(fs.readFileSync(ready,"utf8")),"SIGKILL"); } catch {}
     if(job && status(job).status!=="finished") cancel(job);
   }

@@ -23,7 +23,6 @@ const MANAGED_SIBLINGS = ["agy", "cross-validation"];
 const MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const TERMINAL_REASONS = new Set(["end_turn", "stop_sequence", "max_tokens"]);
 const MAX_TIMEOUT_SEC = 3600; // ceiling for the per-call timeout flags
-const MAX_TIMER_SEC = 2147483; // Node timer range for profile and environment values
 let requestedModel = null;
 let cliInvoked = false;
 
@@ -106,7 +105,7 @@ function validateInstall() {
   if (!isObject(release) || release.format !== 1 || release.state !== "active" ||
       typeof release.release_id !== "string" || !/^[a-f0-9]{64}$/.test(release.release_id) ||
       !isObject(release.files)) throw new Error("release marker is invalid");
-  const requiredFiles = ["mmx/scripts/mmx-chat.js", "mmx/scripts/fetch-timeout-guard.js", "mmx/profiles/local.json",
+  const requiredFiles = ["mmx/scripts/mmx-chat.js", "mmx/scripts/fetch-timeout-guard.js", "mmx/scripts/mmx-native-budget.js", "mmx/profiles/local.json",
                          "cross-validation/scripts/cross_validate.py"];
   if (process.env.MMX_GLOBAL_SLOT === "1") requiredFiles.push("mmx/scripts/mmx-provider-slot.js");
   for (const required of requiredFiles) {
@@ -452,6 +451,31 @@ function cliLaunch(mmx, env = process.env, platform = process.platform, guardFil
   return { argsPrefix, env: childEnv, base_url: baseUrl, fetch_timeout_guard: guard, base_url_env: baseUrlEnv };
 }
 
+// Inspection only. The parent can check both providers before launching either.
+// Recheck the same policy inside the wrapper before allocating its private claim.
+function resolveBudgetLaunch(env) {
+  const mmx = findMmx(process.platform, env[envKey(env, "PATH", process.platform)] || "");
+  if (!mmx) return { ok: false, reason: "cli_missing" };
+  if (mmx.unsafe || mmx.argsPrefix.length !== 1) return { ok: false, reason: "unverified_launcher" };
+  const pkg = mmxPackageEntry(mmx.argsPrefix[0]);
+  try {
+    const digest = pkg && createHash("sha256").update(fs.readFileSync(pkg.entry)).digest("hex");
+    if (!pkg || !require("./mmx-native-budget.js").supportedEntry(pkg.entry, pkg.root, digest)) {
+      return { ok: false, reason: "unverified_native_entry" };
+    }
+    const launch = cliLaunch(mmx, env);
+    if (!["preloaded", "proxy_limited"].includes(launch.fetch_timeout_guard)) {
+      return { ok: false, reason: launch.fetch_timeout_guard };
+    }
+    return { ok: true, reason: null, mmx, launch, entry_sha256: digest, cli_version: "1.0.29" };
+  } catch { return { ok: false, reason: "native_budget_unavailable" }; }
+}
+
+function preflightRequestBudget(env = process.env) {
+  const { ok, reason, entry_sha256, cli_version } = resolveBudgetLaunch(env);
+  return ok ? { ok, reason, entry_sha256, cli_version } : { ok, reason };
+}
+
 // Windows environment names are case-insensitive, but a copied environment
 // keeps the spelling each variable was set with.
 function envKey(env, name, platform) {
@@ -527,7 +551,7 @@ function readInput(file, label) {
   if ((raw[0] === 0xff && raw[1] === 0xfe) || (raw[0] === 0xfe && raw[1] === 0xff) || raw.includes(0)) {
     throw Object.assign(new Error(), { envelope: { status: "unsupported_encoding", error: `${label} must be UTF-8.` } });
   }
-  try { return new TextDecoder("utf-8", { fatal: true }).decode(raw); }
+  try { return { raw, text: new TextDecoder("utf-8", { fatal: true }).decode(raw) }; }
   catch {
     throw Object.assign(new Error(), { envelope: { status: "unsupported_encoding", error: `${label} must be valid UTF-8.` } });
   }
@@ -630,7 +654,7 @@ async function main() {
   for (let i = 0; i < argv.length; i += 2) {
     const flag = argv[i] === "-m" ? "--model" : argv[i];
     if (!["--prompt-file", "--system-file", "--model", "--max-tokens", "--profile-file",
-          "--timeout", "--wrap-timeout"].includes(flag)) {
+          "--timeout", "--wrap-timeout", "--observed-input-file", "--native-request-limit"].includes(flag)) {
       usageError("Unknown MMX wrapper option.");
     }
     if (i + 1 >= argv.length || !argv[i + 1] || argv[i + 1].startsWith("--") || options.has(flag)) {
@@ -640,6 +664,9 @@ async function main() {
   }
   const promptFile = options.get("--prompt-file");
   if (!promptFile) usageError("--prompt-file is required");
+  if (options.has("--native-request-limit") && options.get("--native-request-limit") !== "1") {
+    usageError("--native-request-limit accepts only 1.");
+  }
 
   try { validateInstall(); }
   catch {
@@ -659,6 +686,9 @@ async function main() {
   if ((maxTokensArg !== undefined && !/^\d+$/.test(maxTokensArg)) || !positiveInteger(maxTokens)) {
     usageError("--max-tokens must be a positive integer.");
   }
+  if (maxTokens > profile.max_tokens || maxTokens > 524288) {
+    usageError("Output tokens must fit both the configured profile and the 524288-token native limit.");
+  }
   const requestTimeout = timeoutArgument(options.get("--timeout"))
     ?? timeoutOverride("MMX_CHAT_REQ_TIMEOUT", profile.request_timeout_seconds);
   const wrapperTimeout = timeoutArgument(options.get("--wrap-timeout"))
@@ -666,25 +696,38 @@ async function main() {
   if (wrapperTimeout <= requestTimeout) {
     usageError("The wrapper timeout must exceed the request timeout.");
   }
-  if (requestTimeout > MAX_TIMER_SEC || wrapperTimeout > MAX_TIMER_SEC) {
-    usageError("Timeouts must fit the Node timer range.");
+  if (requestTimeout > MAX_TIMEOUT_SEC || wrapperTimeout > MAX_TIMEOUT_SEC) {
+    usageError(`Effective request and wrapper timeouts must not exceed ${MAX_TIMEOUT_SEC} seconds.`);
   }
 
-  const prompt = readInput(promptFile, "prompt");
+  const { raw: promptBytes, text: prompt } = readInput(promptFile, "prompt");
   if (!prompt.length) usageError("prompt file is empty");
   const systemFile = options.get("--system-file");
-  const system = systemFile ? readInput(systemFile, "system") : "";
-  const mmx = findMmx();
-  if (!mmx) {
+  const system = systemFile ? readInput(systemFile, "system").text : "";
+  const policy = resolveBudgetLaunch(process.env);
+  if (policy.reason === "cli_missing") {
     fail({ status: "cli_missing", error: "mmx CLI not found on PATH." });
     return;
   }
-  if (mmx.unsafe) usageError("Unsafe cmd.exe batch path. Use a resolvable npm shim.");
-  const launch = cliLaunch(mmx);
+  telemetry.native_request_budget = { scope: "native_fetch", limit: 1, attempts: 0, blocked: false, verified: false,
+    max_output_tokens: maxTokens, output_limit_verified: false };
+  if (!policy.ok) {
+    fail({ status: "native_budget_unavailable", reason: policy.reason,
+      error: "Choose the audited mmx-cli 1.0.29 npm entry on PATH with its undici dependency and guard." });
+    return;
+  }
+  const { mmx, launch } = policy;
+  telemetry.native_request_budget.entry_sha256 = policy.entry_sha256;
+  telemetry.native_request_budget.cli_version = policy.cli_version;
   telemetry.fetch_timeout_guard = launch.fetch_timeout_guard;
   telemetry.base_url_env = launch.base_url_env;
 
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mmx-chat-"));
+  const claim = path.join(tempDir, "model-fetch.claim");
+  tempFiles.add(claim);
+  tempFiles.add(claim + ".blocked");
+  launch.env.MMX_CHAT_NATIVE_CLAIM = claim;
+  launch.env.MMX_CHAT_NATIVE_MAX_TOKENS = String(maxTokens);
   let guardStatusFile = null;
   if (["preloaded", "proxy_limited"].includes(launch.fetch_timeout_guard)) {
     guardStatusFile = path.join(tempDir, "fetch-guard-status");
@@ -701,7 +744,20 @@ async function main() {
   try { fs.writeFileSync(messagesFd, JSON.stringify(messages)); }
   finally { fs.closeSync(messagesFd); }
 
-  const chatArgs = ["text", "chat", "--messages-file", path.join(tempDir, "messages.json")];
+  const messagesPath = path.join(tempDir, "messages.json");
+  const observation = options.get("--observed-input-file");
+  if (observation) {
+    const delivered = JSON.parse(fs.readFileSync(messagesPath, "utf8"));
+    if (system || delivered.length !== 1 || delivered[0].role !== "user" || delivered[0].content !== prompt) {
+      usageError("A review observation requires one complete user message.");
+    }
+    fs.writeFileSync(observation, JSON.stringify({
+      side: "mmx", argv, env_keys: Object.keys(process.env).sort(),
+      prompt_file_b64: promptBytes.toString("base64"),
+      delivery: { method: "messages-file", prompt_sha256: createHash("sha256").update(delivered[0].content).digest("hex") },
+    }) + "\n", { mode: 0o600, flag: "wx" });
+  }
+  const chatArgs = ["text", "chat", "--messages-file", messagesPath];
   if (model !== null) chatArgs.push("--model", model);
   chatArgs.push("--max-tokens", String(maxTokens), "--output", "json", "--non-interactive", "--no-color",
     "--timeout", String(requestTimeout));
@@ -755,6 +811,32 @@ async function main() {
     }
   }
   const elapsedMs = Date.now() - requestStarted;
+  const budget = telemetry.native_request_budget;
+  try {
+    const value = fs.readFileSync(claim, "utf8");
+    const allowed = Number(value.trim());
+    if (!Number.isSafeInteger(allowed) || allowed < 1 || allowed > maxTokens || value !== String(allowed) + "\n") {
+      throw new Error("bad native budget record");
+    }
+    budget.attempts = 1;
+    budget.output_limit_verified = true;
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      budget.attempts = null;
+      fail({ status: "native_budget_unverified", exit_code: chat.code, error: "Unreadable native request budget record." });
+      return;
+    }
+  }
+  try {
+    const blocked = fs.readFileSync(claim + ".blocked", "utf8");
+    if (blocked !== "blocked\n") throw new Error("bad native budget record");
+    budget.blocked = true;
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      fail({ status: "native_budget_unverified", exit_code: chat.code, error: "Unreadable native budget refusal record." });
+      return;
+    }
+  }
   if (guardStatusFile) {
     let initialized = false;
     try {
@@ -767,7 +849,12 @@ async function main() {
           error: "MMX fetch timeout guard initialization could not be confirmed." });
         return;
       }
-    }
+    } else budget.verified = !chat.termination_failed;
+  }
+  if (budget.blocked) {
+    fail({ status: "native_budget_exceeded", exit_code: chat.code,
+      error: "The native model fetch exceeded the authorized request count or output token limit." });
+    return;
   }
   if (chat.kind !== "closed") {
     const status = chat.kind === "spawn_error" ? "api_error" : chat.kind;
@@ -790,6 +877,11 @@ async function main() {
     return;
   }
   const result = withFetchLimitHint(classifyReply(out, err, chat.code), elapsedMs);
+  if (result.status === "ok" && (!budget.verified || budget.attempts !== 1)) {
+    fail({ status: "native_budget_unverified", exit_code: chat.code,
+      error: "A successful native model fetch could not be bound to this request budget." });
+    return;
+  }
   if (result.http_status === 404 && launch.base_url !== null) {
     result.base_url_env_value = displayUrl(launch.base_url);
   }
@@ -802,5 +894,5 @@ if (require.main === module) {
     fail(error.envelope ?? { status: "api_error", exit_code: 1, code: null, error: "MMX wrapper failed locally." });
   }).finally(cleanup);
 } else {
-  module.exports = { safeCmdArgument, npmShimEntry, mmxPackageEntry, linkedEntry, cliLaunch, withFetchLimitHint, displayUrl, findMmx, terminateChildTree };
+  module.exports = { safeCmdArgument, npmShimEntry, mmxPackageEntry, linkedEntry, cliLaunch, preflightRequestBudget, withFetchLimitHint, displayUrl, findMmx, terminateChildTree };
 }

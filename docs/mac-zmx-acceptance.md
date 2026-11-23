@@ -6,13 +6,13 @@
 
 - Mac 历史安装正本由用户现场记录为 `e0d6aad`，开发目录曾为 `f052716` 且有未提交文件。这不是本次账号对 Mac 本机的实时取证。
 - 已在新分支修复 Batch 安全默认值、ZCode 审核票资格、回执独占发布、ZCode Job 快照与取消结果保存，并针对 MMX Job 增强本地 runtime 绑定。受管安装树尚未替换。
-- `review-run.js run --backend real` 尚未实现，故真实统一审核 `REVIEW_GATE=FAIL`。fixture 成功不等于真实模型成功。
+- MAC-06 已接入 `review-run.js run --backend real`。2026-11-23 在本机 macOS arm64、Node 26.13.1、ZCode 0.17.1、mmx 1.0.29 上完成单包验收。GLM-5.3-Flash 和 MiniMax-M3.1-Flash 分别从同一份合成材料准确读回随机值，两票有效，轮次 `COMPLETED`、裁决 `PASS`。离线 `verify` 返回 `integrity=ok`、`replay=match`。
 - Stage 4 的 macOS hosted runner 并非用户 Mac。315 秒代理长请求、Keychain、真实模型、各 harness 发现情况均必须本机另验收。
-- MAC-08 v1.5.2 源码已统一把完整渲染 prompt 写入私有 `--attach` 文件，argv 仅保留固定短句；假 CLI 离线检查不等于 Mac `zcode-runtime 0.17.1` 真正消费完整附件。正式 Mac 受管副本未切换，敏感材料与真实模型仍未获验收授权。
+- MAC-08 的完整渲染 prompt 通过私有 `--attach` 文件投递，argv 只含固定短句。上述 MAC-06 实机回执在零工具调用下读回了仅存在于小包中的合成值。本次观测覆盖该小包，归档保留其渲染字节数和摘要。
 - **B0-PREP 代理勘误**：仓库 `skills/mmx/scripts/mmx-chat.js::cliLaunch` **保留**代理环境及 CLI 配置的 proxy，检测到代理只记录 `proxy_limited`；它剥离的是 `MINIMAX_BASE_URL` 末尾的 `/v1`，**不是代理剥离**。旧自定义 bash 包装器的代理处理属于另一条执行链，不能套用到仓库 wrapper。
 - **B0-PREP Guard 勘误**：`fetch-timeout-guard.js` 仅设置 undici dispatcher 的 `headersTimeout:0/bodyTimeout:0`，初始化 `applied` **不是网络出站拦截或地址/端口授权证明**；`preloaded` 也不能证明真实 CLI 后续没有替换 dispatcher。
 - **验收范围切分**：315 秒 **Node 合成回环** ≠ **实际 mmx-cli 经过仓库 wrapper 的回环** ≠ **真实供应商请求**；三者必须单独计数、单独标记，不互推 PASS。历史 Mac 报告的 315 秒是合成 Node 对照，不是 B0 真实 CLI 已通过。
-- **Agent 与模型**：主控和多个 `zhipu-bigmodel/glm-5.3-flash` 同模型子 Agent 的工作分工，仅是编排；它**不构成 MAC-06 ZCode/MMX 两个不同模型的真实审核**。MAC-06 的 `--backend real` 仍未实现。
+- MAC-06 的模型身份分别取自 ZCode 的 `runtime.model_request` 事件和 MMX 的 `response.model`，轮次记录列出实际模型族和各侧资格。
 - **Node 范围**：Mac 报告中 Node v24.15.0 的完整 487 项回归与 Node v26.13.1 的单一统一审核套件 247/247 必须分开归档；**Node 26 的 247 项不代表第二 Node 完整 487 项通过**。
 - **B0 独立门禁**：参见 [B0-PREP 证据范围、原生隔离调查和待批 B0-RUN 单](mac-b0-prep.md)。没有真实监听的禁止端口 canary、完整子进程/凭据/代理隔离证明前，`MAC09_REAL_CLI_LOOPBACK=BLOCKED`、`AUTHORIZATION=NOT_GRANTED`。无需为这些勘误重跑旧 487 项或重复 315 秒。
 
@@ -82,7 +82,14 @@ ZCode 目标 runtime 是 `0.17.1`；Mac 曾报告 mmx-cli `1.0.29`，须以本�
 
 ## 5. 真实模型与长任务测试（需新的明确授权）
 
-用户另行批准实际额度成本后，分别在隔离目录使用已批准的**非敏感短材料**测试 ZCode、MMX 的原生 wrapper；每方只调用一次，保留 stdout 原样、独立进程退出码、`model_identity_source`、`stop_reason`、`cleanup_confirmed`、`review_gate`、回执及本地 SHA。
+MAC-06 通过隔离 checkout 的统一入口派发。准备非敏感短材料，令 `PACKET` 指向审核包、`NEW_RUN_DIR` 指向一个尚未创建的目录，从 checkout 根目录执行：
+
+```bash
+node skills/zcode-mmx-review/scripts/review-run.js run --backend real --packet "$PACKET" --out "$NEW_RUN_DIR"
+node skills/zcode-mmx-review/scripts/review-run.js verify --run "$NEW_RUN_DIR"
+```
+
+每侧各发起一次；核对原始 stdout、独立进程退出码、模型身份来源、终态、材料绑定和裁决。单侧内容 `FAIL` 也可构成有效审核。长任务、回环、持久 job 和各 harness 的独立验收另见下列条目。
 
 - ZCode：确认原生 `zcode-runtime 0.17.1`、`ZCODE_CLI_MODE=plan`、零工具调用、Keychain 可用，不将密钥或长正文复制到 argv。
 - MMX：验证响应中的真实 MiniMax 模型身份，代理状态 `fetch_timeout_guard`，纯思考/截断/404/429 时绝不自动重发。仅在实际回环本地测试服务、实际 mmx-cli 和用户同意的时长下做 315 秒合成请求。

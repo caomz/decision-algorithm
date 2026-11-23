@@ -5,9 +5,9 @@
 
 ---
 
-## 统一入口（离线原型）
+## 统一入口
 
-[`scripts/review-run.js`](scripts/review-run.js) 是仓库内的**离线统一入口原型**：它把同一个逻辑审核包（由 `skills/zcode/scripts/review.js` 的 `buildPrompt` 生成）交给两侧，并用**同一个** `validateReview` 判定有效票，替代“两边各说各话”的回执口径。它是本轮（2026-11-19/20）改造的落地物，不改变已安装的运行流程。
+在本目录运行 `node scripts/review-run.js`。显式指定 `--backend real` 会由当前 checkout 的 ZCode 和 MMX wrapper 各发起一次审核。两侧收到相同的审核材料及证据 ID，入口用同一个 `validateReview` 判定有效票。
 
 ### 命令
 
@@ -15,7 +15,14 @@
 # 预检（只查本地清单一致性与文件齐全，不启动任何 CLI）
 node scripts/review-run.js doctor --offline [--json]
 
-# 一轮 fixture 复核：--backend 必填；real 是保留值，本版在读取任何输入前即以退出码 2 拒绝
+# 使用已脱敏的审核包和全新输出目录。Mac 需能通过 PATH 找到已登录的 zcode 和 mmx。
+node scripts/review-run.js run --backend real --packet "$PACKET" --out "$NEW_RUN_DIR"
+node scripts/review-run.js verify --run "$NEW_RUN_DIR"
+
+# 长包先计算预算，再显式授权足够的片数；默认单片。
+node scripts/review-run.js run --backend real --packet "$PACKET" --out "$NEW_RUN_DIR" --max-shards 2
+
+# 本地 fixture 复核
 node scripts/review-run.js run \
   --backend fixture --scenario both-pass \
   --packet examples/packet.json \
@@ -39,11 +46,13 @@ fixture 后端只用 `tests/fixtures/backends/` 下的固定假 wrapper 与场�
 
 每一方分别记录**回执和内容校验**与**材料绑定**两项结果。只有同时满足以下条件的响应才有投票资格：正常完成；回执和内容校验通过（wrapper 零退出、stdout 恰好一个严格 JSON、`cli_invoked/exit_code/status/complete/truncated`、模型身份来源与 stop_reason 符合各侧合同、ZCode 另加零工具与 `cleanup_confirmed===true`，且回执 review 与本地 `validateReview` 复判一致）；实收的材料字节与预期一致（ZCode 比对 material+IDs 并重建 P，MMX 比对实收 P；argv 参数同时核对）。
 
-汇总规则：取消 → `NOT_EVALUATED`；任一有资格的票为 `FAIL` → `FAIL`（另一方无效或两方同族都不会抹掉已绑定材料的单方 FAIL）；`COMPLETED` 且两方 `PASS` → `PASS`；其余 → `NOT_EVALUATED`。`COMPLETED` 另要求两方模型族（glm / minimax 前缀表）已知且不同。退出码：`PASS`=0，`FAIL`=1，其他=2。结果始终标注 `backend=fixture`，这不是外部复核。
+取消的轮次返回 `NOT_EVALUATED`。其余轮次中，任一有效 `FAIL` 优先；两票均有效、模型族已知且不同、两方均给出 `PASS` 时返回 `PASS`，其他情形返回 `NOT_EVALUATED`。`round_status=COMPLETED` 表示双侧已完成有效复核。退出码分别为 `PASS=0`、`FAIL=1`、`NOT_EVALUATED=2`。结果包含实际选用的 `backend`。
 
 `--timeout-seconds`（1..3570，默认 600）同时传给两侧：ZCode 收到 `--timeout-seconds T`，MMX 收到 `--timeout T` 与 `--wrap-timeout T+30`；`--max-tokens` 只约束 MMX。fixture 父进程对每个假 wrapper 的截止时间固定为 30 秒。material 上限 192 KiB（v2 补丁另限 128 KiB），超限提示改用 batch 入口按分片手工处理。
 
 ### 记录与 verify
+
+真实运行在派发前写入 `request.json`。每侧 wrapper 从实际交给原生 CLI 的附件或消息文件读回正文并记录摘要。每侧退出后立即保存原始 stdout/stderr。若进程中断，可先检查原目录的请求、实收记录和回执；再次用新的目录运行会发起新的请求。
 
 每次 run 在 `--out` 下留下完整档案：输入组原字节（`packet.json`、`material.txt`、`evidence-ids.json`、`prompt.txt`）、`request.json`（预计哈希、两侧 argv、判定代码与溯源文件的 sha256）、每侧的 `*-execution.json`、`*-observed-input.json`（实收 argv/环境键名/原字节 Base64；未捕获记 `unobserved`）、stdout/stderr 原样、`result.json`，最后写 `record-manifest.json`。
 
@@ -59,10 +68,8 @@ DIFFSTAT 的补丁解析规则：同一文件段内文本 hunk 与二进制标�
 
 - 只在本 checkout 内有效：入口跨目录 require `../zcode/scripts/review.js` 等文件，不解析已安装的同名 skill（`doctor --offline` 会检查这一点）。
 - 不替代 Mac 正本的持久 job、排队和重试合同；`mmx-run.js` 的多片合同仍以正本为准。
-- 只支持单分片：material 上限 192 KiB。
-- **真实 ZCode 在零工具模式下读不到超过 24 KiB 的附件**（实测现象：约 84KB 材料的回执为 `review_schema_mismatch`，模型正文称需"分页读附件"而工具全部被禁；证据存档见运行报告）。真实使用前，ZCode 侧的材料须按 ≤24 KiB 分片（用 zcode-batch 的分片合同）；192 KiB 只是入口自身的上限，对真实 ZCode 不成立。
-- 没有进程树监督，也没有 Windows 监督。
-- PR #4 对 300 秒限制的缓解是有条件的（依赖本机 `~/.local/bin/mmx` 包装脚本与 `fetch_timeout_guard=custom_launcher` 的路径），本入口不继承该缓解。
+- fixture 的 material 上限为 192 KiB。real 每片按完整渲染后附件的 UTF-8 字节数计算，上限 24 KiB。通过 `--max-shards N` 显式授权多片，支持 1..32。整包先规划，超预算在派发前报错。每侧每片最多一次；`--max-tokens` 为每次模型请求的输出 Token 授权上限。可用 `--mmx-bin-dir ABS_DIR` 显式为 MMX 选择可验证的 npm 原生入口。
+- Mac 上的取消由两侧 wrapper 清理各自启动的 CLI。MMX 在回执中记录实际的 `fetch_timeout_guard`；代理和原生 CLI 的长请求能力按对应环境单独验收。
 
 ---
 
@@ -148,7 +155,7 @@ node skills/zcode-mmx-review/scripts/shard-coverage.js verify \
 - 存在 `goal.acceptance` 时，为每条验收条件建立**全部分片**的保守必查矩阵；无验收条件时，不因模型“已检查”而得到 PASS。
 - `evaluateCoverage(plan, records, { cancelled })` 是纯函数：先校验分片编号、字节区间、证据 ID 和完整验收矩阵的结构；调用方还必须先从原始 packet 重建/核验 plan，再使用现有 `evaluateSide` 和输入绑定验证每个分片对应的 ZCode / MMX 回执、模型族、进程状态后，才能喂入这些记录。单纯人工伪造 `eligible:true` 或一个摘要布尔值，不是可信执行证明。
 - 任何缺片、重复/未知分片、哈希不符、模型族不独立、材料未绑定或未验收均阻断 PASS；已验证的 P1 FAIL 不会被其他分片缺失冲淡。整轮被取消时，调用方必须传入 `cancelled: true`，最终判定按现有执行器规则降为 `NOT_EVALUATED`，保留原始缺陷回执供诊断。
-- 这是**分片计划 + 完整性检查 + 覆盖判定模块**，还不是在 `review-run.js run` 里自动发起多分片真实审核的生产执行器。CLI `run --backend real` 仍处于禁用状态（阶段 5 再接入），旧版 fixture 归档与 `review-v1` 保持不变。
+- 多片真实入口把每片范围、原材料哈希和本轮标识一并绑定到两侧输入。顶层复验从原包重建计划和每片 packet，并复验每个真实子档案。只有作者显式声明 `goal.acceptance_scope="per_shard"`、各片条件均独立可验、双侧资格及覆盖均成立时，才接受汇总 PASS。缺省或 `whole_document` 保留跨片全局待验；已绑定的有效 FAIL 和取消裁决沿用单包优先级。
 - 当前分片是规范材料的连续字节段，可能跨越 JSON 或证据结构边界。后续执行器仍需为每片提供目标、验收条件和关联上下文，并结合全部分片审核；不能把这些原始片段直接当作语义完整的独立审核包。
 - 本模块验证本地计划结构及传入资格记录的一致性；分片交付与复核资格是否成立，仍依赖调用方先完成的执行验证和输入绑定，不能由本模块接受的布尔字段独立证明，也不保证模型真正理解每条验收条件。主 Agent 应保留审查、抽样复核与误报纠正流程。
 

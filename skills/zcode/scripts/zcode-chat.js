@@ -8,7 +8,7 @@ const { createHash } = require("node:crypto");
 const { spawn, spawnSync } = require("node:child_process");
 const { buildPrompt, validateReview, validateIds, strictJson } = require("./review.js");
 
-const VERSION = "1.5.2";
+const VERSION = "1.6.0";
 const SUPPORTED_CLI = "0.17.1";
 // The CLI accepts build/edit/plan/yolo/guarded. This wrapper only ever uses the
 // two read-only modes: macOS keeps the plan mode it was accepted with, Windows
@@ -49,7 +49,6 @@ function decodeInputBytes(bytes) {
   try { return new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
   catch { fail("input_error"); }
 }
-function readUtf8(file) { return decodeInputBytes(fs.readFileSync(file)); }
 
 // The durable worker sends the SAME verified raw byte buffers through stdin.
 // Never reread a mutable job input path after request verification. Missing,
@@ -90,6 +89,8 @@ async function readSealedJobInputs(args) {
   return {
     material: decodeInputBytes(prompt.bytes),
     ids: ids ? validateIds(strictJson(decodeInputBytes(ids.bytes))) : null,
+    materialBuffer: prompt.bytes,
+    idsBuffer: ids?.bytes,
     request_sha256: expected,
     input_sha256: {
       "prompt.txt": prompt.sha256,
@@ -116,7 +117,7 @@ function checkInstall() {
   if (!fs.existsSync(marker)) return;
   if (fs.lstatSync(marker).isSymbolicLink()) fail("install_mismatch");
   const manifest = strictJson(fs.readFileSync(marker, "utf8"));
-  const required = ["SKILL.md", "scripts/zcode-chat.js", "scripts/zcode-run.js", "scripts/zcode-batch.js", "scripts/review.js", "references/review-v1.schema.json"];
+  const required = ["SKILL.md", "scripts/zcode-chat.js", "scripts/zcode-run.js", "scripts/zcode-batch.js", "scripts/request-budget.js", "scripts/request-budget-preload.cjs", "scripts/review.js", "references/review-v1.schema.json"];
   if (manifest.format !== 1 || !manifest.files || !required.every(name => Object.hasOwn(manifest.files, name))) fail("install_mismatch");
   for (const [relative, digest] of Object.entries(manifest.files)) {
     const parts = relative.split("/");
@@ -206,12 +207,26 @@ function isolatedEnv(home, env = process.env) {
   const dataBase = env.ZCODE_DATA_BASE_DIR || os.homedir();
   return {
     ...childEnv, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: path.join(home, ".config"),
-    ZCODE_DATA_BASE_DIR: dataBase,
+    ZCODE_DATA_BASE_DIR: dataBase, ZCODE_MODEL_RETRY_MAX_RETRIES: "0",
     ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: env.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE || path.join(dataBase, ".zcode/v2/provider_config.json"),
     ZCODE_STORAGE_DIR: path.join(home, ".zcode/cli"), ZCODE_LOG_DIR: path.join(home, "logs"),
     ZCODE_SESSION_DB_PATH: path.join(home, "sessions.db"),
     ...Object.fromEntries(["ZCODE_HTTP_PROXY", "ZCODE_NO_PROXY", "ZCODE_AGENT_CA_CERT"].filter(key => env[key]).map(key => [key, env[key]])),
   };
+}
+
+function preflightRequestBudget(env = process.env) {
+  try {
+    checkInstall();
+    if (env.ZCODE_HTTP_PROXY || env.ZCODE_AGENT_CA_CERT) {
+      return { ok: false, request_limit: 1, reason: "proxy_output_limit_unverified" };
+    }
+    const launch = resolveLaunch(findCli(undefined, env), env.HOME || os.homedir());
+    const policy = require("./request-budget.js").prepare(launch);
+    return { ok: true, request_limit: 1, entry_sha256: policy.entry_sha256 };
+  } catch (error) {
+    return { ok: false, request_limit: 1, reason: error.status || "request_budget_unavailable" };
+  }
 }
 
 function setupMacKeychain(home, platform = process.platform, run = spawnSync) {
@@ -254,6 +269,7 @@ class EventParser {
       if (typeof payload.modelId !== "string" || typeof payload.providerId !== "string" || !payload.modelId.trim() || !payload.providerId.trim()) fail("schema_mismatch");
       if (payload.toolCount !== 0) fail("policy_violation");
       this.requests++;
+      if (this.requests > 1) fail("request_budget_exceeded");
       this.models.push({ provider: payload.providerId, model: payload.modelId });
     }
     if (event.type === "session.updated" && payload.querySource === "main_turn" && typeof payload.stopReason === "string") {
@@ -270,6 +286,7 @@ class EventParser {
     else this.events.push({ sessionId: event.sessionId, turnId: event.turnId });
   }
   finish() {
+    if (this.requests > 1) fail("request_budget_exceeded");
     const result = this.result;
     if (!result || !this.completeTurn || !this.requests || !result.sessionId || !result.turnId || !result.traceId ||
         typeof result.response !== "string" || !result.response.trim() || result.projection?.status !== "idle" ||
@@ -323,8 +340,8 @@ function resolveMode(env = process.env, platform = process.platform) {
 }
 
 function parseArgs(argv) {
-  const args = { mode: "chat", timeout: 1200 };
-  const names = { "--prompt-file": "prompt", "--mode": "mode", "--evidence-ids-file": "ids", "--cli-path": "cli", "--output-dir": "output", "--timeout-seconds": "timeout" };
+  const args = { mode: "chat", timeout: 1200, maxOutputTokens: 524288 };
+  const names = { "--prompt-file": "prompt", "--mode": "mode", "--evidence-ids-file": "ids", "--cli-path": "cli", "--output-dir": "output", "--timeout-seconds": "timeout", "--observed-input-file": "observed", "--max-output-tokens": "maxOutputTokens" };
   const seen = new Set();
   for (let i = 0; i < argv.length; i++) {
     const key = names[argv[i]];
@@ -332,6 +349,8 @@ function parseArgs(argv) {
     seen.add(key); args[key] = argv[++i];
   }
   args.timeout = Number(args.timeout);
+  if (!/^[1-9][0-9]{0,5}$/.test(String(args.maxOutputTokens)) || Number(args.maxOutputTokens) > 524288) fail("usage_error");
+  args.maxOutputTokens = Number(args.maxOutputTokens);
   if (!args.prompt || !["chat", "review", "challenge"].includes(args.mode) || !(args.timeout > 0 && args.timeout <= 21600) ||
       (args.mode !== "chat" && !args.ids) || (args.mode === "chat" && args.ids)) fail("usage_error");
   return args;
@@ -339,10 +358,11 @@ function parseArgs(argv) {
 
 async function main(argv, deps = {}) {
   if (argv.length === 1 && argv[0] === "--version") return { status: "version", version: VERSION };
-  if (!argv.length || (argv.length === 1 && argv[0] === "--help")) return { status: "usage", usage: "node zcode-chat.js --prompt-file FILE [--mode chat|review|challenge --evidence-ids-file FILE] [--output-dir NEW_DIR] [--timeout-seconds 1200] [--cli-path EXECUTABLE]" };
+  if (!argv.length || (argv.length === 1 && argv[0] === "--help")) return { status: "usage", usage: "node zcode-chat.js --prompt-file FILE [--mode chat|review|challenge --evidence-ids-file FILE] [--output-dir NEW_DIR] [--timeout-seconds 1200] [--max-output-tokens N] [--cli-path EXECUTABLE]" };
   const receipt = { status: "input_error", cli_invoked: false, exit_code: null, signal: null, complete: false, model: null, stop_reason: null, truncated: null, usage: null, review_gate: "NOT_EVALUATED" };
   let child;
   let directory;
+  let budgetDir, budgetPolicy, parser;
   let signalCancelled = false;
   const onEarlySignal = () => { signalCancelled = true; };
   process.on("SIGINT", onEarlySignal);
@@ -351,12 +371,13 @@ async function main(argv, deps = {}) {
     try { checkInstall(); } catch { fail("install_mismatch"); }
     const args = parseArgs(argv);
     const sealed = await readSealedJobInputs(args);
-    const rawMaterial = sealed ? null : fs.readFileSync(args.prompt);
+    const rawMaterial = sealed ? sealed.materialBuffer : fs.readFileSync(args.prompt);
     const material = sealed ? sealed.material : decodeInputBytes(rawMaterial);
     const materialBytes = sealed ? sealed.input_bytes["prompt.txt"] : rawMaterial.length;
     const materialSha256 = sealed ? sealed.input_sha256["prompt.txt"] :
       createHash("sha256").update(rawMaterial).digest("hex");
-    const ids = sealed ? sealed.ids : (args.ids ? validateIds(strictJson(readUtf8(args.ids))) : null);
+    const rawIds = sealed ? sealed.idsBuffer : (args.ids ? fs.readFileSync(args.ids) : null);
+    const ids = sealed ? sealed.ids : (rawIds ? validateIds(strictJson(decodeInputBytes(rawIds))) : null);
     if (sealed) {
       receipt.job_request_sha256 = sealed.request_sha256;
       receipt.job_input_sha256 = sealed.input_sha256;
@@ -369,6 +390,8 @@ async function main(argv, deps = {}) {
     const renderedPromptSha256 = createHash("sha256").update(renderedPromptBytes).digest("hex");
     const cli = findCli(args.cli);
     const launch = resolveLaunch(cli);
+    const budget = require("./request-budget.js");
+    budgetPolicy = { ...budget.prepare(launch), max_output_tokens: args.maxOutputTokens };
     const mode = (deps.resolveMode || resolveMode)();
     const version = spawnSync(launch.command, [...launch.prefix, "--version"], { encoding: "utf8", timeout: 10000, maxBuffer: 4096, shell: false });
     receipt.cli_version = version.stdout?.trim().replace(/^zcode\s+/, "") || null;
@@ -412,18 +435,32 @@ async function main(argv, deps = {}) {
     privateWrite(attachedFile, renderedPromptBytes);
     // Fail before CLI spawn if the private attachment does not match the exact
     // rendered prompt. Never fall back to placing the body in --prompt argv.
-    if (!fs.readFileSync(attachedFile).equals(renderedPromptBytes)) fail("input_error");
+    const attachmentBytes = fs.readFileSync(attachedFile);
+    if (!attachmentBytes.equals(renderedPromptBytes)) fail("input_error");
+    if (args.observed) {
+      privateWrite(args.observed, JSON.stringify({
+        side: "zcode", argv, env_keys: Object.keys(process.env).sort(),
+        prompt_file_b64: rawMaterial.toString("base64"),
+        evidence_ids_file_b64: rawIds?.toString("base64"),
+        delivery: { method: "attachment", prompt_sha256: createHash("sha256").update(attachmentBytes).digest("hex") },
+      }) + "\n");
+    }
     const stdoutFd = fs.openSync(path.join(directory, "stdout.ndjson"), "wx", 0o600);
     const stderrFd = fs.openSync(path.join(directory, "stderr.log"), "wx", 0o600);
-    const parser = new EventParser();
+    parser = new EventParser();
     const decoder = new TextDecoder("utf-8", { fatal: true });
     let pending = "", bytes = 0, problem = null, termination;
-    const cliArgs = [...launch.prefix, "--prompt", ATTACHED_PROMPT, "--attach", attachedFile,
+    budgetDir = path.join(directory, "request-budget");
+    fs.mkdirSync(budgetDir, { mode: 0o700 });
+    const cliArgs = ["--require", budgetPolicy.preload, ...launch.prefix, "--prompt", ATTACHED_PROMPT, "--attach", attachedFile,
       "--cwd", work, "--mode", mode, "--output-format", "stream-json",
       "--workflow-mode", "disabled", "--toolsearch-mode", "off",
       "--disallowed-tools", DENIED_TOOLS.join(","), "--no-color"];
     if (cancellationRequested()) fail("cancelled");
-    child = spawn(launch.command, cliArgs, { cwd: work, env: isolatedEnv(home), shell: false, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });    receipt.cli_invoked = Boolean(child.pid);
+    const childEnv = { ...isolatedEnv(home), ZCODE_WRAPPER_ENTRY_SHA256: budgetPolicy.entry_sha256,
+      ZCODE_WRAPPER_BUDGET_DIR: budgetDir, ZCODE_WRAPPER_OUTPUT_LIMIT: String(args.maxOutputTokens) };
+    child = spawn(launch.command, cliArgs, { cwd: work, env: childEnv, shell: false, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
+    receipt.cli_invoked = Boolean(child.pid);
     progress("running");
     const stop = status => { if (!problem) { problem = status; termination = terminateTree(child); } };
     const timeout = setTimeout(() => stop("timeout"), args.timeout * 1000);
@@ -464,11 +501,15 @@ async function main(argv, deps = {}) {
       receipt.stop_reason = parser.reasons.at(-1);
       receipt.truncated = parser.reasons.some(reason => ["length", "max_tokens"].includes(reason));
     }
+    const blockedReason = budget.observation(budgetDir, budgetPolicy, parser.requests).blocked_reason;
+    if (blockedReason) fail(blockedReason);
     if (problem) fail(problem);
     if (result.code !== 0 || result.signal) fail("cli_error");
     pending += decoder.decode();
     if (pending.trim()) parser.accept(pending);
     Object.assign(receipt, parser.finish());
+    const observedBudget = budget.observation(budgetDir, budgetPolicy, parser.requests);
+    if (!observedBudget.verified || observedBudget.attempts !== 1 || observedBudget.blocked || !observedBudget.output_limit_verified) fail("request_budget_unverified");
     if (receipt.cleanup_confirmed === false) fail("cleanup_error");
     if (!receipt.complete) fail("incomplete");
     if (args.mode !== "chat") {
@@ -487,6 +528,7 @@ async function main(argv, deps = {}) {
     receipt.review_gate = "NOT_EVALUATED";
     if (child?.pid && child.exitCode === null && child.signalCode === null) receipt.cleanup_confirmed = await terminateTree(child);
   }
+  if (budgetDir) receipt.native_request_budget = require("./request-budget.js").observation(budgetDir, budgetPolicy, parser?.requests ?? 0);
   if (directory) {
     try {
       atomicJson(path.join(directory, "progress.json"), { phase: "finished", wrapper_pid: process.pid, cli_pid: child?.pid ?? null, updated_at: new Date().toISOString(), status: receipt.status, complete: receipt.complete });
@@ -504,4 +546,4 @@ if (require.main === module) main(process.argv.slice(2)).then(result => {
   process.exitCode = ["ok", "usage", "version"].includes(result.status) ? 0 : 1;
 }).catch(() => { process.stdout.write('{"status":"internal_error","complete":false}\n'); process.exitCode = 1; });
 
-module.exports = { EventParser, resolveLaunch, isolatedEnv, setupMacKeychain, DENIED_TOOLS, RUNTIME_CONFIG, CLI_MODES, checkInstall, parseArgs, resolveMode, main };
+module.exports = { EventParser, resolveLaunch, preflightRequestBudget, isolatedEnv, setupMacKeychain, DENIED_TOOLS, RUNTIME_CONFIG, CLI_MODES, checkInstall, parseArgs, resolveMode, main };

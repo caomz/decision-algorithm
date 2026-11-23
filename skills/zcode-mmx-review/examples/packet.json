@@ -3,7 +3,7 @@
     {"id": "F1", "text": "The deliverable adds an offline unified entry under skills/zcode-mmx-review that hands the same logical review packet to both the ZCode and MMX sides."},
     {"id": "F2", "text": "Both sides are adjudicated by the same validator, skills/zcode/scripts/review.js validateReview, on the evidence IDs derived from the packet facts."},
     {"id": "F3", "text": "The fixture backend only runs the fixed fake wrappers under tests/fixtures/backends and never contacts a network endpoint."},
-    {"id": "F4", "text": "The real backend is a reserved value and exits with code 2 before reading any input or starting any process."}
+    {"id": "F4", "text": "The run command requires an explicit backend. Only real dispatches both checkout wrappers for provider review."}
   ],
   "constraints": [
     "No real model calls, logins, credentials, or package installs during this stage.",

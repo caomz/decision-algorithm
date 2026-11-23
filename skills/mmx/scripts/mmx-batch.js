@@ -135,7 +135,7 @@ function readProfileBudget(file) {
 
 function parseArgs(argv) {
   const out = { promptFiles: [], promptsDir: null, concurrency: null, model: null,
-    maxTokens: null, timeout: null, wrapTimeout: null, profileFile: null, receiptFile: null, allowPaidRetry: false };
+    maxTokens: null, retryMaxTokens: null, timeout: null, wrapTimeout: null, profileFile: null, receiptFile: null, allowPaidRetry: false };
   const seen = new Set();
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -157,12 +157,14 @@ function parseArgs(argv) {
         break;
       }
       case "--model": out.model = next(); break;
-      case "--max-tokens": {
+      case "--max-tokens":
+      case "--retry-max-tokens": {
         const value = next();
         if (!/^\d+$/.test(value) || !positiveInteger(Number(value))) {
           usageError("--max-tokens must be a positive integer.");
         }
-        out.maxTokens = Number(value);
+        if (arg === "--max-tokens") out.maxTokens = Number(value);
+        else out.retryMaxTokens = Number(value);
         break;
       }
       case "--timeout": {
@@ -187,6 +189,7 @@ function parseArgs(argv) {
       default: usageError(`Unknown flag: ${arg}`);
     }
   }
+  if (out.retryMaxTokens !== null && !out.allowPaidRetry) usageError("--retry-max-tokens requires --allow-paid-retry.");
   if (out.concurrency !== null && (out.concurrency < 1 || out.concurrency > MAX_CONCURRENCY)) {
     usageError(`--concurrency must be between 1 and ${MAX_CONCURRENCY}.`);
   }
@@ -248,11 +251,10 @@ let cancellationEscalation = null;
 
 function runWrapperOnce(promptFile, fixedArgs) {
   return new Promise(resolve => {
-    const wrapperPath = process.env.MMX_BATCH_WRAPPER || DEFAULT_WRAPPER;
     const args = ["--prompt-file", promptFile, ...fixedArgs];
     let child;
     try {
-      child = spawn(process.execPath, [wrapperPath, ...args], {
+      child = spawn(process.execPath, [DEFAULT_WRAPPER, ...args], {
         stdio: ["ignore", "pipe", "pipe"], shell: false, windowsHide: true,
       });
     } catch (err) {
@@ -362,7 +364,7 @@ async function runShardWithRetries(shard, fixedArgs, effectiveBudget, retryBudge
     }
     second = await runWrapperOnce(shard.file, fixedArgs);
   } else {
-    // Swap the caller budget for the profile budget on the retry attempt.
+    // Apply exactly the separately authorized higher output limit.
     const retryArgs = [...fixedArgs];
     const budgetIndex = retryArgs.indexOf("--max-tokens");
     if (budgetIndex >= 0) retryArgs.splice(budgetIndex, 2);
@@ -390,17 +392,21 @@ async function main() {
     return;
   }
   if (argv.length === 1 && argv[0] === "--help") {
-    process.stdout.write(JSON.stringify({ status: "usage", usage: "node mmx-batch.js --prompt-file FILE [--prompt-file FILE ...] | --prompts-dir DIR [--concurrency 2] [--model ID] [--max-tokens N] [--timeout SEC] [--wrap-timeout SEC] [--profile-file FILE] [--receipt-file FILE] [--allow-paid-retry]" }) + "\n");
+    process.stdout.write(JSON.stringify({ status: "usage", usage: "node mmx-batch.js --prompt-file FILE [--prompt-file FILE ...] | --prompts-dir DIR [--concurrency 2] [--model ID] [--max-tokens N] [--timeout SEC] [--wrap-timeout SEC] [--profile-file FILE] [--receipt-file FILE] [--allow-paid-retry [--retry-max-tokens N]]" }) + "\n");
     return;
   }
 
   const args = parseArgs(argv);
   const shards = collectShardFiles(args);
   const profileFile = args.profileFile || DEFAULT_PROFILE;
-  const retryBudget = readProfileBudget(profileFile);
-  const effectiveBudget = args.maxTokens !== null ? args.maxTokens : retryBudget;
+  const profileBudget = readProfileBudget(profileFile);
+  const effectiveBudget = args.maxTokens ?? profileBudget;
+  const retryBudget = args.retryMaxTokens ?? effectiveBudget;
+  if ([effectiveBudget, retryBudget].some(cap => cap > Math.min(profileBudget, 524288)) || retryBudget < effectiveBudget) {
+    usageError("Output budgets must fit the profile and native limit; the retry budget cannot be below the initial budget.");
+  }
 
-  const fixedArgs = [];
+  const fixedArgs = ["--native-request-limit", "1"];
   if (args.profileFile !== null) fixedArgs.push("--profile-file", args.profileFile);
   if (args.model !== null) fixedArgs.push("--model", args.model);
   if (args.maxTokens !== null) fixedArgs.push("--max-tokens", String(args.maxTokens));
@@ -422,7 +428,9 @@ async function main() {
     while (!cancelled && !archiveFailure) {
       const index = nextIndex++;
       if (index >= shards.length) return;
-      results[index] = await runShardWithRetries(shards[index], fixedArgs, effectiveBudget, retryBudget, args.allowPaidRetry);
+      // Without retry authorization only the skipped reason is recorded.
+      results[index] = await runShardWithRetries(shards[index], fixedArgs, effectiveBudget,
+        args.allowPaidRetry ? retryBudget : profileBudget, args.allowPaidRetry);
       try { saveShardReceipt(archive, index, results[index]); }
       catch (error) { archiveFailure = archiveFailure || archiveErrorCode(error); }
     }

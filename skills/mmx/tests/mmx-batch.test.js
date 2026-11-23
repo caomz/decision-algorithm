@@ -1,7 +1,7 @@
 "use strict";
 
 // Offline contract tests for mmx-batch.js. No real model calls: every shard
-// is served by a fake wrapper (MMX_BATCH_WRAPPER) that scripts replies from
+// is served by a fake wrapper (MMX_TEST_WRAPPER) that scripts replies from
 // the prompt content and a per-shard invocation counter.
 
 const { test, after } = require("node:test");
@@ -13,6 +13,9 @@ const { spawnSync, spawn } = require("node:child_process");
 
 const skillRoot = path.resolve(__dirname, "..");
 const batch = path.join(skillRoot, "scripts", "mmx-batch.js");
+const fixturePreload = require.resolve("./fixtures/batch-wrapper-preload.cjs");
+const nativePreload = require.resolve("./fixtures/native-budget-fixture.cjs");
+const fixtureOptions = ['--require', JSON.stringify(nativePreload), '--require', JSON.stringify(fixturePreload)].join(' ');
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "mmx-batch-contract-"));
 const fakeWrapper = path.join(root, "fake-wrapper.cjs");
 const argsDump = path.join(root, "args-dump.txt");
@@ -53,7 +56,7 @@ emit(ok());
 function runBatch(args, extraEnv = {}) {
   return spawnSync(process.execPath, [batch, ...args], {
     encoding: "utf8", windowsHide: true, shell: false,
-    env: { ...process.env, MMX_BATCH_WRAPPER: fakeWrapper, FAKE_STATE_DIR: stateDir,
+    env: { ...process.env, NODE_OPTIONS: fixtureOptions, MMX_TEST_WRAPPER: fakeWrapper, FAKE_STATE_DIR: stateDir,
            FAKE_ARGS_DUMP: argsDump, MMX_BATCH_QUOTA_RETRY_MS: "10", ...extraEnv },
   });
 }
@@ -114,7 +117,7 @@ test("MAC-04 double SIGINT preserves completed MMX shards and prevents queued re
     "--prompt-file", first, "--prompt-file", second, "--prompt-file", third,
     "--concurrency", "1", "--receipt-file", receipt], {
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, MMX_BATCH_WRAPPER: fakeWrapper, FAKE_STATE_DIR: stateDir, MMX_BATCH_QUOTA_RETRY_MS: "10" },
+    env: { ...process.env, NODE_OPTIONS: fixtureOptions, MMX_TEST_WRAPPER: fakeWrapper, FAKE_STATE_DIR: stateDir, MMX_BATCH_QUOTA_RETRY_MS: "10" },
   });
   let stdout = "";
   child.stdout.on("data", chunk => { stdout += chunk.toString(); });
@@ -172,7 +175,7 @@ test("MAC-03 post-request EIO fails closed without replay or lost initial call c
   ].join("\n"));
   const run=spawnSync(process.execPath,["--require",preload,batch,"--prompt-file",file,"--receipt-file",archive],{
     encoding:"utf8",shell:false,windowsHide:true,
-    env:{...process.env,MMX_BATCH_WRAPPER:fakeWrapper,FAKE_STATE_DIR:stateDir,
+    env:{...process.env,NODE_OPTIONS:fixtureOptions, MMX_TEST_WRAPPER:fakeWrapper,FAKE_STATE_DIR:stateDir,
       MMX_BATCH_QUOTA_RETRY_MS:"10"},
   });
   const receipt=receiptOf(run);
@@ -187,7 +190,7 @@ test("MAC-03 two concurrent mmx batches cannot share the same receipt destinatio
   const file = shardFile("mmx-race-prompt.txt", "SLOW_CANCEL race");
   const destination = path.join(root, "mmx-race-output.json");
   const argv = [batch, "--prompt-file", file, "--receipt-file", destination];
-  const env = { ...process.env, MMX_BATCH_WRAPPER:fakeWrapper, FAKE_STATE_DIR:stateDir, MMX_BATCH_QUOTA_RETRY_MS:"10" };
+  const env = { ...process.env, NODE_OPTIONS: fixtureOptions, MMX_TEST_WRAPPER:fakeWrapper, FAKE_STATE_DIR:stateDir, MMX_BATCH_QUOTA_RETRY_MS:"10" };
   const launch = () => {
     const child = spawn(process.execPath, argv, { env, stdio: ["ignore", "pipe", "pipe"], shell: false });
     let stdout = "";
@@ -326,10 +329,17 @@ test("MMX paid retry requires an explicit per-call flag", () => {
   receiptOf(runBatch(["--prompt-file", file, "--max-tokens", "128"], { MMX_BATCH_ALLOW_PAID_RETRY: "1" }));
   assert.equal(fs.readFileSync(path.join(stateDir, "env-thinking.txt"), "utf8"), "1");
 });
+test("permission for one paid retry does not authorize a larger token budget", () => {
+  const file = shardFile("explicit-cap.txt", "THINK hard shard");
+  const result = receiptOf(runBatch(["--prompt-file", file, "--max-tokens", "128", "--allow-paid-retry"]));
+  assert.equal(result.shards[0].retried, false);
+  assert.equal(result.batch.retry_max_tokens, 128);
+  assert.equal(fs.readFileSync(path.join(stateDir, "explicit-cap.txt"), "utf8"), "1");
+});
 test("opt-in budget retry: both attempts are retained", () => {
   const dumpLines = fs.existsSync(argsDump) ? fs.readFileSync(argsDump, "utf8").split("\n").filter(Boolean) : [];
   const before = dumpLines.length;
-  const run = runBatch(["--prompt-file", shardFile("t.txt", "THINK hard shard"), "--max-tokens", "128", "--allow-paid-retry"]);
+  const run = runBatch(["--prompt-file", shardFile("t.txt", "THINK hard shard"), "--max-tokens", "128", "--allow-paid-retry", "--retry-max-tokens", "524288"]);
   const receipt = receiptOf(run);
   assert.equal(run.status, 0);
   assert.equal(receipt.gate, "PASS");
@@ -361,7 +371,8 @@ test("real wrapper chain: budget-exhausted replies heal once, a thinking-only en
   const cliLog = path.join(root, "chain-cli.log");
   fs.mkdirSync(bin);
   fs.mkdirSync(chainTmp);
-  fs.writeFileSync(path.join(bin, "mmx"), `#!${process.execPath}
+  const driver = path.join(root, "chain-native.cjs");
+  fs.writeFileSync(driver, `#!${process.execPath}
 "use strict";
 const fs = require("node:fs");
 const args = process.argv.slice(2);
@@ -376,10 +387,11 @@ if (budget < 524288 && scenario === "CHAIN_TEXT_MAX") { reply.content = [{ type:
 if (scenario === "CHAIN_THINK_END") reply.content = [{ type: "thinking", thinking: "internal" }];
 process.stdout.write(JSON.stringify(reply));
 `, { mode: 0o755 });
+  require(nativePreload).install(bin, driver);
   const files = [shardFile("chain-think-max.txt", "CHAIN_THINK_MAX shard"),
     shardFile("chain-text-max.txt", "CHAIN_TEXT_MAX shard"), shardFile("chain-think-end.txt", "CHAIN_THINK_END shard")];
-  const run = runBatch([...files.flatMap(file => ["--prompt-file", file]), "--max-tokens", "128", "--concurrency", "1", "--allow-paid-retry"], {
-    MMX_BATCH_WRAPPER: undefined, PATH: `${bin}${path.delimiter}${process.env.PATH || ""}`,
+  const run = runBatch([...files.flatMap(file => ["--prompt-file", file]), "--max-tokens", "128", "--concurrency", "1", "--allow-paid-retry", "--retry-max-tokens", "524288"], {
+    MMX_TEST_WRAPPER: undefined, PATH: `${bin}${path.delimiter}${process.env.PATH || ""}`,
     TMPDIR: chainTmp, TMP: chainTmp, TEMP: chainTmp, MMX_CONFIG_DIR: path.join(root, "chain-config-absent"),
   });
   const receipt = receiptOf(run);

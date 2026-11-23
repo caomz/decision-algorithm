@@ -76,7 +76,8 @@ const LEFT_OUT = {
 };
 // A left-out directory is reported once, not file by file.
 const REPORTED = ["agy/.git", "cross-validation/run.sh", "cross-validation/scripts/__pycache__",
-  "mmx/.DS_Store", "mmx/._SKILL.md", "mmx/CHANGES.MD", "mmx/SHA256SUMS.txt", "mmx/node_modules"];
+  "mmx/.DS_Store", "mmx/._SKILL.md", "mmx/CHANGES.MD", "mmx/SHA256SUMS.txt", "mmx/node_modules",
+  "mmx/tests/fixtures/batch-wrapper-preload.cjs", "mmx/tests/fixtures/native-budget-fixture.cjs"];
 
 function makeRelease({ leftOut = true, omit = [] } = {}) {
   const managed = path.join(root, `managed-${counter++}`);
@@ -116,7 +117,8 @@ test("a re-pin pins the whole release and reports every path it leaves out", () 
   const release = JSON.parse(fs.readFileSync(marker, "utf8"));
   // Every file of the skill must be a release type. A new type is a decision
   // for RELEASE_EXTENSIONS and the installer, not a silent gap in the marker.
-  const expected = [...Object.keys(SIBLINGS), ...skillFiles().map(relative => `mmx/${relative}`)].sort();
+  const expected = [...Object.keys(SIBLINGS), ...skillFiles().map(relative => `mmx/${relative}`)
+    .filter(name => !REPORTED.includes(name))].sort();
   assert.deepEqual(Object.keys(release.files), expected);
   for (const name of expected) {
     assert.equal(release.files[name], sha256(fs.readFileSync(path.join(managed, ...name.split("/")))), name);

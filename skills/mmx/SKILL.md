@@ -29,16 +29,22 @@ node <MMX_SKILL_DIR>/scripts/mmx-chat.js --prompt-file <file> [--system-file <fi
 
 prompt 和 system 只经文件传递。按当前平台使用[调用与验证参考](references/verification.md)。默认配置取自[本机运行配置](profiles/local.json)：输出预算 524288，请求超时 600 秒，wrapper 超时 630 秒（`--wrap-timeout` 必须大于 `--timeout`）。优先级：命令行 flag > 环境变量（`MMX_CHAT_REQ_TIMEOUT` / `MMX_CHAT_WRAP_TIMEOUT`）> profile > 硬编码兜底。默认模型由 MMX CLI 选择，用户指定的模型覆盖对应值。宿主应通过持续会话等待 wrapper 结果；**外层工具超时须给到 700000ms 以上**（600+30+630 预算），快速小请求可显式传 `--timeout 60 --wrap-timeout 80` 把外层缩回 120000ms。
 
+## 原生请求预算
+
+每次单片调用检查 PATH 中选定的 npm `mmx-cli 1.0.29`、包声明的入口、入口 SHA-256、原生 Node 和本地 guard。启动链无法核验时返回 `native_budget_unavailable`，供应商请求次数为零。需要更换入口时显式选择同版本 npm CLI 的 PATH；个人 shell 启动器可能有独立的认证和代理设置。
+
+每次运行允许原生进程发起一次模型 POST，完整请求体的 `max_tokens` 须在本轮输出额度内。并发和失败的发送共用一次性许可；同步或异步重复请求、自动重定向和未识别的写入路由均被阻断。超时、断线、取消和未知终态结束本轮。`native_request_budget` 回执中的 `attempts` 是原生模型 fetch 预留次数，`max_output_tokens` 是授权的输出上限，`output_limit_verified` 表示本地检查过发出的请求体。CLI 身份取自 `cli_version` 和 `entry_sha256`。实际 token 用量见供应方的 usage；代理内部行为、供应商结算金额与远端计费完成情况仍以相应账单为准。
+
 ## 分片批量（多片交叉验证的默认入口）
 
-分片评审 NEVER 逐片串行调用：一次工具调用送整批，`mmx-batch.js` 经有界并发池并行执行、合并回执并自愈预算：
+分片评审 NEVER 逐片串行调用：一次工具调用送整批，`mmx-batch.js` 经有界并发池并行执行、合并回执并记录每片的请求、输出预算：
 
 ```text
 node <MMX_SKILL_DIR>/scripts/mmx-batch.js --prompt-file <f1> [--prompt-file <f2> ...] | --prompts-dir <dir> [--concurrency 2] [--model <id>] [--max-tokens <n>] [--timeout <sec>] [--wrap-timeout <sec>] [--receipt-file <path>]
 ```
 
 - 每片仍是一次完整 `mmx-chat.js` 调用（单发语义不变，wrapper 契约原样继承）。批级回执含每片完整回执、`batch` 统计与**传输层 gate**：全片 `status=ok` 且 `complete` 且未截断 → `PASS`；任一片截断/超时/失败 → `NOT_EVALUATED`（与 zcode-mmx-review 的 COMPLETED 语义对齐）。findings 级 P1/P2 判定仍由宿主完成，批级 gate 不冒充内容判定。
-- **预算自愈**：某片 `thinking_budget_exhausted` 或截断、且调用预算低于 profile 预算时，自动按 profile 预算重发一次；`quota_error` 退避 30 秒重试一次。重试显式记录：`shard.retried`、`shard.retry_reason`、`shard.first_attempt`（旧回执完整保留），不隐藏内部重试。
+- 默认每片一次。明确使用 `--allow-paid-retry` 时，仅对已终止的 `quota_error` 在原输出上限内追加一次尝试；预算不足时还需显式提供 `--retry-max-tokens N` 才可提高上限，N 须在该 profile 和 524288 的双重上限内。两次回执分别保留，超时、取消、断线和结果未知均不重发。
 - `--concurrency` 默认 2（上限 8）；分片目录按 `pN.txt` 命名可被 `--prompts-dir` 按自然序（p2 在 p10 前）整批读取。外层工具超时按 `ceil(片数/并发) × (2×wrap-timeout + 30s) + 60s` 预留——**必须含 2 倍 wrap-timeout**：单片最坏情况 = 首次调用 + 一次自愈重发（+30s 限流退避），漏算重试会把重试中的批次误判为超时。
 - **NEVER 裸调 `mmx text chat` 送评审**：CLI 自身默认 `--max-tokens 4096`，服务端思考轻易超限（2026-11-18 实证：6 断言评审即截断）；一切评审调用必须经 `mmx-chat.js` / `mmx-batch.js`。
 

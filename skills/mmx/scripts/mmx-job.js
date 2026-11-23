@@ -106,6 +106,7 @@ function runtimeBinding() {
   const components = [
     path.join(__dirname, "mmx-chat.js"),
     path.join(__dirname, "fetch-timeout-guard.js"),
+    path.join(__dirname, "mmx-native-budget.js"),
     path.join(__dirname, "mmx-provider-slot.js"),
     __filename,
   ];
@@ -144,6 +145,7 @@ function makeBatchArgs(parsed, prompts, profileFile, receiptFile) {
   if (parsed.timeout !== null) args.push("--timeout", String(parsed.timeout));
   if (parsed.wrapTimeout !== null) args.push("--wrap-timeout", String(parsed.wrapTimeout));
   if (parsed.allowPaidRetry === true) args.push("--allow-paid-retry");
+  if (parsed.retryMaxTokens !== null) args.push("--retry-max-tokens", String(parsed.retryMaxTokens));
   args.push("--profile-file", profileFile, "--receipt-file", receiptFile);
   return args;
 }
