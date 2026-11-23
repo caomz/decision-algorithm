@@ -95,6 +95,7 @@ WSL 内 `node -p "process.platform"` 为 `linux` 时使用 POSIX 路径；调用
 - `mmx text chat` 走 MiniMax 的 `/v1/messages` 端点，响应为 Anthropic 风格（`model`、`stop_reason`、`content[]`、`usage.input_tokens`/`output_tokens`），与 wrapper 的校验契约一致。wrapper 使用的 `--timeout`（全局 "Request timeout"）、`--no-color`、`--non-interactive`、`--messages-file`、`--max-tokens` 在 `mmx-cli 1.0.28` 中均存在。
 - 错误只报告分类、数值码和固定提示，不回显上游原文，因此不会带出凭证。`auth_error` 附带 `mmx auth login` 指引，超时类附加大时限重试提示。官方[错误表](https://github.com/MiniMax-AI/cli/blob/main/ERRORS.md)列出认证、额度和超时退出码，以及 HTTP 429 / 1028 / 1030 等额度错误。观察值与文档不同时保留原退出码和分类。
 - Review/Challenge 使用本 skill 的 `references/review-v1.schema.json`，与 ZCode skill 的副本逐字节一致（由 `tests/mmx-chat.test.js` 的漂移用例守住）。宿主按该 schema 校验并据发现种类与严重性计算 gate；同级 `cross-validation` 协调器是可选遗留路径，调用时用平台对应的解释器（POSIX `python3`，Windows `py -3` 或 `python`）。聊天展示结论与原文链接。复核报告的原始正文、执行状态和本地处置各自留存。
+- 重钉只收发布文件：`.md`、`.py`、`.js`、`.json`、`.yaml`，后缀集合与受管安装器 `install_release.py` 相同，区分大小写；安装器不排除点开头的文件，重钉会排除。隐藏条目（`.DS_Store`、AppleDouble `._*`、`.git`）、`__pycache__`、`node_modules` 和其他类型的文件不入清单，stderr 逐条列出。清单外的文件之后怎么变，wrapper 都不会因此报 `install_mismatch`；清单内的文件一改照常拒绝。`tests/repin-release.test.js` 守住这条规则，并要求 skill 内每个文件都属于这五类，新增类型要先改白名单。
 
 ## 验证层级
 

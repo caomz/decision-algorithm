@@ -11,6 +11,9 @@
 //   node repin-release.js [--root <skill_dir>] [--dry-run]
 //
 // <skill_dir> defaults to the skill directory that holds this script.
+//
+// Only release file types are pinned (RELEASE_EXTENSIONS). Hidden entries,
+// cache directories and other file types are listed on stderr and left out.
 
 "use strict";
 
@@ -34,6 +37,13 @@ const TEST_FIXTURES = ["test-prompts.json", "trigger-tests.json"];
 // The wrapper rejects any path segment outside this set, so a file that does
 // not match can never be listed in a manifest it would accept.
 const SAFE_SEGMENT = /^[A-Za-z0-9_.-]+$/;
+// The file types this skill ships (exact, case-sensitive suffix). Everything
+// else in the skill directory stays out of the manifest, so files that change
+// on their own (editor swap files, checksum lists, logs) can never lock the
+// wrapper out with install_mismatch.
+const RELEASE_EXTENSIONS = new Set([".md", ".js", ".cjs", ".json", ".yaml"]);
+// Generated caches and dependency trees are never release content.
+const VOLATILE_DIRS = new Set(["__pycache__", "node_modules"]);
 
 function usageError(message) {
   process.stderr.write(`repin-release: ${message}\n`);
@@ -57,7 +67,7 @@ function parseArgs(argv) {
   return options;
 }
 
-function walk(root, relative, files, skipped) {
+function walk(root, relative, files, skipped, excluded) {
   const absolute = path.join(root, relative);
   let entries;
   try { entries = fs.readdirSync(absolute, { withFileTypes: true }); }
@@ -67,14 +77,25 @@ function walk(root, relative, files, skipped) {
   }
   for (const entry of entries) {
     const childRelative = relative ? `${relative}/${entry.name}` : entry.name;
+    // The marker cannot list itself: its own bytes change when it is written.
+    if (childRelative === RELEASE_MARKER) continue;
     if (!SAFE_SEGMENT.test(entry.name) || entry.name === "." || entry.name === "..") {
       skipped.push(childRelative);
       continue;
     }
-    const childAbsolute = path.join(root, ...childRelative.split("/"));
-    if (entry.isDirectory()) walk(root, childRelative, files, skipped);
-    else if (entry.isFile()) files.push(childRelative);
-    else skipped.push(childRelative);
+    // Hidden entries are host metadata (.DS_Store, AppleDouble ._* files) or
+    // tool state (.git), never release content.
+    if (entry.name.startsWith(".")) {
+      excluded.push(childRelative);
+      continue;
+    }
+    if (entry.isDirectory()) {
+      if (VOLATILE_DIRS.has(entry.name)) excluded.push(childRelative);
+      else walk(root, childRelative, files, skipped, excluded);
+    } else if (entry.isFile()) {
+      if (RELEASE_EXTENSIONS.has(path.extname(entry.name))) files.push(childRelative);
+      else excluded.push(childRelative);
+    } else skipped.push(childRelative);
   }
 }
 
@@ -95,14 +116,16 @@ function main() {
 
   const files = [];
   const skipped = [];
-  walk(root, "", files, skipped);
-  // The marker cannot list itself: its own bytes change when it is written.
-  files.splice(files.indexOf(RELEASE_MARKER), 1);
+  const excluded = [];
+  walk(root, "", files, skipped, excluded);
   // Fixtures likewise cannot be listed: a snapshot without them would fail
   // install verification through no fault of its own.
   for (const fixture of TEST_FIXTURES) {
     const index = files.indexOf(fixture);
-    if (index !== -1) files.splice(index, 1);
+    if (index !== -1) {
+      files.splice(index, 1);
+      excluded.push(fixture);
+    }
   }
 
   const digests = {};
@@ -134,7 +157,12 @@ function main() {
 
   if (skipped.length) {
     process.stderr.write(`repin-release: skipped ${skipped.length} path(s) the wrapper cannot verify:\n`);
-    for (const relative of skipped) process.stderr.write(`  - ${relative}\n`);
+    for (const relative of skipped.sort()) process.stderr.write(`  - ${relative}\n`);
+  }
+  if (excluded.length) {
+    process.stderr.write(`repin-release: left ${excluded.length} path(s) out of the manifest ` +
+      `(hidden entry, cache directory, test fixture, or a type other than ${[...RELEASE_EXTENSIONS].join(" ")}):\n`);
+    for (const relative of excluded.sort()) process.stderr.write(`  - ${relative}\n`);
   }
   process.stdout.write(`files: ${Object.keys(digests).length}\n`);
   process.stdout.write(`target: ${target}\n`);

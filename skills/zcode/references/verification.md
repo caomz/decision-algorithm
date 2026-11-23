@@ -78,6 +78,7 @@ node --check scripts/zcode-batch.js
 node --check scripts/repin-release.js
 node --test tests/zcode-chat.test.js
 node --test tests/zcode-batch.test.js
+node --test tests/repin-release.test.js
 node scripts/zcode-chat.js --version
 node scripts/zcode-batch.js --version
 ```
@@ -86,13 +87,13 @@ node scripts/zcode-batch.js --version
 
 批量测试经 `ZCODE_BATCH_WRAPPER` 注入假 wrapper，覆盖参数拒绝、mode/evidence 组合、透传、双 gate 聚合（含内容 FAIL 与传输失败并存）、quota/timeout 重试与不重试边界、坏 stdout、自然序与落盘一致性，以及实际并发不超过设定值。
 
-监督器测试还覆盖后台成功、超时退出、wrapper 被 SIGKILL 后独立保存退出信号与残留运行阶段，以及冲突目录拒绝。假 CLI 不访问真实模型；Keychain 适配使用合成数据，监督器测试使用注入的本地 fake driver。
+监督器测试还覆盖后台成功、超时退出、wrapper 被 SIGKILL 后独立保存退出信号与残留运行阶段，以及冲突目录拒绝。`status` 先查 `execution.json` 再判活；判活结果不是"存活"时会再查一次，所以 supervisor 恰在两步之间写完 `execution.json` 退出，也判为 `finished`，不会误报 `interrupted`（用注入的探针确定性复现）。假 CLI 不访问真实模型；Keychain 适配使用合成数据，监督器测试使用注入的本地 fake driver。
 
 真实验收必须先通过离线检查，使用本次授权的最小材料。保留原始回执、模型、结束原因、工具数、发现和本地处置。认证、额度、超时或协议失败停止，不自动重试。未发起真实调用时不得把 `--version`、`doctor` 或 `/help` 检查称为模型验证。
 
 ## 安装和恢复
 
-源码与安装副本分开。新安装到一个不存在的 skill 目录，Codex 入口指向共享副本；逐文件核对 SHA256，在 skill 内创建 `.zcode-release.json`（`format: 1`、`files: {relative_path: sha256}`），不写 AGY/MMX 的发布清单。清单只包括本 skill 的受管文件。存在清单时 wrapper 检查路径、符号链接和哈希；缺少清单允许源码开发调用，因此清单完整性依赖受保护的安装目录。
+源码与安装副本分开。新安装到一个不存在的 skill 目录，Codex 入口指向共享副本；逐文件核对 SHA256，在 skill 内创建 `.zcode-release.json`（`format: 1`、`files: {relative_path: sha256}`），不写 AGY/MMX 的发布清单。清单只包括本 skill 的受管文件：`.md`、`.js`、`.cjs`、`.json`、`.yaml`。隐藏条目、`__pycache__`、`node_modules` 和其他类型的文件不入清单，重钉时逐条列在 stderr（`tests/repin-release.test.js`）。存在清单时 wrapper 检查路径、符号链接和哈希；缺少清单允许源码开发调用，因此清单完整性依赖受保护的安装目录。
 
 清单哈希按 **LF 归一化**内容计算（`sha256(content.replace(/\r\n/g, "\n"))`）。仓库在 Windows 上以 CRLF 检出、在 macOS 上以 LF 检出，按原始字节计算会让一端生成的清单在另一端必然失配。归一化后同一份清单在两个平台双向有效。改动任何受管文件后清单按设计失效，用 `node scripts/repin-release.js` 重钉（`--dry-run` 只报告不写入）；**Mac 正本同步 wrapper 变更后同样必须重钉**，否则安装副本报 `install_mismatch`。
 
