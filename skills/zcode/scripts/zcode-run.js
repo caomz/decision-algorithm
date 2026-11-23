@@ -88,22 +88,30 @@ async function worker(job) {
   save(path.join(job, "execution.json"), { exit_code: result.code, signal: result.signal, reason, ended_at: new Date().toISOString(), receipt_exists: fs.existsSync(path.join(job, "run/receipt.json")) });
 }
 
-function status(jobPath) {
+// isAlive is injectable so tests can reproduce the exit race deterministically.
+function status(jobPath, { isAlive = alive } = {}) {
   const job = path.resolve(jobPath);
   const launch = read(path.join(job, "launch.json"));
   const result = { status: "running", job_dir: job, supervisor_pid: launch.supervisor_pid };
-  if (fs.existsSync(path.join(job, "execution.json"))) {
-    result.status = "finished";
-    result.execution = read(path.join(job, "execution.json"));
-    if (result.execution.receipt_exists) {
-      try { result.receipt = read(path.join(job, "run/receipt.json")); }
-      catch { result.receipt_unreadable = true; }
+  const execution = path.join(job, "execution.json");
+  if (!fs.existsSync(execution)) {
+    const supervisorAlive = isAlive(launch.supervisor_pid, job);
+    // The worker saves execution.json before it exits. A supervisor that ends
+    // between the check above and the probe has finished, so look again before
+    // reporting it as interrupted or unknown.
+    if (supervisorAlive === true || !fs.existsSync(execution)) {
+      result.supervisor_alive = supervisorAlive;
+      if (supervisorAlive === false) result.status = "interrupted";
+      if (supervisorAlive === null) result.status = "unknown";
+      if (fs.existsSync(path.join(job, "run/progress.json"))) result.progress = read(path.join(job, "run/progress.json"));
+      return result;
     }
-  } else {
-    result.supervisor_alive = alive(launch.supervisor_pid, job);
-    if (result.supervisor_alive === false) result.status = "interrupted";
-    if (result.supervisor_alive === null) result.status = "unknown";
-    if (fs.existsSync(path.join(job, "run/progress.json"))) result.progress = read(path.join(job, "run/progress.json"));
+  }
+  result.status = "finished";
+  result.execution = read(execution);
+  if (result.execution.receipt_exists) {
+    try { result.receipt = read(path.join(job, "run/receipt.json")); }
+    catch { result.receipt_unreadable = true; }
   }
   return result;
 }

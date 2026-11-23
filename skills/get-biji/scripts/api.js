@@ -68,7 +68,9 @@ function loadTokenCache() {
 function loadRefreshJournal() {
     const file = STATE_FILES.refreshJournal;
     if (!fs.existsSync(file)) return null;
-    if (fs.lstatSync(file).isSymbolicLink() || (fs.statSync(file).mode & 0o077)) throw new Error('AUTH_FILE_PERMISSIONS_UNSAFE');
+    // Windows ignores POSIX mode bits (every file reports 0666), so the group/other
+    // check would always fail there. Keep the symlink check on every platform.
+    if (fs.lstatSync(file).isSymbolicLink() || (process.platform !== 'win32' && (fs.statSync(file).mode & 0o077))) throw new Error('AUTH_FILE_PERMISSIONS_UNSAFE');
     let value;
     try { value = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { throw new Error('AUTH_REFRESH_JOURNAL_INVALID'); }
     if (!value || !['requesting', 'received', 'committed'].includes(value.status)) throw new Error('AUTH_REFRESH_JOURNAL_INVALID');

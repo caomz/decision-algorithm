@@ -1,0 +1,4 @@
+diff --git a/src.txt "b/\357\273\277c.txt"
+similarity index 100%
+copy from src.txt
+copy to "\357\273\277c.txt"

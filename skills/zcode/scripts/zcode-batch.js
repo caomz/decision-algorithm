@@ -23,7 +23,7 @@ const DEFAULT_WRAPPER = path.join(__dirname, "zcode-chat.js");
 const DEFAULT_CONCURRENCY = 2;
 const MAX_CONCURRENCY = 8;
 const MAX_SHARDS = 32;
-const DEFAULT_TIMEOUT_SECONDS = 600;
+const DEFAULT_TIMEOUT_SECONDS = 1200;
 const MAX_TIMEOUT_SECONDS = 21600;
 // Test hook only: a production run never overrides the quota/timeout backoff.
 const RETRY_DELAY_MS = (() => {
@@ -322,7 +322,7 @@ async function main() {
     return;
   }
   if (argv.length === 1 && argv[0] === "--help") {
-    process.stdout.write(JSON.stringify({ status: "usage", usage: "node zcode-batch.js --prompt-file FILE [--prompt-file FILE ...] | --prompts-dir DIR [--concurrency 2] [--mode chat|review|challenge --evidence-ids-file FILE] [--timeout-seconds 600] [--cli-path EXECUTABLE] [--receipt-file FILE]" }) + "\n");
+    process.stdout.write(JSON.stringify({ status: "usage", usage: "node zcode-batch.js --prompt-file FILE [--prompt-file FILE ...] | --prompts-dir DIR [--concurrency 2] [--mode chat|review|challenge --evidence-ids-file FILE] [--timeout-seconds 1200] [--cli-path EXECUTABLE] [--receipt-file FILE]" }) + "\n");
     return;
   }
 

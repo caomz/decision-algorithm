@@ -68,6 +68,8 @@ node scripts/repin-release.js --dry-run # 只报告不写入
 
 **Mac 正本同步了 wrapper 变更后，同样必须重钉**，否则安装副本会报 `install_mismatch`。
 
+清单只收本 skill 发布的文件类型：`.md`、`.js`、`.cjs`、`.json`、`.yaml`，后缀区分大小写。隐藏条目（`.DS_Store`、`._*`、`.git`）、`__pycache__`、`node_modules` 和其他类型的文件不入清单，并在 stderr 逐条列出，所以系统或工具写入的元数据不会让 `checkInstall()` 自锁。新拷贝出的副本还没有清单时，同样能完整重钉。
+
 ## Windows 适配要点
 
 以下几处在合并时补齐，均由真实运行验证：
@@ -87,6 +89,7 @@ node --check scripts/zcode-batch.js
 node --check scripts/repin-release.js
 node --test tests/zcode-chat.test.js
 node --test tests/zcode-batch.test.js
+node --test tests/repin-release.test.js
 node scripts/zcode-chat.js --version
 node scripts/zcode-batch.js --version
 ```

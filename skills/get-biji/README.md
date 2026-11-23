@@ -2,7 +2,7 @@
 
 Get 笔记（biji.com）skill：把账号里的录音、链接、文字笔记同步成本地 Markdown 并可检索；用 Get 的转写额度把抖音 / 小红书 / B 站 / 小宇宙链接，或本地音视频，转成逐字稿。两件事共用同一个 biji.com 登录态。
 
-> 本目录是快照副本。**正本**位于 `/Volumes/WorkSSD/.agents/skills/get-biji`（经 `~/.claude/skills/get-biji` symlink 安装）。快照更新需从正本重新同步。
+> 本目录可能是复制安装的快照副本（与正本内容一致）。在 macOS 上正本位于 `/Volumes/WorkSSD/.agents/skills/get-biji`（经 `~/.claude/skills/get-biji` symlink 安装）；快照更新需从正本重新同步。
 
 ## 能力
 
@@ -45,6 +45,8 @@ cd skills/get-biji && npm install && npx playwright install chromium
 ln -s /path/to/decision-algorithm/skills/get-biji ~/.claude/skills/get-biji
 # Codex / OpenClaw / ZCode / MiniMax Code 同理
 ```
+
+> Windows 上不要用 symlink：请把整个 skill 目录整体复制到目标位置（如 `~/.claude/skills/get-biji`），否则运行态解析可能出现路径异常。
 
 首次登录：任意脚本在缺登录态时会开一个 Chrome 窗口等你登录 biji.com（最多 10 分钟），登录成功后窗口自动关闭。登录态存在 `GET_BIJI_HOME`（默认 `~/.config/get-biji/`），重装 skill 不受影响。
 
@@ -136,13 +138,13 @@ get-biji/
 node --test "skills/get-biji/tests/**/*.test.cjs"
 
 # 登录态检查（不弹浏览器）
-node -e "require('/Volumes/WorkSSD/Dev/decision-algorithm/skills/get-biji/node_modules/playwright')"
+node -e "require('playwright')"
 ```
 
 ## 隐私
 
 - **录音逐字稿是私密素材**，笔记目录不要放进会推到公开仓库的路径。本 skill 的 `.gitignore` 已排除 `notes/`、`.auth-state.json`、`.token-cache.json`、`.sync-state.json`、`.link-transcript-ids.json` 等运行态文件，但**只挡 skill 目录内的产物**——真正的笔记目录在仓库外，由你自己保证。
-- 凭证、登录态、同步进度只存在 `GET_BIJI_HOME`（默认 `~/.config/get-biji/`），权限 `0600`，**不得自动清除或重建**。
+- 凭证、登录态、同步进度只存在 `GET_BIJI_HOME`（默认 `~/.config/get-biji/`），权限 `0600`，**不得自动清除或重建**。Windows 不校验 POSIX 权限位（mode 参数被忽略、组/其他位检查自动跳过），文件保密性依赖所在目录的默认 ACL——不要把 `GET_BIJI_HOME` 指向共享目录等宽权限位置。
 - `--file` 会消耗 Get 的月度转写时长额度。上传前先看时长：`ffprobe -v error -show_entries format=duration -of csv=p=0 "<文件>"`（单位秒），超过 30 分钟先跟用户确认。
 
 ## 与其他 Skill 的边界

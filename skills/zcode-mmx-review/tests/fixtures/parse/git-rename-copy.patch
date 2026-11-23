@@ -1,0 +1,12 @@
+diff --git a/orig file.txt b/copied file.txt
+similarity index 100%
+copy from orig file.txt
+copy to copied file.txt
+diff --git a/old name.txt b/new name.txt
+similarity index 100%
+rename from old name.txt
+rename to new name.txt
+diff --git "a/from \344\270\255.txt" "b/to \344\270\255 x.txt"
+similarity index 100%
+rename from "from \344\270\255.txt"
+rename to "to \344\270\255 x.txt"

@@ -21,7 +21,10 @@ exports.run = scenario => {
   const denied = value("--disallowed-tools").split(",");
   const isolated = ["plan", "guarded"].includes(value("--mode")) && value("--workflow-mode") === "disabled" &&
     value("--toolsearch-mode") === "off" && value("--output-format") === "stream-json" &&
-    work !== home && path.dirname(work) === path.dirname(home) && process.cwd() === work &&
+    work !== home && path.dirname(work) === path.dirname(home) &&
+    // process.cwd() is always the resolved physical path; compare through realpath so
+    // symlinked temp roots (macOS /var/folders -> /private/var/folders) do not fail isolation.
+    process.cwd() === fs.realpathSync(work) &&
     !process.env.ZCODE_MODEL && !process.env.FAKE_UNTRUSTED && !process.env.NODE_OPTIONS &&
     config.features.mcp === false && config.features.memory === false && config.features.subagent === false &&
     config.features.skill === false && config.plugins.enabled === false && config.hooks.enabled === false &&

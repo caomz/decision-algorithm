@@ -1,0 +1,90 @@
+{
+  "both-pass": {
+    "zcode": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "signal": null, "complete": true, "truncated": false, "text": "@auto:pass", "provider": "fixture-zcode", "model": "glm-4.7", "model_identity_source": "runtime.model_request", "stop_reason": "stop", "tool_calls": 0, "tool_requests": 0, "cleanup_confirmed": true, "review_gate": "@auto"}},
+    "mmx": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "text": "@auto:pass", "model": "MiniMax-M2", "model_identity_source": "response.model", "stop_reason": "end_turn", "complete": true, "truncated": false, "input_tokens": 12, "output_tokens": 3}}
+  },
+  "zcode-fail": {
+    "zcode": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "signal": null, "complete": true, "truncated": false, "text": "@auto:p1-defect", "provider": "fixture-zcode", "model": "glm-4.7", "model_identity_source": "runtime.model_request", "stop_reason": "stop", "tool_calls": 0, "tool_requests": 0, "cleanup_confirmed": true, "review_gate": "@auto"}},
+    "mmx": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "text": "@auto:pass", "model": "MiniMax-M2", "model_identity_source": "response.model", "stop_reason": "end_turn", "complete": true, "truncated": false, "input_tokens": 12, "output_tokens": 3}}
+  },
+  "same-family-fail": {
+    "zcode": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "signal": null, "complete": true, "truncated": false, "text": "@auto:p1-defect", "provider": "fixture-zcode", "model": "glm-4.7", "model_identity_source": "runtime.model_request", "stop_reason": "stop", "tool_calls": 0, "tool_requests": 0, "cleanup_confirmed": true, "review_gate": "@auto"}},
+    "mmx": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "text": "@auto:pass", "model": "GLM-4.6", "model_identity_source": "response.model", "stop_reason": "end_turn", "complete": true, "truncated": false, "input_tokens": 12, "output_tokens": 3}}
+  },
+  "mmx-invalid-zcode-fail": {
+    "zcode": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "signal": null, "complete": true, "truncated": false, "text": "@auto:p1-defect", "provider": "fixture-zcode", "model": "glm-4.7", "model_identity_source": "runtime.model_request", "stop_reason": "stop", "tool_calls": 0, "tool_requests": 0, "cleanup_confirmed": true, "review_gate": "@auto"}},
+    "mmx": {"behavior": "normal", "exit": 0, "receipt": {"status": "api_error", "cli_invoked": true, "exit_code": 1, "text": "", "model": null, "model_identity_source": null, "stop_reason": null, "complete": false, "truncated": null}}
+  },
+  "p1-gap": {
+    "zcode": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "signal": null, "complete": true, "truncated": false, "text": "@auto:p1-gap", "provider": "fixture-zcode", "model": "glm-4.7", "model_identity_source": "runtime.model_request", "stop_reason": "stop", "tool_calls": 0, "tool_requests": 0, "cleanup_confirmed": true, "review_gate": "@auto"}},
+    "mmx": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "text": "@auto:pass", "model": "MiniMax-M2", "model_identity_source": "response.model", "stop_reason": "end_turn", "complete": true, "truncated": false, "input_tokens": 12, "output_tokens": 3}}
+  },
+  "hang": {
+    "zcode": {"behavior": "hang", "exit": 0, "receipt": null},
+    "mmx": {"behavior": "hang", "exit": 0, "receipt": null}
+  },
+  "zcode-toolcalls": {
+    "zcode": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "signal": null, "complete": true, "truncated": false, "text": "@auto:pass", "provider": "fixture-zcode", "model": "glm-4.7", "model_identity_source": "runtime.model_request", "stop_reason": "stop", "tool_calls": 1, "tool_requests": 1, "cleanup_confirmed": true, "review_gate": "@auto"}},
+    "mmx": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "text": "@auto:pass", "model": "MiniMax-M2", "model_identity_source": "response.model", "stop_reason": "end_turn", "complete": true, "truncated": false, "input_tokens": 12, "output_tokens": 3}}
+  },
+  "zcode-provider-empty": {
+    "zcode": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "signal": null, "complete": true, "truncated": false, "text": "@auto:pass", "provider": "", "model": "glm-4.7", "model_identity_source": "runtime.model_request", "stop_reason": "stop", "tool_calls": 0, "tool_requests": 0, "cleanup_confirmed": true, "review_gate": "@auto"}},
+    "mmx": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "text": "@auto:pass", "model": "MiniMax-M2", "model_identity_source": "response.model", "stop_reason": "end_turn", "complete": true, "truncated": false, "input_tokens": 12, "output_tokens": 3}}
+  },
+  "zcode-cleanup-null": {
+    "zcode": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "signal": null, "complete": true, "truncated": false, "text": "@auto:pass", "provider": "fixture-zcode", "model": "glm-4.7", "model_identity_source": "runtime.model_request", "stop_reason": "stop", "tool_calls": 0, "tool_requests": 0, "cleanup_confirmed": null, "review_gate": "@auto"}},
+    "mmx": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "text": "@auto:pass", "model": "MiniMax-M2", "model_identity_source": "response.model", "stop_reason": "end_turn", "complete": true, "truncated": false, "input_tokens": 12, "output_tokens": 3}}
+  },
+  "zcode-cleanup-missing": {
+    "zcode": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "signal": null, "complete": true, "truncated": false, "text": "@auto:pass", "provider": "fixture-zcode", "model": "glm-4.7", "model_identity_source": "runtime.model_request", "stop_reason": "stop", "tool_calls": 0, "tool_requests": 0, "review_gate": "@auto"}},
+    "mmx": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "text": "@auto:pass", "model": "MiniMax-M2", "model_identity_source": "response.model", "stop_reason": "end_turn", "complete": true, "truncated": false, "input_tokens": 12, "output_tokens": 3}}
+  },
+  "zcode-cleanup-type-error": {
+    "zcode": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "signal": null, "complete": true, "truncated": false, "text": "@auto:pass", "provider": "fixture-zcode", "model": "glm-4.7", "model_identity_source": "runtime.model_request", "stop_reason": "stop", "tool_calls": 0, "tool_requests": 0, "cleanup_confirmed": "yes", "review_gate": "@auto"}},
+    "mmx": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "text": "@auto:pass", "model": "MiniMax-M2", "model_identity_source": "response.model", "stop_reason": "end_turn", "complete": true, "truncated": false, "input_tokens": 12, "output_tokens": 3}}
+  },
+  "zcode-stop-max-tokens": {
+    "zcode": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "signal": null, "complete": false, "truncated": true, "text": "@auto:pass", "provider": "fixture-zcode", "model": "glm-4.7", "model_identity_source": "runtime.model_request", "stop_reason": "max_tokens", "tool_calls": 0, "tool_requests": 0, "cleanup_confirmed": true, "review_gate": "@auto"}},
+    "mmx": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "text": "@auto:pass", "model": "MiniMax-M2", "model_identity_source": "response.model", "stop_reason": "end_turn", "complete": true, "truncated": false, "input_tokens": 12, "output_tokens": 3}}
+  },
+  "zcode-tampered-material": {
+    "zcode": {"behavior": "tamper-material", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "signal": null, "complete": true, "truncated": false, "text": "@auto:p1-defect", "provider": "fixture-zcode", "model": "glm-4.7", "model_identity_source": "runtime.model_request", "stop_reason": "stop", "tool_calls": 0, "tool_requests": 0, "cleanup_confirmed": true, "review_gate": "@auto"}},
+    "mmx": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "text": "@auto:pass", "model": "MiniMax-M2", "model_identity_source": "response.model", "stop_reason": "end_turn", "complete": true, "truncated": false, "input_tokens": 12, "output_tokens": 3}}
+  },
+  "zcode-unobserved": {
+    "zcode": {"behavior": "no-observed", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "signal": null, "complete": true, "truncated": false, "text": "@auto:p1-defect", "provider": "fixture-zcode", "model": "glm-4.7", "model_identity_source": "runtime.model_request", "stop_reason": "stop", "tool_calls": 0, "tool_requests": 0, "cleanup_confirmed": true, "review_gate": "@auto"}},
+    "mmx": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "text": "@auto:pass", "model": "MiniMax-M2", "model_identity_source": "response.model", "stop_reason": "end_turn", "complete": true, "truncated": false, "input_tokens": 12, "output_tokens": 3}}
+  },
+  "zcode-fail-mmx-hang": {
+    "zcode": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "signal": null, "complete": true, "truncated": false, "text": "@auto:p1-defect", "provider": "fixture-zcode", "model": "glm-4.7", "model_identity_source": "runtime.model_request", "stop_reason": "stop", "tool_calls": 0, "tool_requests": 0, "cleanup_confirmed": true, "review_gate": "@auto"}},
+    "mmx": {"behavior": "hang", "exit": 0, "receipt": null}
+  },
+  "zcode-exit-nonzero": {
+    "zcode": {"behavior": "normal", "exit": 1, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "signal": null, "complete": true, "truncated": false, "text": "@auto:pass", "provider": "fixture-zcode", "model": "glm-4.7", "model_identity_source": "runtime.model_request", "stop_reason": "stop", "tool_calls": 0, "tool_requests": 0, "cleanup_confirmed": true, "review_gate": "@auto"}},
+    "mmx": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "text": "@auto:pass", "model": "MiniMax-M2", "model_identity_source": "response.model", "stop_reason": "end_turn", "complete": true, "truncated": false, "input_tokens": 12, "output_tokens": 3}}
+  },
+  "zcode-bad-observed": {
+    "zcode": {"behavior": "bad-observed", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "signal": null, "complete": true, "truncated": false, "text": "@auto:pass", "provider": "fixture-zcode", "model": "glm-4.7", "model_identity_source": "runtime.model_request", "stop_reason": "stop", "tool_calls": 0, "tool_requests": 0, "cleanup_confirmed": true, "review_gate": "@auto"}},
+    "mmx": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "text": "@auto:pass", "model": "MiniMax-M2", "model_identity_source": "response.model", "stop_reason": "end_turn", "complete": true, "truncated": false, "input_tokens": 12, "output_tokens": 3}}
+  },
+  "zcode-null-observed": {
+    "zcode": {"behavior": "null-observed", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "signal": null, "complete": true, "truncated": false, "text": "@auto:pass", "provider": "fixture-zcode", "model": "glm-4.7", "model_identity_source": "runtime.model_request", "stop_reason": "stop", "tool_calls": 0, "tool_requests": 0, "cleanup_confirmed": true, "review_gate": "@auto"}},
+    "mmx": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "text": "@auto:pass", "model": "MiniMax-M2", "model_identity_source": "response.model", "stop_reason": "end_turn", "complete": true, "truncated": false, "input_tokens": 12, "output_tokens": 3}}
+  },
+  "zcode-fail-mmx-slow": {
+    "zcode": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "signal": null, "complete": true, "truncated": false, "text": "@auto:p1-defect", "provider": "fixture-zcode", "model": "glm-4.7", "model_identity_source": "runtime.model_request", "stop_reason": "stop", "tool_calls": 0, "tool_requests": 0, "cleanup_confirmed": true, "review_gate": "@auto"}},
+    "mmx": {"behavior": "slow-exit", "exitMs": 1500, "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "text": "@auto:pass", "model": "MiniMax-M2", "model_identity_source": "response.model", "stop_reason": "end_turn", "complete": true, "truncated": false, "input_tokens": 12, "output_tokens": 3}}
+  },
+  "zcode-fail-mmx-ignore-term": {
+    "zcode": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "signal": null, "complete": true, "truncated": false, "text": "@auto:p1-defect", "provider": "fixture-zcode", "model": "glm-4.7", "model_identity_source": "runtime.model_request", "stop_reason": "stop", "tool_calls": 0, "tool_requests": 0, "cleanup_confirmed": true, "review_gate": "@auto"}},
+    "mmx": {"behavior": "ignore-term", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "text": "@auto:pass", "model": "MiniMax-M2", "model_identity_source": "response.model", "stop_reason": "end_turn", "complete": true, "truncated": false, "input_tokens": 12, "output_tokens": 3}}
+  },
+  "mmx-tamper-prompt": {
+    "zcode": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "signal": null, "complete": true, "truncated": false, "text": "@auto:pass", "provider": "fixture-zcode", "model": "glm-4.7", "model_identity_source": "runtime.model_request", "stop_reason": "stop", "tool_calls": 0, "tool_requests": 0, "cleanup_confirmed": true, "review_gate": "@auto"}},
+    "mmx": {"behavior": "tamper-prompt", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "text": "@auto:pass", "model": "MiniMax-M2", "model_identity_source": "response.model", "stop_reason": "end_turn", "complete": true, "truncated": false, "input_tokens": 12, "output_tokens": 3}}
+  },
+  "zcode-cleanup-false": {
+    "zcode": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "signal": null, "complete": true, "truncated": false, "text": "@auto:pass", "provider": "fixture-zcode", "model": "glm-4.7", "model_identity_source": "runtime.model_request", "stop_reason": "stop", "tool_calls": 0, "tool_requests": 0, "cleanup_confirmed": false, "review_gate": "@auto"}},
+    "mmx": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "text": "@auto:pass", "model": "MiniMax-M2", "model_identity_source": "response.model", "stop_reason": "end_turn", "complete": true, "truncated": false, "input_tokens": 12, "output_tokens": 3}}
+  }
+}

@@ -1,0 +1,84 @@
+diff --git "a/back\\slash.txt" "b/back\\slash.txt"
+new file mode 100644
+index 0000000..bca70f3
+--- /dev/null
++++ "b/back\\slash.txt"
+@@ -0,0 +1 @@
++q
+diff --git "a/dq\"name.txt" "b/dq\"name.txt"
+new file mode 100644
+index 0000000..bca70f3
+--- /dev/null
++++ "b/dq\"name.txt"
+@@ -0,0 +1 @@
++q
+diff --git "a/notes.md\t+1\t-0\nmain.js" "b/notes.md\t+1\t-0\nmain.js"
+new file mode 100644
+index 0000000..96cc558
+--- /dev/null
++++ "b/notes.md\t+1\t-0\nmain.js"
+@@ -0,0 +1,50 @@
++1
++2
++3
++4
++5
++6
++7
++8
++9
++10
++11
++12
++13
++14
++15
++16
++17
++18
++19
++20
++21
++22
++23
++24
++25
++26
++27
++28
++29
++30
++31
++32
++33
++34
++35
++36
++37
++38
++39
++40
++41
++42
++43
++44
++45
++46
++47
++48
++49
++50
+diff --git "a/tab\there.txt" "b/tab\there.txt"
+new file mode 100644
+index 0000000..5626abf
+--- /dev/null
++++ "b/tab\there.txt"
+@@ -0,0 +1 @@
++one
+diff --git "a/\344\270\255 \346\226\207.txt" "b/\344\270\255 \346\226\207.txt"
+new file mode 100644
+index 0000000..587be6b
+--- /dev/null
++++ "b/\344\270\255 \346\226\207.txt"	
+@@ -0,0 +1 @@
++x

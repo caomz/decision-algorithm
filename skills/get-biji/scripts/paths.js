@@ -38,10 +38,15 @@ function writeState(file, data) {
         fs.closeSync(fd);
     }
     fs.renameSync(temporary, file);
-    const parent = fs.openSync(path.dirname(file), 'r');
-    try { fs.fsyncSync(parent); } finally { fs.closeSync(parent); }
-    const stateParent = fs.openSync(path.dirname(STATE_DIR), 'r');
-    try { fs.fsyncSync(stateParent); } finally { fs.closeSync(stateParent); }
+    // Windows rejects fsync on directory handles (EPERM). The file-level fsync above already
+    // persists the content; the directory fsync is a POSIX-only durability extra, so skip it
+    // on win32 instead of failing every state write.
+    if (process.platform !== 'win32') {
+        const parent = fs.openSync(path.dirname(file), 'r');
+        try { fs.fsyncSync(parent); } finally { fs.closeSync(parent); }
+        const stateParent = fs.openSync(path.dirname(STATE_DIR), 'r');
+        try { fs.fsyncSync(stateParent); } finally { fs.closeSync(stateParent); }
+    }
 }
 
 /**

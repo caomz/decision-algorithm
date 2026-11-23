@@ -1,0 +1,84 @@
+diff --git a/ lead.txt b/ lead.txt
+deleted file mode 100644
+index 2fd6b29..0000000
+Binary files a/ lead.txt and /dev/null differ
+diff --git "a/\"start.txt" "b/\"start.txt"
+deleted file mode 100644
+index 52ec933..0000000
+Binary files "a/\"start.txt" and /dev/null differ
+diff --git a/a b/c d.txt b/a b/c d.txt
+deleted file mode 100644
+index 3bf250a..0000000
+Binary files a/a b/c d.txt and /dev/null differ
+diff --git a/a/f.txt b/a/f.txt
+deleted file mode 100644
+index 19fae9d..0000000
+Binary files a/a/f.txt and /dev/null differ
+diff --git a/b/f.txt b/b/f.txt
+deleted file mode 100644
+index a324ea6..0000000
+Binary files a/b/f.txt and /dev/null differ
+diff --git "a/b\\s.txt" "b/b\\s.txt"
+deleted file mode 100644
+index fffe7b8..0000000
+Binary files "a/b\\s.txt" and /dev/null differ
+diff --git "a/c\001.txt" "b/c\001.txt"
+deleted file mode 100644
+index 055cf6b..0000000
+Binary files "a/c\001.txt" and /dev/null differ
+diff --git a/dev/null b/dev/null
+deleted file mode 100644
+index 5aaaf86..0000000
+Binary files a/dev/null and /dev/null differ
+diff --git "a/d\177.txt" "b/d\177.txt"
+deleted file mode 100644
+index d027e4e..0000000
+Binary files "a/d\177.txt" and /dev/null differ
+diff --git "a/e\t\360\237\230\200.txt" "b/e\t\360\237\230\200.txt"
+deleted file mode 100644
+index 0ccd44d..0000000
+Binary files "a/e\t\360\237\230\200.txt" and /dev/null differ
+diff --git "a/n\nl.txt" "b/n\nl.txt"
+deleted file mode 100644
+index 89fd4d0..0000000
+Binary files "a/n\nl.txt" and /dev/null differ
+diff --git a/plain.txt b/plain.txt
+deleted file mode 100644
+index 055090c..0000000
+Binary files a/plain.txt and /dev/null differ
+diff --git "a/q\"t.txt" "b/q\"t.txt"
+deleted file mode 100644
+index 38ce649..0000000
+Binary files "a/q\"t.txt" and /dev/null differ
+diff --git a/sp ace.txt b/sp ace.txt
+deleted file mode 100644
+index 3dfffc9..0000000
+Binary files a/sp ace.txt and /dev/null differ
+diff --git "a/t\tab.txt" "b/t\tab.txt"
+deleted file mode 100644
+index c4d5bde..0000000
+Binary files "a/t\tab.txt" and /dev/null differ
+diff --git a/trail .txt b/trail .txt
+deleted file mode 100644
+index e378d79..0000000
+Binary files a/trail .txt and /dev/null differ
+diff --git "a/u\037.txt" "b/u\037.txt"
+deleted file mode 100644
+index df500e3..0000000
+Binary files "a/u\037.txt" and /dev/null differ
+diff --git a/x and b/f.txt b/x and b/f.txt
+deleted file mode 100644
+index fb609c9..0000000
+Binary files a/x and b/f.txt and /dev/null differ
+diff --git a/y and b/g h.txt b/y and b/g h.txt
+deleted file mode 100644
+index 9fc5192..0000000
+Binary files a/y and b/g h.txt and /dev/null differ
+diff --git "a/\344\270\255\346\226\207.txt" "b/\344\270\255\346\226\207.txt"
+deleted file mode 100644
+index d7d47ca..0000000
+Binary files "a/\344\270\255\346\226\207.txt" and /dev/null differ
+diff --git "a/\360\237\230\200.txt" "b/\360\237\230\200.txt"
+deleted file mode 100644
+index 488c06b..0000000
+Binary files "a/\360\237\230\200.txt" and /dev/null differ

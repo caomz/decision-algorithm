@@ -20,7 +20,7 @@
 | Skill | 定位 | 何时用 |
 |-------|------|--------|
 | [`zcode`](skills/zcode/) | ZCode CLI 文本复核：`/zcode <问题>`、`/zcode review <文件>`、`/zcode challenge <问题>` | 要第二意见、要独立审查一份材料、要挑战假设 |
-| [`mmx`](skills/mmx/) | MMX CLI 同步文本复核 | 与 ZCode 组成默认双模型交叉验证 |
+| [`mmx`](skills/mmx/) | MMX CLI 同步文本复核 + 全量 CLI 参考（图片/视频/语音/搜索） | 与 ZCode 组成默认双模型交叉验证；媒体与搜索类请求 |
 | [`zcode-mmx-review`](skills/zcode-mmx-review/) | ZCode/MMX 交叉验证**执行规则**（文档目录，非 skill） | 一轮怎么跑、材料怎么发、结果怎么判、什么时候停 |
 
 规则要点：**持续授权**（2026-11-15 起，交叉验证默认获准，不再逐轮询问）、默认组合 ZCode/MMX、首轮同材料同证据 ID 且互不传结论、默认每方 600 秒、以 `receipt.provider` / `receipt.model` 等原生元数据核验模型独立性（不采信正文自称）、结果记 `COMPLETED` / `NOT_EVALUATED`。
@@ -170,7 +170,7 @@ python3 scripts/install_skills.py --apply --with-deps
 | dedao-life-algorithms | 本地课程目录 `/Volumes/HDD/kuake/得到课程md文件/老喻的人生算法课（公众号懒人找资源）`（只读引用） |
 | get-biji | Node.js ≥ 18 + Playwright/Chromium（仅登录用）；ffmpeg/ffprobe、yt-dlp 按需；`GETNOTE_API_KEY` / `GETNOTE_CLIENT_ID` 可选；`GET_BIJI_HOME` 存放登录态（默认 `~/.config/get-biji/`）。**macOS / Windows / Linux 全平台可用**，锁后端按平台自动切换 |
 | zcode | ZCode CLI ≥ 0.17.1（当前适配 0.17.1）+ Node.js ≥ 18；调用前核对 `.zcode-release.json` 文件哈希 |
-| mmx | MMX CLI（当前 1.0.29）+ Node.js ≥ 18；模型与额度取自 `profiles/local.json`，可为 null 沿用 CLI 配置 |
+| mmx | MMX CLI ≥ 1.0.26（实测 macOS 1.0.26 / Windows 1.0.28）+ Node.js ≥ 18；模型与额度取自 `profiles/local.json`，可为 null 沿用 CLI 配置。**macOS / Windows 全平台可用** |
 
 ---
 
@@ -184,7 +184,7 @@ decision-algorithm/
 │   ├── dedao-life-algorithms/  #   人生算法课（课程证据制 skill）
 │   ├── get-biji/               #   Get 笔记同步与转写（Node + Playwright，跨平台）
 │   ├── zcode/                  #   ZCode CLI 文本复核（双模型交叉验证的一方）
-│   ├── mmx/                    #   MMX CLI 同步文本复核（交叉验证的另一方）
+│   ├── mmx/                    #   MMX CLI 文本复核 + 全量 CLI 参考（交叉验证的另一方）
 │   ├── zcode-mmx-review/       #   ZCode/MMX 交叉验证执行规则（文档目录，非 skill）
 │   └── github_open_skills/     #   ⭐ 外部开源 skill 记录仓（来源/许可/版本可溯源）
 │       ├── skills/             #     收录的 skill 快照（每个自带溯源 README）

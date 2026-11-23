@@ -1,0 +1,32 @@
+diff --git a/blob.bin b/blob.bin
+index 6772730..d761da7 100644
+Binary files a/blob.bin and b/blob.bin differ
+diff --git a/doc x.md b/doc x.md
+new file mode 100644
+index 0000000..e69de29
+diff --git "a/doc \344\270\255.md" "b/doc \344\270\255.md"
+new file mode 100644
+index 0000000..e69de29
+diff --git a/keep.sql b/keep.sql
+index 77ff599..178e43a 100644
+--- a/keep.sql
++++ b/keep.sql
+@@ -1,4 +1,3 @@
+ a
+--- sql comment
+-++ plus
+ b
++++ added plus
+diff --git "a/mode \344\270\255.sh" "b/mode \344\270\255.sh"
+old mode 100644
+new mode 100755
+diff --git a/rename src.txt b/rename dst.txt
+similarity index 50%
+rename from rename src.txt
+rename to rename dst.txt
+index 3367afd..df082d3 100644
+--- a/rename src.txt	
++++ b/rename dst.txt	
+@@ -1 +1,2 @@
+ old
++new

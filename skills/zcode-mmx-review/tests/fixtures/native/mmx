@@ -1,0 +1,35 @@
+#!/usr/local/bin/node
+"use strict";
+
+// 假 mmx CLI（fixture 专用，供 delivery-mmx 投递验收通过 PATH 定位）。
+// 在真实 mmx-chat.js 清理临时文件之前，把唯一那条 user 消息的 content 与
+// messages 原字节转储到 MMX_FAKE_DUMP，再输出一份合法的 MiniMax JSON 回执。
+// shebang 用 node 的绝对路径：调用方 PATH 只含本文件所在目录，env 查找不可用。
+
+const fs = require("fs");
+
+const argv = process.argv.slice(2);
+const value = name => argv[argv.indexOf(name) + 1];
+const messagesFile = value("--messages-file");
+if (!messagesFile) { process.stderr.write("missing --messages-file\n"); process.exit(2); }
+
+const messagesBytes = fs.readFileSync(messagesFile);
+const messages = JSON.parse(messagesBytes.toString("utf8"));
+const userMessages = messages.filter(message => message.role === "user");
+
+const dump = {
+  argv,
+  messages_file_b64: messagesBytes.toString("base64"),
+  user_message_count: userMessages.length,
+  user_content: userMessages.length === 1 ? userMessages[0].content : null,
+  system_present: messages.some(message => message.role === "system"),
+};
+if (process.env.MMX_FAKE_DUMP) fs.writeFileSync(process.env.MMX_FAKE_DUMP, JSON.stringify(dump));
+
+process.stdout.write(JSON.stringify({
+  content: [{ type: "text", text: process.env.MMX_FAKE_TEXT || "MMX_OK" }],
+  model: process.env.MMX_FAKE_MODEL || "MiniMax-M3",
+  stop_reason: process.env.MMX_FAKE_STOP || "end_turn",
+  usage: { input_tokens: 12, output_tokens: 3 },
+  base_resp: { status_code: 0, status_msg: "" },
+}));

@@ -29,6 +29,8 @@ node <MMX_SKILL_DIR>/scripts/mmx-chat.js --prompt-file <file> [--system-file <fi
 
 prompt 和 system 只经文件传递。按当前平台使用[调用与验证参考](references/verification.md)。默认配置取自[本机运行配置](profiles/local.json)：输出预算 524288，请求超时 600 秒，wrapper 超时 630 秒（`--wrap-timeout` 必须大于 `--timeout`）。优先级：命令行 flag > 环境变量（`MMX_CHAT_REQ_TIMEOUT` / `MMX_CHAT_WRAP_TIMEOUT`）> profile > 硬编码兜底。默认模型由 MMX CLI 选择，用户指定的模型覆盖对应值。宿主应通过持续会话等待 wrapper 结果；**外层工具超时须给到 700000ms 以上**（600+30+630 预算），快速小请求可显式传 `--timeout 60 --wrap-timeout 80` 把外层缩回 120000ms。
 
+调用壳层失败分支（实测两条 dev 各踩一次）：Windows 下 NEVER 经 `cmd /c` 调用或重定向——宿主沙箱普遍拦截。文本 wrapper 与非文本 CLI 一律按 [调用与验证参考](references/verification.md) 对应平台章节走 PowerShell，重定向前先设 `[Console]::OutputEncoding=[Text.Encoding]::UTF8`。宿主前台工具超时上限不足 700000ms 时：后台运行 + 有界条件等待（以回执文件出现或进程退出为触发条件，设轮询间隔与总时长上限），NEVER 裸等固定时长或换壳反复重试。
+
 ## 分片批量（多片交叉验证的默认入口）
 
 分片评审 NEVER 逐片串行调用：一次工具调用送整批，`mmx-batch.js` 经有界并发池并行执行、合并回执并自愈预算：
@@ -126,4 +128,4 @@ stdout 恒为单个 JSON，字段与 `mmx-chat.js` 对齐，多出 `effort` 与 
 
 ## 文本之外的 CLI 能力
 
-图片、视频、语音、网页搜索、工具调用及凭证管理走 [MMX CLI 参考](references/cli-reference.md)，H3 视频见 `references/h3-video/SKILL.md`。
+图片、视频、语音、网页搜索、工具调用及凭证管理走 [MMX CLI 参考](references/cli-reference.md)，H3 视频见 `references/h3-video/SKILL.md`。壳层纪律与文本 wrapper 相同（见「调用」）：Windows NEVER `cmd /c`，PowerShell 配方见 [调用与验证参考](references/verification.md)。

@@ -1,0 +1,84 @@
+diff --git a/plain.txt b/p0.txt
+similarity index 100%
+rename from plain.txt
+rename to p0.txt
+diff --git a/sp ace.txt b/p1.txt
+similarity index 100%
+rename from sp ace.txt
+rename to p1.txt
+diff --git "a/u\037.txt" b/p10.txt
+similarity index 100%
+rename from "u\037.txt"
+rename to p10.txt
+diff --git a/中文.txt b/p11.txt
+similarity index 100%
+rename from 中文.txt
+rename to p11.txt
+diff --git a/😀.txt b/p12.txt
+similarity index 100%
+rename from 😀.txt
+rename to p12.txt
+diff --git "a/e\t😀.txt" b/p13.txt
+similarity index 100%
+rename from "e\t😀.txt"
+rename to p13.txt
+diff --git a/x and b/f.txt b/p14.txt
+similarity index 100%
+rename from x and b/f.txt
+rename to p14.txt
+diff --git a/a/f.txt b/p15.txt
+similarity index 100%
+rename from a/f.txt
+rename to p15.txt
+diff --git a/b/f.txt b/p16.txt
+similarity index 100%
+rename from b/f.txt
+rename to p16.txt
+diff --git "a/\"start.txt" b/p17.txt
+similarity index 100%
+rename from "\"start.txt"
+rename to p17.txt
+diff --git a/y and b/g h.txt b/p18.txt
+similarity index 100%
+rename from y and b/g h.txt
+rename to p18.txt
+diff --git a/a b/c d.txt b/p19.txt
+similarity index 100%
+rename from a b/c d.txt
+rename to p19.txt
+diff --git a/ lead.txt b/p2.txt
+similarity index 100%
+rename from  lead.txt
+rename to p2.txt
+diff --git a/dev/null b/p20.txt
+similarity index 100%
+rename from dev/null
+rename to p20.txt
+diff --git a/trail .txt b/p3.txt
+similarity index 100%
+rename from trail .txt
+rename to p3.txt
+diff --git "a/t\tab.txt" b/p4.txt
+similarity index 100%
+rename from "t\tab.txt"
+rename to p4.txt
+diff --git "a/n\nl.txt" b/p5.txt
+similarity index 100%
+rename from "n\nl.txt"
+rename to p5.txt
+diff --git "a/q\"t.txt" b/p6.txt
+similarity index 100%
+rename from "q\"t.txt"
+rename to p6.txt
+diff --git "a/b\\s.txt" b/p7.txt
+similarity index 100%
+rename from "b\\s.txt"
+rename to p7.txt
+diff --git "a/c\001.txt" b/p8.txt
+similarity index 100%
+rename from "c\001.txt"
+rename to p8.txt
+diff --git "a/d\177.txt" b/p9.txt
+similarity index 100%
+rename from "d\177.txt"
+rename to p9.txt

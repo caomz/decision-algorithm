@@ -1,0 +1,21 @@
+-	-	 lead.txt
+-	-	"\"start.txt"
+-	-	a b/c d.txt
+-	-	a/f.txt
+-	-	b/f.txt
+-	-	"b\\s.txt"
+-	-	"c\001.txt"
+-	-	dev/null
+-	-	"d\177.txt"
+-	-	"e\t😀.txt"
+-	-	"n\nl.txt"
+-	-	plain.txt
+-	-	"q\"t.txt"
+-	-	sp ace.txt
+-	-	"t\tab.txt"
+-	-	trail .txt
+-	-	"u\037.txt"
+-	-	x and b/f.txt
+-	-	y and b/g h.txt
+-	-	中文.txt
+-	-	😀.txt

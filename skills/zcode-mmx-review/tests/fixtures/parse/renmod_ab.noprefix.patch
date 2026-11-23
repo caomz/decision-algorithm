@@ -1,0 +1,12 @@
+diff --git a/foo b/bar
+similarity index 88%
+rename from a/foo
+rename to b/bar
+index cda021d..cfa2ed0 100644
+--- a/foo
++++ b/bar
+@@ -6,3 +6,4 @@ f5
+ f6
+ f7
+ f8
++f9

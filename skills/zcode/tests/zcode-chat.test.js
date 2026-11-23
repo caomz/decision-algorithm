@@ -209,6 +209,12 @@ for (const mode of ["review", "challenge"]) test(`${mode} validates review-v1 wi
   assert.equal(invalid.status, "review_schema_mismatch");
   assert.equal(invalid.review_gate, "NOT_EVALUATED");
   assert.equal(invalid.text, "not a review");
+  assert.ok(typeof invalid.review_error === "string" && invalid.review_error.length > 0 && invalid.review_error.length <= 300);
+});
+test("default request timeout matches the MMX-paired 1200 seconds", () => {
+  const { parseArgs } = require("../scripts/zcode-chat.js");
+  assert.equal(parseArgs(["--prompt-file", "x"]).timeout, 1200);
+  assert.equal(parseArgs(["--prompt-file", "x", "--timeout-seconds", "60"]).timeout, 60);
 });
 
 function finding(kind, severity, evidence_refs = ["E1"]) {
@@ -223,6 +229,9 @@ test("review semantic gates match the shared protocol", () => {
     assert.throws(() => validateReview(review([invalid]), ["E1"]));
   }
   assert.throws(() => validateReview('{"version":1,"version":1,"summary":"x","findings":[]}', ["E1"]));
+  // Regression: the 2026-11-15 cross-review rounds failed with the opaque "review field
+  // type/value" because the model returned "version":"1" (string). The error must name the field.
+  assert.throws(() => validateReview(review([]).replace('"version":1', '"version":"1"'), ["E1"]), /version.*expected integer/);
   assert.throws(() => strictJson('{"a":1,"\\u0061":2}'));
 });
 test("launcher resolution preserves isolation and refuses arbitrary shell wrappers", () => {
@@ -231,7 +240,7 @@ test("launcher resolution preserves isolation and refuses arbitrary shell wrappe
   fs.mkdirSync(path.dirname(bundle), { recursive: true });
   fs.writeFileSync(bundle, "");
   fs.writeFileSync(cli, '#!/bin/sh\nexec mise exec node@24.14.0 -- node "$HOME/Workspace/app/zcode.cjs" "$@"\n');
-  assert.equal(resolveLaunch(cli, root).entry, bundle);
+  assert.equal(resolveLaunch(cli, root).entry, fs.realpathSync(bundle));
   fs.writeFileSync(cli, "#!/bin/sh\necho dangerous\n");
   assert.throws(() => resolveLaunch(cli, root), { status: "unsupported_launcher" });
   // A batch file that is not the documented npm shim stays unsupported; the
@@ -284,7 +293,7 @@ test("macOS auth bridge links the existing default keychain without copying or c
   assert.equal(setupMacKeychain(home, "darwin", fakeSecurity), "existing-default-keychain-link");
   const link = path.join(home, "Library/Keychains/login.keychain-db");
   assert.ok(fs.lstatSync(link).isSymbolicLink());
-  assert.equal(fs.realpathSync(link), store);
+  assert.equal(fs.realpathSync(link), fs.realpathSync(store));
   assert.equal(fs.readFileSync(store, "utf8"), "synthetic-store");
 });
 test("empty invocation and version do not invoke a CLI", () => {
@@ -355,4 +364,43 @@ test("truncated receipt never hides the independently recorded exit status", () 
   assert.equal(result.execution.signal, "SIGKILL");
   assert.equal(result.receipt_unreadable, true);
   assert.equal(result.receipt, undefined);
+});
+test("a supervisor that exits during the liveness probe is reported as finished", () => {
+  for (const probe of [false, null]) {
+    const job = path.join(root, `finishing-job-${counter++}`);
+    fs.mkdirSync(job);
+    fs.writeFileSync(path.join(job, "launch.json"), JSON.stringify({ supervisor_pid: 99999999 }));
+    // The worker saves execution.json and only then exits, so a probe that
+    // finds the supervisor gone can come right after the job finished.
+    const isAlive = () => {
+      fs.writeFileSync(path.join(job, "execution.json"), JSON.stringify({ exit_code: 0, signal: null, reason: "child_exit", receipt_exists: false }));
+      return probe;
+    };
+    const result = supervisor.status(job, { isAlive });
+    assert.equal(result.status, "finished", `probe=${probe}`);
+    assert.equal(result.execution.exit_code, 0);
+    assert.equal(result.supervisor_alive, undefined);
+  }
+});
+test("without execution.json the liveness probe decides running, interrupted or unknown", () => {
+  const job = path.join(root, "probe-only-job");
+  fs.mkdirSync(job);
+  fs.writeFileSync(path.join(job, "launch.json"), JSON.stringify({ supervisor_pid: 99999999 }));
+  for (const [probe, state] of [[true, "running"], [false, "interrupted"], [null, "unknown"]]) {
+    const result = supervisor.status(job, { isAlive: () => probe });
+    assert.equal(result.status, state);
+    assert.equal(result.supervisor_alive, probe);
+  }
+  // The default probe sees that pid 99999999 does not exist.
+  assert.equal(supervisor.status(job).status, "interrupted");
+});
+test("SKILL.md, the release manifest and the wrapper agree on one version", () => {
+  const manifest = JSON.parse(fs.readFileSync(path.resolve(__dirname, "../.zcode-release.json"), "utf8"));
+  const frontmatter = fs.readFileSync(path.resolve(__dirname, "../SKILL.md"), "utf8").match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  assert.ok(frontmatter, "SKILL.md needs a frontmatter block");
+  const declared = frontmatter[1].match(/^version:\s*(\S+)\s*$/m);
+  assert.ok(declared, "SKILL.md frontmatter needs a version");
+  const reported = JSON.parse(spawnSync(process.execPath, [wrapper, "--version"], { encoding: "utf8" }).stdout);
+  assert.equal(declared[1], manifest.version);
+  assert.equal(reported.version, manifest.version);
 });

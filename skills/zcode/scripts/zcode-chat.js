@@ -8,7 +8,7 @@ const { createHash } = require("node:crypto");
 const { spawn, spawnSync } = require("node:child_process");
 const { buildPrompt, validateReview, validateIds, strictJson } = require("./review.js");
 
-const VERSION = "1.4.0";
+const VERSION = "1.5.1";
 const SUPPORTED_CLI = "0.17.1";
 // The CLI accepts build/edit/plan/yolo/guarded. This wrapper only ever uses the
 // two read-only modes: macOS keeps the plan mode it was accepted with, Windows
@@ -271,7 +271,7 @@ function resolveMode(env = process.env, platform = process.platform) {
 }
 
 function parseArgs(argv) {
-  const args = { mode: "chat", timeout: 600 };
+  const args = { mode: "chat", timeout: 1200 };
   const names = { "--prompt-file": "prompt", "--mode": "mode", "--evidence-ids-file": "ids", "--cli-path": "cli", "--output-dir": "output", "--timeout-seconds": "timeout" };
   const seen = new Set();
   for (let i = 0; i < argv.length; i++) {
@@ -287,7 +287,7 @@ function parseArgs(argv) {
 
 async function main(argv, deps = {}) {
   if (argv.length === 1 && argv[0] === "--version") return { status: "version", version: VERSION };
-  if (!argv.length || (argv.length === 1 && argv[0] === "--help")) return { status: "usage", usage: "node zcode-chat.js --prompt-file FILE [--mode chat|review|challenge --evidence-ids-file FILE] [--output-dir NEW_DIR] [--timeout-seconds 600] [--cli-path EXECUTABLE]" };
+  if (!argv.length || (argv.length === 1 && argv[0] === "--help")) return { status: "usage", usage: "node zcode-chat.js --prompt-file FILE [--mode chat|review|challenge --evidence-ids-file FILE] [--output-dir NEW_DIR] [--timeout-seconds 1200] [--cli-path EXECUTABLE]" };
   const receipt = { status: "input_error", cli_invoked: false, exit_code: null, signal: null, complete: false, model: null, stop_reason: null, truncated: null, usage: null, review_gate: "NOT_EVALUATED" };
   let child;
   let directory;
@@ -393,7 +393,12 @@ async function main(argv, deps = {}) {
     if (!receipt.complete) fail("incomplete");
     if (args.mode !== "chat") {
       try { Object.assign(receipt, validateReview(receipt.text, ids)); }
-      catch { fail("review_schema_mismatch"); }
+      catch (error) {
+        // Keep the validator's reason (duplicate key, unknown evidence ID, JSON syntax…)
+        // next to the already-stored raw text so failed reviews can be triaged, not blindly retried.
+        receipt.review_error = String(error?.message ?? "review validation failed").slice(0, 300);
+        fail("review_schema_mismatch");
+      }
     }
     receipt.status = "ok";
   } catch (error) {

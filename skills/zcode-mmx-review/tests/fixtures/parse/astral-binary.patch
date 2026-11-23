@@ -1,0 +1,49 @@
+diff --git "a/bin\t😀.bin" "b/bin\t😀.bin"
+new file mode 100644
+index 0000000000000000000000000000000000000000..20f982d561018f3bfdd8f3230d65ded24d81c79c
+GIT binary patch
+literal 7
+OcmZQzWJ=1+;{pH!zyU`9
+
+literal 0
+HcmV?d00001
+
+diff --git "a/bs\\😀.txt" "b/bs\\😀.txt"
+new file mode 100644
+index 0000000..587be6b
+--- /dev/null
++++ "b/bs\\😀.txt"
+@@ -0,0 +1 @@
++x
+diff --git "a/old\t😀.txt" "b/new\t😁.txt"
+similarity index 100%
+rename from "old\t😀.txt"
+rename to "new\t😁.txt"
+diff --git a/plain😀.txt b/plain😀.txt
+new file mode 100644
+index 0000000..b680253
+--- /dev/null
++++ b/plain😀.txt
+@@ -0,0 +1 @@
++z
+diff --git "a/q\"😀.txt" "b/q\"😀.txt"
+new file mode 100644
+index 0000000..bca70f3
+--- /dev/null
++++ "b/q\"😀.txt"
+@@ -0,0 +1 @@
++q
+diff --git "a/tab\t中.txt" "b/tab\t中.txt"
+new file mode 100644
+index 0000000..6e9f0da
+--- /dev/null
++++ "b/tab\t中.txt"
+@@ -0,0 +1 @@
++h
+diff --git "a/tab\t😀.txt" "b/tab\t😀.txt"
+new file mode 100644
+index 0000000..975fbec
+--- /dev/null
++++ "b/tab\t😀.txt"
+@@ -0,0 +1 @@
++y

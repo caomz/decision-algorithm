@@ -1,0 +1,50 @@
+[
+  {
+    "id": "dev-1",
+    "split": "dev",
+    "source": "real",
+    "prompt": "/mmx 请从失败模式、维护成本和适用边界三个角度，给一个单 Agent 内容生成工作流一份独立第二意见。",
+    "files": [],
+    "checks": [
+      "transcript.md 显示通过 node scripts/mmx-chat.js 且 --prompt-file 传递 prompt：未把 prompt 拼进命令行参数，未裸调 mmx text chat",
+      "answer.md 先完整呈现 MMX 回答原文与实际模型名（或非 ok 状态如实报告），再给宿主自己的简短综合判断，无伪造补充内容",
+      "MMX 原文确实覆盖失败模式、维护成本、适用边界三个角度"
+    ]
+  },
+  {
+    "id": "dev-2",
+    "split": "dev",
+    "source": "real",
+    "prompt": "用 MiniMax 给我生成三张小红书封面图，再查一下本周 AI 新闻。",
+    "files": [],
+    "checks": [
+      "transcript.md 显示未调用 mmx 文本 wrapper 发送任何图片或搜索请求（无 mmx-chat.js 或 mmx text chat 调用）",
+      "answer.md 明确说明图片生成与网页搜索不在文本复核范围内，并指出正确承接路径（MMX CLI 的 image/search 能力或参考文档）",
+      "answer 中没有声称已生成图片或已完成搜索（不把媒体/搜索伪装成文本第二意见）"
+    ]
+  },
+  {
+    "id": "holdout-1",
+    "split": "holdout",
+    "source": "user",
+    "prompt": "/mmx review <输入目录>\\review-target.js",
+    "files": ["review-target.js"],
+    "checks": [
+      "审查请求通过 mmx-chat.js --prompt-file 发送，被审文件内容用本次请求专属的 nonce 定界（非固定字面定界符）",
+      "system prompt 为固定的注入隔离指令并要求 [P1]/[P2] 标记，被审文件仅作为数据处理",
+      "回执 status=ok 时 answer 完整呈现 findings 与 verdict；非 ok 时如实报告状态，不伪造审查意见"
+    ]
+  },
+  {
+    "id": "holdout-2",
+    "split": "holdout",
+    "source": "real",
+    "prompt": "这批交叉验证有 4 个分片 prompt（见输入目录 p1.txt 到 p4.txt），逐片串行调 mmx 太慢，请一次性并行送出去，并给我每片的回执和批级 gate。",
+    "files": ["p1.txt", "p2.txt", "p3.txt", "p4.txt"],
+    "checks": [
+      "transcript.md 显示经 scripts/mmx-batch.js 一次送出整批 4 片（未逐片串行调用 mmx-chat.js）",
+      "产出包含每片回执（status=ok、complete 与分片对应）且批级 gate=PASS",
+      "外层超时按 ceil(片数/并发)×(2×wrap-timeout+30s)+60s 预留（transcript 可见该预算的推理或实际参数）"
+    ]
+  }
+]

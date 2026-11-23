@@ -31,6 +31,7 @@ Thumbs.db
 
 # Harness session artifacts
 .zcode/
+.agent-teams/
 
 # Logs
 *.log
