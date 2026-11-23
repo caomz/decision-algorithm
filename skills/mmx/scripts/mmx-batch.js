@@ -20,6 +20,7 @@ const fs = require("fs");
 const path = require("path");
 const { spawn } = require("child_process");
 const { terminateChildTree } = require("./mmx-chat.js");
+const { verifyWrapperReceipt } = require("./batch-receipt.js");
 
 const VERSION = "1.0.0";
 const DEFAULT_PROFILE = path.join(__dirname, "..", "profiles", "local.json");
@@ -239,7 +240,7 @@ function runWrapperOnce(promptFile, fixedArgs) {
       liveChildren.delete(child);
       resolve({ receipt: { status: "child_error", error: `wrapper spawn failed: ${err.code || err.message}` }, duration: 0 });
     });
-    child.on("close", code => {
+    child.on("close", (code, signal) => {
       liveChildren.delete(child);
       const duration = (Date.now() - started) / 1000;
       if (cancelled) {
@@ -252,7 +253,7 @@ function runWrapperOnce(promptFile, fixedArgs) {
         resolve({ receipt: {
           status: "child_error", exit_code: code,
           error: "wrapper produced no stdout envelope",
-          ...(errText ? { stderr_tail: errText.slice(0, 1000) } : {}),
+          ...(errText ? { stderr_present: true } : {}),
         }, duration });
         return;
       }
@@ -271,7 +272,7 @@ function runWrapperOnce(promptFile, fixedArgs) {
         resolve({ receipt: { status: "child_error", exit_code: code, error: "wrapper envelope is not a JSON object with a status" }, duration });
         return;
       }
-      resolve({ receipt, duration });
+      resolve({ receipt: verifyWrapperReceipt(receipt, code, signal), duration });
     });
   });
 }
@@ -377,7 +378,7 @@ async function main() {
     if (!result) continue; // A cancelled batch may leave unscheduled shards empty.
     if (result.status === "ok") {
       okCount++;
-      if (result.complete === true && result.truncated !== true) transportOkCount++;
+      if (result.complete === true && result.truncated === false) transportOkCount++;
       else truncatedCount++;
     }
     if (result.retried) retriedCount++;
