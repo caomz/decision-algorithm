@@ -52,6 +52,7 @@ test('symlinked directories resolve to same resource when supported; target link
     assert.equal(resourceKeyForFile(target), resourceKeyForFile(path.join(alias, 'file.txt')));
   }
   const directAlias = path.join(dir, 'target-link');
-  fs.symlinkSync(target, directAlias);
+  try { fs.symlinkSync(target, directAlias); }
+  catch { t.skip('target symlink creation unavailable on this host'); return; }
   assert.throws(() => resourceKeyForFile(directAlias), e => e.code === 'EUNSUPPORTED_FILE_IDENTITY');
 });
