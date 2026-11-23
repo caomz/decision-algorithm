@@ -71,3 +71,43 @@ A6 汇总：
 5. 明确冻结历史 Windows 验收分支及生产资源未被触碰。
 
 **本 PR 应保持 Draft，不自动合并。**
+
+
+## R2 Windows Skills runtime isolation - new review scope (2026-11-23)
+
+Review \`WINDOWS_RUNTIME_R2.md\` and these newly staged modules:
+\`ny_runtime_resources.js\`, \`ny_windows_runtime.js\`, \`ny_owned_json.js\`,
+\`ny_runtime_cli.js\`, their tests and fixtures. The current HEAD SHA must be
+fetched from GitHub and fixed in every report; R1 SHA is history only.
+
+- A1: prove original cwd and argv boundaries; map observed MMX/ZCode wrappers
+  read-only. Business integration is NOT_EVALUATED until a real entry is wired.
+- A2: independently audit \`wx\` markers, Windows ACL and reparse identity,
+  lock ordering, process tree isolation, Windows replace failure classification.
+  A lock must NOT be reclaimed by time or by a failed PID check.
+- A3: check logger event values, wrapper stdout/stderr fidelity, env inheritance,
+  file/manifest packaging and exposure through arbitrary original output.
+- A4: verify independent resource concurrency, shared session exclusion,
+  cancellation, timeout, retained locks when tree ownership is unknown, and no retries.
+- A5: run inspected synthetic tests, not business scripts. Cross-process tests
+  must use two actual OS processes. Never pass a Linux result as Windows proof.
+- A6: compare five genuine independent results. If none available, record
+  \`MULTI_AGENT_REVIEW=NOT_PERFORMED\`, not approved.
+
+Required evidence:
+\`STANDALONE_OFFLINE_TEST\`, \`WINDOWS_COMPATIBILITY\`,
+\`CROSS_SKILL_RUNTIME_STABILITY\`, \`BUSINESS_BEHAVIOR_REGRESSION\`,
+\`ORIGINAL_SKILL_INTEGRATION\`, \`MULTI_AGENT_REVIEW\`,
+\`PRODUCTION_READINESS\`. Only a verified individual layer may receive PASS.
+
+Known blockers (do not silently bypass):
+1. \`.cmd/.bat\` launch intentionally returns \`EUNVERIFIED_CMD_BRIDGE\`.
+2. Windows PowerShell argv, filesystem replacement, ACL, junction, native process
+   tree ownership and stdout streaming compatibility are not independently tested.
+3. Caller-declared \`assumeNoDescendants\` is not proof of descendant ownership;
+   uncertain resource runs must remain blocked.
+4. The original Nengyun Skill entrypoint and production CDP profile are absent.
+5. The existing MMX/ZCode business wrappers and all ZMX files remain untouched.
+
+No production network, credentials, SMS, login, browser, provider requests,
+job manipulation, node upgrades, system changes, branch merge or release.
