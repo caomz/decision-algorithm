@@ -14,7 +14,8 @@
 // <skills_root>/.gstack-cross-validation-release.json.
 //
 // Only release file types are pinned (RELEASE_EXTENSIONS). Hidden entries,
-// cache directories and other file types are listed on stderr and left out.
+// cache directories, test fixtures and other file types are listed on stderr
+// and left out.
 
 "use strict";
 
@@ -40,6 +41,10 @@ const SAFE_SEGMENT = /^[A-Za-z0-9_.-]+$/;
 const RELEASE_EXTENSIONS = new Set([".md", ".py", ".js", ".json", ".yaml"]);
 // Generated caches and dependency trees are never release content.
 const VOLATILE_DIRS = new Set(["__pycache__", "node_modules"]);
+// Evaluation fixtures live beside the skill but are never release content:
+// evaluator snapshots deliberately omit them, so a marker referencing them
+// would fail install verification on every such snapshot.
+const TEST_FIXTURES = new Set(["test-prompts.json", "trigger-tests.json"]);
 
 function usageError(message) {
   process.stderr.write(`repin-release: ${message}\n`);
@@ -90,7 +95,8 @@ function walk(root, relative, files, skipped, excluded) {
       if (VOLATILE_DIRS.has(entry.name)) excluded.push(childRelative);
       else walk(root, childRelative, files, skipped, excluded);
     } else if (entry.isFile()) {
-      if (RELEASE_EXTENSIONS.has(path.extname(entry.name))) files.push(childRelative);
+      if (TEST_FIXTURES.has(entry.name)) excluded.push(childRelative);
+      else if (RELEASE_EXTENSIONS.has(path.extname(entry.name))) files.push(childRelative);
       else excluded.push(childRelative);
     } else skipped.push(childRelative);
   }
@@ -138,7 +144,7 @@ function main() {
   }
   if (excluded.length) {
     process.stderr.write(`repin-release: left ${excluded.length} path(s) out of the marker ` +
-      `(hidden entry, cache directory, or a type other than ${[...RELEASE_EXTENSIONS].join(" ")}):\n`);
+      `(hidden entry, cache directory, test fixture, or a type other than ${[...RELEASE_EXTENSIONS].join(" ")}):\n`);
     for (const relative of excluded.sort()) process.stderr.write(`  - ${relative}\n`);
   }
   process.stdout.write(`files: ${Object.keys(digests).length}\n`);

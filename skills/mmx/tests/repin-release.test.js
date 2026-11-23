@@ -15,6 +15,10 @@ const { createHash } = require("node:crypto");
 const skillDir = path.resolve(__dirname, "..");
 const repin = path.join(skillDir, "scripts", "repin-release.js");
 const MARKER = ".gstack-cross-validation-release.json";
+// Evaluation fixtures live beside the skill but are never release content:
+// evaluator snapshots deliberately omit them, so a marker referencing them
+// would fail install verification on every such snapshot.
+const TEST_FIXTURES = ["test-prompts.json", "trigger-tests.json"];
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "mmx-repin-"));
 // Cleanup removes exactly what these tests created, one path at a time.
 const createdFiles = new Set();
@@ -114,9 +118,12 @@ test("a re-pin pins the whole release and reports every path it leaves out", () 
   const { result, marker } = runRepin(managed);
   assert.equal(result.status, 0, result.stderr);
   const release = JSON.parse(fs.readFileSync(marker, "utf8"));
-  // Every file of the skill must be a release type. A new type is a decision
-  // for RELEASE_EXTENSIONS and the installer, not a silent gap in the marker.
-  const expected = [...Object.keys(SIBLINGS), ...skillFiles().map(relative => `mmx/${relative}`)].sort();
+  // Every release-type file of the release must be pinned. Evaluation fixtures
+  // are the exception: they are never release content (see TEST_FIXTURES).
+  const expected = [...Object.keys(SIBLINGS),
+    ...skillFiles().map(relative => `mmx/${relative}`)
+      .filter(relative => !TEST_FIXTURES.includes(path.basename(relative)))].sort();
+  assert.ok(!TEST_FIXTURES.some(name => name in release.files), "fixtures must not be pinned");
   assert.deepEqual(Object.keys(release.files), expected);
   for (const name of expected) {
     assert.equal(release.files[name], sha256(fs.readFileSync(path.join(managed, ...name.split("/")))), name);
@@ -124,8 +131,11 @@ test("a re-pin pins the whole release and reports every path it leaves out", () 
   assert.equal(release.format, 1);
   assert.equal(release.state, "active");
   assert.equal(release.release_id, sha256(JSON.stringify(release.files)));
-  assert.match(result.stderr, new RegExp(`left ${REPORTED.length} path\\(s\\) out of the marker`));
-  for (const name of REPORTED) assert.ok(result.stderr.includes(`  - ${name}\n`), name);
+  const reported = [...REPORTED, ...skillFiles()
+    .filter(relative => TEST_FIXTURES.includes(relative))
+    .map(relative => `mmx/${relative}`)];
+  assert.match(result.stderr, new RegExp(`left ${reported.length} path\\(s\\) out of the marker`));
+  for (const name of reported) assert.ok(result.stderr.includes(`  - ${name}\n`), name);
   const skipped = ["mmx/bad name.md", ...(symlinked ? ["agy/linked.md"] : [])];
   assert.match(result.stderr, new RegExp(`skipped ${skipped.length} path\\(s\\) the wrapper cannot verify`));
   for (const name of skipped) assert.ok(result.stderr.includes(`  - ${name}\n`), name);
@@ -142,6 +152,8 @@ test("files left out of the marker can change without locking the wrapper out", 
   assert.equal(installCheck(managed), "usage_error");
   // What Python, Finder, a package manager or a checksum run does afterwards.
   for (const name of Object.keys(LEFT_OUT)) put(managed, name, `rewritten ${name}`);
+  // Fixtures are evaluation assets: rewriting one must not lock the wrapper.
+  put(managed, "mmx/test-prompts.json", "rewritten fixture\n");
   put(managed, "cross-validation/scripts/__pycache__/cross_validate.cpython-314.pyc", "recompiled");
   put(managed, "agy/._SKILL.md", "new AppleDouble file");
   assert.equal(installCheck(managed), "usage_error");
