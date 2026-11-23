@@ -111,3 +111,32 @@ Known blockers (do not silently bypass):
 
 No production network, credentials, SMS, login, browser, provider requests,
 job manipulation, node upgrades, system changes, branch merge or release.
+
+
+## R3 - real Skill file fixes (2026-11-23)
+
+This addendum **supersedes the R2 sentence that all work is staging-only**.
+Current PR also changes these genuine Skill source and test files:
+- \`skills/mmx/scripts/mmx-batch.js\` (F3 and F5)
+- \`skills/mmx/scripts/batch-receipt.js\` (new validated outcome helper)
+- \`skills/mmx/tests/mmx-batch.test.js\`, \`skills/mmx/tests/batch-receipt.test.js\`
+- \`skills/get-biji/scripts/lock.js\` (F7)
+- \`skills/get-biji/tests/lock.test.cjs\`
+
+All other real Skill files remain untouched. Review the complete PR file list,
+and re-fetch HEAD_SHA at the start; **do not rely on R1/R2 historical SHAs**.
+
+Review focus:
+- A1: validate actual MMX batch integration and existing budget-truncation retry.
+- A2: inspect \`get-biji\` portable holder \`wx\` identity, release, over-age alive
+  holder, crash residue, and manual recovery. Do not claim Windows ACL or PID
+  handling was tested on native Windows.
+- A3: check no \`stderr_tail\` or synthetic secret is reflected in public JSON.
+- A4: verify process exit code/signal cannot be overridden by a success JSON.
+- A5: run exact tests listed in \`WINDOWS_MAIN_FIXSTATUS.md\`, compare behavior
+  to base SHA, and provide native Windows probe evidence separately.
+- A6: verify unresolved F1, F2, F4, F6, F8, F9 are **not** marked fixed.
+
+Do not mark the complete F1–F9 package or original cross-Skill integration PASS.
+Leaving orphaned holder after a process crash is a deliberate fail-closed
+availability trade-off, not proven safe automatic crash recovery.
