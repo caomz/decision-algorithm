@@ -67,3 +67,37 @@ const { publishSms, claimSms, markSubmitting, finishAttempt } = require('./scrip
 ```
 
 出现超时、失败和未知结果时不可自动重用或重新提交相同短信验证码。仅独立的、显式授权的新短信请求才可以产生新记录。
+
+## R2: opt-in Windows Skills runtime isolation (review only)
+
+The `ny_windows_runtime.js` / `ny_runtime_resources.js` / `ny_owned_json.js`
+modules and `ny_runtime_cli.js` form a separate opt-in runner for synthetic or
+independently authorized Skills. They **do not modify MMX, ZCode, ZMX, or the
+original Nengyun entrypoints**. They do not load or relocate authentication.
+
+- Per-run `skillId`, cryptographic `runId`, independent `runDir`; original `cwd`
+  is passed unchanged to the subprocess; the inherited environment is copied.
+- Stable file and browser resource keys; sorted, cross-process `wx` lock files
+  under a caller-supplied shared `lockRoot`, with bounded waiting and no stale
+  lock takeover. Resource ownership is checked before release.
+- Cancellation, timeout and unknown descendant ownership fail closed. If a
+  shared-resource child may still own descendants, its lock is intentionally
+  retained; manual inspection is required before reusing that resource.
+- `ny_owned_json.js` commits **only** synthetic/owned run files, preserving
+  prior bytes on verified pre-commit failures and retaining resource blocking
+  for indeterminate results. Do not use it to migrate a production carrier.
+- Original business stdout/stderr bytes and exit codes can pass through the
+  optional CLI; wrapper diagnostics use only bounded error codes on stderr.
+  stdout timing/streaming and terminal/interactive behavior are **not** yet
+  proven equivalent to MMX/ZCode wrappers.
+- `.cmd/.bat` is explicitly **unsupported** pending a safe Windows argument
+  bridge and real Windows tests; Node files are launched with `process.execPath`,
+  `.exe` directly, `.ps1` through Windows PowerShell without changing policy.
+- Any legacy `--check` must run through a separately audited read-only path:
+  the runner rejects it without spawning a child. CLI `inspect` only reports
+  entry type; it does not run a login-state check.
+
+The full resource contract, CLI usage, T01-T14 evidence matrix and blockers are
+in [WINDOWS_RUNTIME_R2.md](WINDOWS_RUNTIME_R2.md). Nothing in R2 is installed
+by this PR. Do not merge this staging directory into the production Windows
+Skills installation.
