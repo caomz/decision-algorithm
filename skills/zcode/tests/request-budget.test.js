@@ -82,10 +82,89 @@ const legacy = () => new Promise((ok, bad) => {
     assert.equal(code, 0, err);
     assert.equal(arrivals, expectedArrivals);
     assert.deepEqual(budget.observation(dir, {level:"local_test",entry_sha256:budget.digest(file),max_output_tokens:8}, 1),
-      { limit:1, attempts:expectedArrivals, blocked:Boolean(blockedReason), blocked_reason:blockedReason,
+      { limit:1, attempts:expectedArrivals, project_token_exchanges:0, blocked:Boolean(blockedReason), blocked_reason:blockedReason,
         ...(blockedDetail ? { blocked_detail: blockedDetail } : {}),
         verified:true, level:"local_test", entry_sha256:budget.digest(file), model_request_events:1, max_output_tokens:8,
         wire_max_output_tokens:expectedArrivals ? 8 : null, output_limit_verified:Boolean(expectedArrivals) });
+  });
+}
+
+for (const [scenario, expected, detail] of [
+  ["signed-in", ["exchange", "model"]],
+  ["runtime-version", ["exchange", "model"]],
+  ["already-used", ["exchange"], "project_token_duplicate"],
+  ["too-late", ["model"], "project_token_order"],
+  ["ineligible-payload", [], "project_token_body"],
+  ["different-origin", [], "endpoint"],
+  ["key-creation", [], "endpoint"],
+  ["redirect", ["exchange"]],
+  ["model-over-cap", ["exchange"]],
+]) {
+  test("existing project token exchange: " + scenario, { timeout: 12000 }, async t => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "z-budget-project-token-"));
+    const transport = path.join(dir, "fixture-transport.cjs");
+    const file = path.join(dir, "client.cjs");
+    // Both supported Node dispatcher slots point to an in-memory transport.
+    // The fixture uses the real Fetch pipeline, with zero sockets or credentials.
+    fs.writeFileSync(transport, `
+const fs = require("node:fs"), path = require("node:path");
+const origin = "https://bigmodel.cn";
+const scenario = process.argv[2];
+const fake = { dispatch(options, handler) {
+  const isExchange = options.path.endsWith("/access_tokens");
+  if (isExchange && options.origin.toString() !== origin) throw new Error("unexpected synthetic origin");
+  fs.appendFileSync(path.join(__dirname, "dispatches"), isExchange ? "exchange\\n" : "model\\n");
+  const redirect = scenario === "redirect" && isExchange;
+  const code = redirect ? 307 : 200;
+  const headers = redirect ? [Buffer.from("location"), Buffer.from("/other")] : [];
+  if (handler.onConnect) {
+    handler.onConnect(() => {});
+    handler.onHeaders(code, headers, () => {}, redirect ? "Temporary Redirect" : "OK");
+    handler.onComplete([]);
+  } else {
+    const controller = { abort() {}, pause() {}, resume() {}, paused: false, aborted: false };
+    handler.onRequestStart(controller, null);
+    handler.onResponseStart(controller, code, redirect ? { location: "/other" } : {}, redirect ? "Temporary Redirect" : "OK");
+    handler.onResponseEnd(controller, {});
+  }
+  return true;
+}};
+new Request("data:,");
+for (const key of ["undici.globalDispatcher.1", "undici.globalDispatcher.2"]) globalThis[Symbol.for(key)] = fake;`);
+    fs.writeFileSync(file, `
+const origin = process.argv[2] === "different-origin" ? "https://fixture.invalid" : "https://bigmodel.cn";
+const path = "/api/biz/v1/organization/sample_org/projects/sample_project/api_keys";
+const project = origin + path + (process.argv[2] === "key-creation" ? "" : "/sample_key.test_id/access_tokens");
+const scenario = process.argv[2];
+const body = { clientType: "zcode", clientVersion: scenario === "runtime-version" ? "0.17.1" : "0.0.0-dev" };
+if (scenario === "ineligible-payload") body.other = false;
+const token = () => fetch(project, { method: "POST", body: Buffer.from(JSON.stringify(body)) });
+const model = () => fetch("https://fixture.invalid/v1/messages", { method: "POST",
+  body: JSON.stringify({ max_tokens: scenario === "model-over-cap" ? 9 : 8 }) });
+(async () => {
+  if (scenario === "too-late") { await model(); await token().catch(() => {}); return; }
+  await token().catch(() => {});
+  if (scenario === "already-used") await token().catch(() => {});
+  if (["signed-in","runtime-version","model-over-cap"].includes(scenario)) await model().catch(() => {});
+})().catch(error => { console.error(error); process.exitCode = 1; });`);
+    const hash = budget.digest(file);
+    const child = spawn(process.execPath, ["--require", transport, "--require", preload, file, scenario], {
+      stdio: ["ignore", "ignore", "pipe"], env: { ZCODE_WRAPPER_BUDGET_DIR: dir,
+        ZCODE_WRAPPER_ENTRY_SHA256: hash, ZCODE_WRAPPER_OUTPUT_LIMIT: "8" },
+    });
+    t.after(() => { if (child.exitCode === null && child.signalCode === null) child.kill(); });
+    let stderr = "";
+    child.stderr.on("data", chunk => { stderr += chunk; });
+    const [code] = await once(child, "close");
+    assert.equal(code, 0, stderr);
+    const log = path.join(dir, "dispatches");
+    const sent = fs.existsSync(log) ? fs.readFileSync(log, "utf8").trim().split("\n") : [];
+    assert.deepEqual(sent, expected);
+    const proof = budget.observation(dir, { level: "fixture", entry_sha256: hash, max_output_tokens: 8 }, 1);
+    assert.equal(proof.project_token_exchanges, Number(expected.includes("exchange")));
+    assert.equal(proof.attempts, Number(expected.includes("model")));
+    assert.equal(proof.blocked_detail, detail);
+    assert.equal(proof.blocked_reason, scenario === "model-over-cap" ? "output_limit_exceeded" : detail ? "output_limit_unverified" : null);
   });
 }
 

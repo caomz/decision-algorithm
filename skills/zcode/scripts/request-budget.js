@@ -41,9 +41,11 @@ function observation(directory, policy, modelRequests) {
       "request_transport_unverified"].includes(raw) ? raw : "request_budget_unverified";
     if (blockedReason === "output_limit_unverified" && ["method", "endpoint", "body_type", "body_read", "body_size",
       "body_timeout", "body_aborted", "body_unavailable", "body_utf8", "json", "field_absent", "fields_ambiguous",
-      "field_invalid", "http_stream"].includes(detail)) blockedDetail = detail;
+      "field_invalid", "http_stream", "project_token_body", "project_token_order",
+      "project_token_destination", "project_token_duplicate"].includes(detail)) blockedDetail = detail;
   }
-  return { limit: 1, attempts: Number(dispatched), blocked, blocked_reason: blockedReason,
+  return { limit: 1, attempts: Number(dispatched), project_token_exchanges: Number(exists("project-token-exchange")),
+    blocked, blocked_reason: blockedReason,
     ...(blockedDetail ? { blocked_detail: blockedDetail } : {}),
     verified: exists("armed"), level: policy.level, entry_sha256: policy.entry_sha256, model_request_events: modelRequests,
     max_output_tokens: policy.max_output_tokens, wire_max_output_tokens: wireLimit,

@@ -1,7 +1,7 @@
 ---
 name: zcode
 description: Use the ZCode CLI for text-only chat, review, challenge, or an explicitly requested second opinion. Applies to "/zcode", "用 ZCode 问一下", "通过 zcode cli 交叉验证" and review workflows that name ZCode.
-version: 1.6.1
+version: 1.6.2
 ---
 
 # /zcode — ZCode 文本复核
@@ -11,6 +11,8 @@ version: 1.6.1
 ## 用法
 
 1.6.1 支持原生选项映射适配器生成的 Fetch Request。包装器在通过审核的模型端点读取私有副本，校验完整 UTF-8 JSON，再把相同字节用于传输。Request 快照限 4 MiB、8192 个数据块和 5 秒，超过任一上限即在发送前停止。`native_request_budget.blocked_detail` 为核验失败保留类别，帮助区分端点、字段和正文形态。
+
+1.6.2 支持固定原生 BigModel 入口为已有项目执行一次短时令牌交换。交换只可在模型请求之前，通过其固定 HTTPS 端点，无重定向，由 `project_token_exchanges` 单独记数。模型发送次数仍由 `attempts` 记录，输出 Token 上限仍按实际请求校验。
 
 1.6.0 为单次调用使用已核对的原生 Node bundle。它关闭适配器自动重试，在 Node 的实际 HTTP 写请求分发前预占一次额度。重复请求、运行链无法识别或缺少预算凭据时，回执会记录失败。查看 `native_request_budget` 核对已放行次数、拒绝记录与原生模型请求事件数。`--max-output-tokens N` 指定单次原生输出上限（默认 524288）。发出前核对模型端点已序列化的 JSON 中实际输出限制，回执保留 `wire_max_output_tokens` 和 `output_limit_verified`。无法核对上限的传输（包括需在发出后才提供正文的代理/CA 路径）会停止，现有网络配置继续生效。
 

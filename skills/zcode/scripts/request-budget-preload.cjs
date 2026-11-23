@@ -42,15 +42,50 @@ function reserve(method, wireLimit) {
 
 function unverified(detail) { return rejectDispatch("output_limit_unverified", detail); }
 
-function outputFields(input, method) {
+function postUrl(input, method) {
   if (String(method).toUpperCase() !== "POST") unverified("method");
-  let pathname;
-  try { pathname = new URL(input instanceof Request ? input.url : input).pathname.replace(/\/$/, ""); }
+  try { return new URL(input instanceof Request ? input.url : input); }
   catch { unverified("endpoint"); }
+}
+
+function outputFields(url) {
+  const pathname = url.pathname.replace(/\/$/, "");
   if (pathname.endsWith("/chat/completions")) return ["max_tokens", "max_completion_tokens"];
   if (pathname.endsWith("/messages")) return ["max_tokens"];
   if (pathname.endsWith("/responses")) return ["max_output_tokens"];
   unverified("endpoint");
+}
+
+// The pinned BigModel CLI exchanges an existing project's credential for a
+// short-lived access token before the model POST. Key creation and other
+// account operations have different paths and remain outside this allowance.
+const PROJECT_TOKEN_ORIGIN = "https://bigmodel.cn";
+const PROJECT_TOKEN_PATH = /^\/api\/biz\/v1\/organization\/[A-Za-z0-9_-]{1,128}\/projects\/[A-Za-z0-9_-]{1,128}\/api_keys\/[A-Za-z0-9_-][A-Za-z0-9_.-]{0,255}\/access_tokens$/;
+const PROJECT_TOKEN_BODIES = ["0.0.0-dev", "0.17.1"]
+  .map(clientVersion => JSON.stringify({ clientType: "zcode", clientVersion }));
+function isProjectTokenUrl(url) {
+  return url.origin === PROJECT_TOKEN_ORIGIN && !url.username && !url.password &&
+    !url.search && !url.hash && PROJECT_TOKEN_PATH.test(url.pathname);
+}
+
+function projectTokenBody(body) {
+  if (!(typeof body === "string" || body instanceof Uint8Array) || body.length > 128) {
+    unverified("project_token_body");
+  }
+  const bytes = Buffer.from(body);
+  if (!PROJECT_TOKEN_BODIES.includes(bytes.toString("utf8"))) unverified("project_token_body");
+  return bytes;
+}
+
+function reserveProjectToken(expected, dispatch) {
+  if (denied || dispatched) unverified("project_token_order");
+  if (dispatch.method !== "POST" || dispatch.origin?.toString() !== PROJECT_TOKEN_ORIGIN ||
+      dispatch.path !== expected.pathname) unverified("project_token_destination");
+  try { mark("project-token-exchange"); }
+  catch (error) {
+    if (error.code !== "EEXIST") throw error;
+    unverified("project_token_duplicate");
+  }
 }
 
 function outputLimit(text, fields) {
@@ -113,25 +148,33 @@ globalThis.fetch = async function fetchWithBudget(input, init) {
   if (currentDispatcher() !== dispatcher || (options.dispatcher && options.dispatcher !== dispatcher)) rejectDispatch("request_transport_unverified");
   const method = options.method ?? (input instanceof Request ? input.method : "GET");
   let wireLimit = null;
+  let projectTokenUrl = null;
   if (!isReadOrTunnel(method)) {
-    const fields = outputFields(input, method);
-    if (typeof options.body === "string") {
-      wireLimit = outputLimit(options.body, fields);
-    } else if (options.body == null && input instanceof Request) {
-      let bytes;
-      try { bytes = await snapshotBody(input, options.signal ?? input.signal); }
-      catch (error) { if (denied) throw error; unverified("body_read"); }
-      let text;
-      try { text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes); }
-      catch { unverified("body_utf8"); }
-      wireLimit = outputLimit(text, fields);
-      options.body = bytes;
+    const url = postUrl(input, method);
+    if (isProjectTokenUrl(url)) {
+      projectTokenUrl = url;
+      options.body = projectTokenBody(options.body);
     } else {
-      unverified("body_type");
+      const fields = outputFields(url);
+      if (typeof options.body === "string") {
+        wireLimit = outputLimit(options.body, fields);
+      } else if (options.body == null && input instanceof Request) {
+        let bytes;
+        try { bytes = await snapshotBody(input, options.signal ?? input.signal); }
+        catch (error) { if (denied) throw error; unverified("body_read"); }
+        let text;
+        try { text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes); }
+        catch { unverified("body_utf8"); }
+        wireLimit = outputLimit(text, fields);
+        options.body = bytes;
+      } else {
+        unverified("body_type");
+      }
     }
   }
   const guardedDispatcher = { dispatch(options, handler) {
-    reserve(options.method, wireLimit);
+    if (projectTokenUrl) reserveProjectToken(projectTokenUrl, options);
+    else reserve(options.method, wireLimit);
     return dispatcher.dispatch(options, handler);
   } };
   return nativeFetch(input, { ...options, dispatcher: guardedDispatcher, redirect: "error" });
