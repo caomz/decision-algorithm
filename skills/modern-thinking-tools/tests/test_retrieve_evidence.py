@@ -21,6 +21,12 @@ class FakeSchemaError(Exception):
     pass
 
 
+@pytest.fixture(autouse=True)
+def _bundled_course(monkeypatch) -> None:
+    """Tests never read the external course text; they use the bundled fixture."""
+    monkeypatch.setattr(MODULE, "COURSE_PATH", COURSE_FIXTURE)
+
+
 def test_training_contract_and_exact_course_coverage(monkeypatch) -> None:
     valid = {f"T{index:03d}" for index in range(1, 101)}
     MODULE.validate_request_contract(
@@ -132,7 +138,6 @@ def test_v2_pack_keeps_stage_tool_ids_and_private_prompt_context(monkeypatch) ->
         }
 
     monkeypatch.setattr(MODULE, "load_getnote_api", lambda: (fake_request, FakeSchemaError))
-    monkeypatch.setattr(MODULE, "COURSE_PATH", COURSE_FIXTURE)
     pack = MODULE.build_evidence(
         problem="我是否应该裸辞创业",
         topic_id="0Rp2K3pn",
