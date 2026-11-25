@@ -39,8 +39,8 @@ Skill 文件管理工具 - 列出和验证已生成的 Skill。
 # 列出所有 Skill
 python tools/skill_writer.py --action list
 
-# 验证 Skill
-python tools/skill_writer.py --action validate --skill decision-algorithm
+# 验证 Skill（参数可以是 SKILL.md 路径或其所在目录）
+python tools/skill_writer.py --action validate --skill .
 ```
 
 ### version_manager.py
