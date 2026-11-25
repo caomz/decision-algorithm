@@ -14,8 +14,9 @@ Design rules:
 
 * **Fail-closed.** Nothing is overwritten, deleted, or replaced without an explicit
   flag. ``--apply`` only fills in genuinely missing links.
-* **Recoverable.** ``--relink`` backs up whatever it displaces (a directory is
-  *moved* to ``<name>.backup-<timestamp>``, never deleted).
+* **Recoverable.** ``--relink`` backs up whatever it displaces: a real directory
+  or a plain file is *moved* to ``<name>.backup-<timestamp>``, never deleted.
+  Only a dangling link is removed outright, because a link holds no data.
 * **Honest.** A skill that lives elsewhere on the machine (another checkout, the
   shared ``~/.agents/skills`` store) is reported as ``upstream``, not silently
   hijacked.
@@ -44,20 +45,22 @@ SKILLS_DIR = ROOT / "skills"
 
 # ---------------------------------------------------------------- states ----
 
-LINKED = "linked"      # already points at this repository
-UPSTREAM = "upstream"  # points at some other source of truth on this machine
-COPY = "copy"          # a real directory sits there (a manual copy)
-BROKEN = "broken"      # dangling symlink or a plain file
-MISSING = "missing"    # nothing there yet
+LINKED = "linked"                # already points at this repository
+UPSTREAM = "upstream"            # points at some other source of truth on this machine
+COPY = "copy"                    # a real directory sits there (a manual copy)
+DANGLING_LINK = "dangling-link"  # a link whose target is gone (removing it loses nothing)
+PLAIN_FILE = "plain-file"        # a real file sits where the link should go
+MISSING = "missing"              # nothing there yet
 
-STATE_ORDER = [LINKED, MISSING, UPSTREAM, COPY, BROKEN]
+STATE_ORDER = [LINKED, MISSING, UPSTREAM, COPY, DANGLING_LINK, PLAIN_FILE]
 
 STATE_LABEL = {
     LINKED: "已链接到本仓库",
     MISSING: "缺失",
     UPSTREAM: "指向别处（上游正本）",
     COPY: "是实体目录（手工拷贝）",
-    BROKEN: "损坏的链接或文件",
+    DANGLING_LINK: "断链（目标已不存在）",
+    PLAIN_FILE: "普通文件（不是链接）",
 }
 
 
@@ -209,14 +212,14 @@ def classify(path: Path, repo_skill: Path) -> str:
     target = link_target(path)
     if target is not None:
         if not target.exists():
-            return BROKEN
+            return DANGLING_LINK
         if _same_path(target, repo_skill):
             return LINKED
         return UPSTREAM
     if path.exists():
         if path.is_dir():
             return COPY
-        return BROKEN
+        return PLAIN_FILE
     return MISSING
 
 
@@ -272,7 +275,8 @@ def plan(skills: Sequence[Skill], platform_keys: Sequence[str], include_project:
 # --------------------------------------------------------------- actions ----
 
 
-def backup_dir(path: Path) -> Path:
+def backup_path(path: Path) -> Path:
+    """Timestamped ``<name>.backup-<stamp>`` sibling for a file or directory."""
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     return path.with_name(f"{path.name}.backup-{stamp}")
 
@@ -296,7 +300,7 @@ def apply_row(row: Row, repo_skill: Path, relink: bool, dry_run: bool) -> Row:
                 row.detail = f"创建后状态异常：{STATE_LABEL.get(new_state, new_state)}"
         return row
 
-    if row.state in (UPSTREAM, BROKEN):
+    if row.state in (UPSTREAM, DANGLING_LINK):
         if not relink:
             row.action = "skip"
             row.detail = "需 --relink 才会改指向（默认不动）"
@@ -310,12 +314,14 @@ def apply_row(row: Row, repo_skill: Path, relink: bool, dry_run: bool) -> Row:
             row.state = classify(row.path, repo_skill)
         return row
 
-    # COPY: a real directory is standing where the link should go.
+    # COPY / PLAIN_FILE: something real is standing where the link should go —
+    # move it aside to a timestamped backup, never delete it.
     if not relink:
         row.action = "skip"
-        row.detail = "实体目录，需 --relink 备份后改链接（默认不动）"
+        what = "实体目录" if row.state == COPY else "普通文件"
+        row.detail = f"{what}，需 --relink 备份后改链接（默认不动）"
         return row
-    backup = backup_dir(row.path)
+    backup = backup_path(row.path)
     row.action = "adopt"
     row.detail = f"备份为 {backup.name} 后改链接"
     if not dry_run:
@@ -572,13 +578,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 row.action = "ok"
             elif row.state == MISSING:
                 row.action = "would-create"
-            elif row.state in (UPSTREAM, COPY, BROKEN) and not args.relink:
+            elif row.state in (UPSTREAM, COPY, DANGLING_LINK, PLAIN_FILE) and not args.relink:
                 row.action = "needs-relink"
 
     deps = check_dependencies(skills)
 
     if args.json:
-        conflicted = [r for r in rows if r.state in (UPSTREAM, COPY, BROKEN)]
+        conflicted = [r for r in rows if r.state in (UPSTREAM, COPY, DANGLING_LINK, PLAIN_FILE)]
         print(json.dumps({
             "ok": not conflicted,
             "mode": "uninstall" if args.uninstall else ("apply" if args.apply else "check"),
@@ -614,7 +620,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     if not args.apply and not args.uninstall:
         missing = sum(1 for r in rows if r.state == MISSING)
-        needs = sum(1 for r in rows if r.state in (UPSTREAM, COPY, BROKEN))
+        needs = sum(1 for r in rows if r.state in (UPSTREAM, COPY, DANGLING_LINK, PLAIN_FILE))
         print()
         if missing:
             print(f"下一步：python3 scripts/install_skills.py --apply    # 补上 {missing} 个缺失链接")

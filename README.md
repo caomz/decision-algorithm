@@ -76,7 +76,7 @@ python3 scripts/install_skills.py --apply
 - **装前体检**——先查 Node、playwright、ffmpeg、GetNote 凭证等运行时依赖，缺什么直接给出修复命令，不做装完才发现跑不了的假安装
 - **只补缺失的**——绝不覆盖已有的文件、目录或指向别处的链接
 - **如实报告冲突**——发现某处指向上游正本（`~/.agents/skills`、另一份 checkout）时标出来，要改指向得显式加 `--relink`
-- **实体目录先备份**——`--relink` 遇到手工拷贝的目录会先移走备份再链接，绝不删数据
+- **实体目录/普通文件先备份**——`--relink` 遇到手工拷贝的目录或普通文件会先移走备份（`*.backup-*`）再链接，绝不删数据；断链可以直接重建，因为链接本身不存数据
 
 ```
 安装状态检查 · /path/to/decision-algorithm
@@ -100,7 +100,7 @@ claude       personal  decision-algorithm      缺失                     would-
 | `python3 scripts/install_skills.py` | 只看状态，不动任何文件 |
 | `python3 scripts/install_skills.py --apply` | 补上所有缺失链接 |
 | `python3 scripts/install_skills.py --apply --skill get-biji --target claude` | 只装某几个 skill 到某个平台（可重复） |
-| `python3 scripts/install_skills.py --apply --relink` | 连指向别处的也改指向本仓库（实体目录先备份） |
+| `python3 scripts/install_skills.py --apply --relink` | 连指向别处的也改指向本仓库（实体目录/普通文件先备份） |
 | `python3 scripts/install_skills.py --apply --with-deps` | 顺带 `npm install` + 装 Chromium |
 | `python3 scripts/install_skills.py --apply --all-scopes` | 额外装到项目内 `.claude/` `.codex/` |
 | `python3 scripts/install_skills.py --uninstall` | 移除指向本仓库的链接 |
