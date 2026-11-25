@@ -20,6 +20,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 MAX_VERSIONS = 10  # 最多保留的版本数
+BACKUP_SUFFIX = "_before_rollback"  # 回滚备份目录后缀，清理时必须保留
 
 
 def list_versions(skill_dir: Path) -> list:
@@ -61,7 +62,7 @@ def rollback(skill_dir: Path, target_version: str) -> bool:
     if meta_path.exists():
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
         current_version = meta.get("version", "v?")
-        backup_dir = skill_dir / "versions" / f"{current_version}_before_rollback"
+        backup_dir = skill_dir / "versions" / f"{current_version}{BACKUP_SUFFIX}"
         backup_dir.mkdir(parents=True, exist_ok=True)
         for fname in ("SKILL.md", "work.md", "persona.md"):
             src = skill_dir / fname
@@ -89,13 +90,21 @@ def rollback(skill_dir: Path, target_version: str) -> bool:
 
 
 def cleanup_old_versions(skill_dir: Path, max_versions: int = MAX_VERSIONS):
-    """清理超出限制的旧版本"""
+    """清理超出限制的旧版本
+
+    `*_before_rollback` 备份目录保留回滚前的现场，不参与版本计数，
+    也不会被清理。
+    """
     versions_dir = skill_dir / "versions"
     if not versions_dir.exists():
         return
 
     version_dirs = sorted(
-        [d for d in versions_dir.iterdir() if d.is_dir()],
+        [
+            d
+            for d in versions_dir.iterdir()
+            if d.is_dir() and not d.name.endswith(BACKUP_SUFFIX)
+        ],
         key=lambda d: d.stat().st_mtime,
     )
 
@@ -169,7 +178,8 @@ def main():
         if not args.version:
             print("错误：rollback 操作需要 --version", file=sys.stderr)
             sys.exit(1)
-        rollback(skill_dir, args.version)
+        if not rollback(skill_dir, args.version):
+            sys.exit(1)
 
     elif args.action == "cleanup":
         cleanup_old_versions(skill_dir, args.max_versions)
