@@ -60,3 +60,5 @@ python tools/version_manager.py --action rollback --skill-dir . --version v2
 # 清理旧版本
 python tools/version_manager.py --action cleanup --skill-dir .
 ```
+
+注意：清理只针对正常版本目录，`*_before_rollback` 回滚备份始终保留；rollback 失败时进程以非 0 退出并在 stderr 打印失败原因。
