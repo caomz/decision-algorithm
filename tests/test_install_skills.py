@@ -60,17 +60,18 @@ def test_classify_recognises_every_state(tmp_path) -> None:
     copy.mkdir()
     assert MODULE.classify(copy, repo) == MODULE.COPY
 
-    # A link whose target has since been removed is broken, not merely absent.
+    # A link whose target has since been removed is dangling — a pointer with
+    # nothing behind it, distinct from a plain file.
     gone = tmp_path / "gone"
     gone.mkdir()
     dangling = tmp_path / "dangling"
     MODULE.create_link(dangling, gone)
     shutil.rmtree(gone)
-    assert MODULE.classify(dangling, repo) == MODULE.BROKEN
+    assert MODULE.classify(dangling, repo) == MODULE.DANGLING_LINK
 
     plain = tmp_path / "plain.txt"
     plain.write_text("x", encoding="utf-8")
-    assert MODULE.classify(plain, repo) == MODULE.BROKEN
+    assert MODULE.classify(plain, repo) == MODULE.PLAIN_FILE
 
 
 def test_apply_creates_link_for_missing_and_is_idempotent(tmp_path) -> None:
@@ -146,6 +147,83 @@ def test_apply_relink_backs_up_real_directory_before_linking(tmp_path) -> None:
     backups = list(copy.parent.glob("repo-skill.backup-*"))
     assert len(backups) == 1
     assert (backups[0] / "important.txt").read_text(encoding="utf-8") == "do not lose me"
+
+
+def test_apply_refuses_to_touch_plain_file_without_relink(tmp_path) -> None:
+    repo = tmp_path / "repo-skill"
+    repo.mkdir()
+    plain = tmp_path / "skills" / "repo-skill"
+    plain.parent.mkdir(parents=True)
+    plain.write_text("keep", encoding="utf-8")
+
+    row = make_row(plain, repo, MODULE.PLAIN_FILE)
+    MODULE.apply_row(row, repo, relink=False, dry_run=False)
+
+    assert row.action == "skip"
+    assert plain.is_file()
+    assert plain.read_text(encoding="utf-8") == "keep"
+    assert not is_link(plain)
+    assert not list(plain.parent.glob("repo-skill.backup-*"))
+
+
+def test_apply_relink_backs_up_plain_file_before_linking(tmp_path) -> None:
+    repo = tmp_path / "repo-skill"
+    repo.mkdir()
+    (repo / "SKILL.md").write_text("x", encoding="utf-8")
+    plain = tmp_path / "skills" / "repo-skill"
+    plain.parent.mkdir(parents=True)
+    plain.write_text("do not lose me", encoding="utf-8")
+
+    row = make_row(plain, repo, MODULE.PLAIN_FILE)
+    MODULE.apply_row(row, repo, relink=True, dry_run=False)
+
+    assert row.action == "adopt"
+    assert is_link(plain)
+    assert plain.resolve() == repo.resolve()
+
+    backups = list(plain.parent.glob("repo-skill.backup-*"))
+    assert len(backups) == 1
+    assert backups[0].is_file()
+    assert backups[0].read_text(encoding="utf-8") == "do not lose me"
+
+
+def test_apply_relink_removes_dangling_link_without_backup(tmp_path) -> None:
+    repo = tmp_path / "repo-skill"
+    repo.mkdir()
+    (repo / "SKILL.md").write_text("x", encoding="utf-8")
+    gone = tmp_path / "gone"
+    gone.mkdir()
+    dangling = tmp_path / "skills" / "repo-skill"
+    dangling.parent.mkdir(parents=True)
+    MODULE.create_link(dangling, gone)
+    shutil.rmtree(gone)
+    assert MODULE.classify(dangling, repo) == MODULE.DANGLING_LINK
+
+    row = make_row(dangling, repo, MODULE.DANGLING_LINK)
+    MODULE.apply_row(row, repo, relink=True, dry_run=False)
+
+    assert row.action == "relink"
+    assert is_link(dangling)
+    assert dangling.resolve() == repo.resolve()
+    # A link holds no data: relinking it leaves no *.backup-* behind.
+    assert not list(dangling.parent.glob("repo-skill.backup-*"))
+
+
+def test_plain_file_relink_dry_run_changes_nothing(tmp_path) -> None:
+    repo = tmp_path / "repo-skill"
+    repo.mkdir()
+    plain = tmp_path / "skills" / "repo-skill"
+    plain.parent.mkdir(parents=True)
+    plain.write_text("keep", encoding="utf-8")
+
+    row = make_row(plain, repo, MODULE.PLAIN_FILE)
+    MODULE.apply_row(row, repo, relink=True, dry_run=True)
+
+    assert row.action == "adopt"
+    assert plain.is_file()
+    assert plain.read_text(encoding="utf-8") == "keep"
+    assert not is_link(plain)
+    assert not list(plain.parent.glob("repo-skill.backup-*"))
 
 
 def test_dry_run_changes_nothing(tmp_path) -> None:
