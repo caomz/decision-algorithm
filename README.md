@@ -218,6 +218,7 @@ node --test "skills/get-biji/tests/**/*.test.cjs"
 # ZCode / MMX：离线测试（不触网、不消耗额度）
 node --test "skills/zcode/tests/**/*.test.js"
 node --test "skills/mmx/tests/**/*.test.js"
+node --test "skills/zcode-mmx-review/tests/**/*.test.js"
 ```
 
 需要 pytest 时用仓库内 venv，避免污染系统 Python：
