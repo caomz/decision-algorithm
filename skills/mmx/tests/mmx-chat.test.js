@@ -8,6 +8,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
 const { safeCmdArgument, npmShimEntry, findMmx, terminateChildTree } = require(path.join(__dirname, "..", "scripts", "mmx-chat.js"));
+const { cleanEnv } = require("./support/env.js");
 
 const skillRoot = path.resolve(__dirname, "..");
 const wrapper = path.join(skillRoot, "scripts", "mmx-chat.js");
@@ -114,8 +115,7 @@ function writeInputs(prompt = "hello", system = null) {
 
 function runWrapper(args = [], extraEnv = {}, includeFake = true) {
   fs.writeFileSync(invocationLog, "");
-  const env = {
-    ...process.env,
+  const env = cleanEnv({
     PATH: includeFake ? `${binDir}${path.delimiter}${process.env.PATH || ""}` : "",
     TMPDIR: wrapperTmp,
     TMP: wrapperTmp,
@@ -124,7 +124,7 @@ function runWrapper(args = [], extraEnv = {}, includeFake = true) {
     FAKE_INVOCATIONS: invocationLog,
     FAKE_MESSAGES_DUMP: messagesDumpPath,
     ...extraEnv,
-  };
+  });
   return spawnSync(process.execPath, [wrapper, ...args], {
     env, encoding: "utf8", timeout: 15000, maxBuffer: 16 * 1024 * 1024,
   });
@@ -468,9 +468,9 @@ test("SIGTERM cancellation yields one final JSON object", async () => {
   if (process.platform === "win32") return;
   writeInputs("cancel");
   unlinkKnown(argsDumpPath);
-  const env = { ...process.env, PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`,
+  const env = cleanEnv({ PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`,
     TMPDIR: wrapperTmp, TMP: wrapperTmp, TEMP: wrapperTmp, FAKE_MODE: "hang",
-    FAKE_ARGS_DUMP: argsDumpPath, FAKE_MESSAGES_DUMP: messagesDumpPath };
+    FAKE_ARGS_DUMP: argsDumpPath, FAKE_MESSAGES_DUMP: messagesDumpPath });
   const child = spawn(process.execPath, [wrapper, "--prompt-file", promptPath], { env, stdio: ["ignore", "pipe", "pipe"] });
   const chunks = [];
   child.stdout.on("data", chunk => chunks.push(chunk));
@@ -531,8 +531,8 @@ test("managed release rejects mixed or interrupted installation before launching
   function run() {
     fs.writeFileSync(invocationLog, "");
     return jsonResult(spawnSync(process.execPath, [installedWrapper, "--prompt-file", promptPath], {
-      env: { ...process.env, PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`, TMPDIR: wrapperTmp,
-        TMP: wrapperTmp, TEMP: wrapperTmp, FAKE_INVOCATIONS: invocationLog },
+      env: cleanEnv({ PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`, TMPDIR: wrapperTmp,
+        TMP: wrapperTmp, TEMP: wrapperTmp, FAKE_INVOCATIONS: invocationLog }),
       encoding: "utf8", timeout: 15000,
     }));
   }
@@ -573,8 +573,8 @@ test("a managed layout without a release marker fails closed before the CLI runs
   fs.writeFileSync(invocationLog, "");
   const run = spawnSync(process.execPath, [path.join(managed, "mmx", "scripts", "mmx-chat.js"),
     "--prompt-file", promptPath], {
-    env: { ...process.env, PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`, TMPDIR: wrapperTmp,
-      TMP: wrapperTmp, TEMP: wrapperTmp, FAKE_INVOCATIONS: invocationLog },
+    env: cleanEnv({ PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`, TMPDIR: wrapperTmp,
+      TMP: wrapperTmp, TEMP: wrapperTmp, FAKE_INVOCATIONS: invocationLog }),
     encoding: "utf8", timeout: 15000,
   });
   const result = jsonResult(run);
@@ -602,8 +602,8 @@ test("a plain install without siblings and without a marker is not treated as ma
   fs.writeFileSync(invocationLog, "");
   const run = spawnSync(process.execPath, [path.join(plain, "mmx", "scripts", "mmx-chat.js"),
     "--prompt-file", promptPath], {
-    env: { ...process.env, PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`, TMPDIR: wrapperTmp,
-      TMP: wrapperTmp, TEMP: wrapperTmp, FAKE_INVOCATIONS: invocationLog },
+    env: cleanEnv({ PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`, TMPDIR: wrapperTmp,
+      TMP: wrapperTmp, TEMP: wrapperTmp, FAKE_INVOCATIONS: invocationLog }),
     encoding: "utf8", timeout: 15000,
   });
   assert.equal(jsonResult(run).status, "ok");

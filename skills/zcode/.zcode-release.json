@@ -13,10 +13,11 @@
     "scripts/zcode-chat.js": "5b2e1ca10869f260cf33ddca6070f55647144a4f4cd277adef5c19aaafb5a38a",
     "scripts/zcode-run.js": "b4fceac86283521fb799bb87033da53a97b6b1c5dcef7a5fe18c6d180d83b432",
     "tests/fixtures/fake-zcode.cjs": "a2e5648cdcf8d1fe270c012625553528366d01d89ff4e430424991b8d9a480df",
-    "tests/repin-release.test.js": "ddd830687607faec28a72063eee6763739cb4fd8ebadf60362102f3ef67bf965",
+    "tests/repin-release.test.js": "2663a24bcd46ec01583e1656740bb585151f2bab87758f0750927d05a1bc8da0",
     "tests/review-golden.test.js": "e36ffebea6e6456f6b3c6362eab3429e43fa4beac9cf91e61e9155792ce6d04e",
-    "tests/zcode-batch.test.js": "4913198418ffe63d8c346dab11b4c6fc05ba6345aa7e4842bb6672e03741e6a0",
-    "tests/zcode-chat.test.js": "9585e529b1813a02e87952d35784d8d78b122de7d93937d768ed5181523113de"
+    "tests/support/env.js": "ea798670d54db6c29191581bfa0ba3e5aad3f7b913100fc7fa70ec0222906e50",
+    "tests/zcode-batch.test.js": "a1b8244010ea6fe87f98067534f0fd84fa8e3caa739d1e12161cb6bdc186fad5",
+    "tests/zcode-chat.test.js": "a8bf1bd75ea14b5cd3d3c2ed7bedfc315f81c88bf0029572dd76f6b3eeaf60af"
   },
   "review_sha256": "f4a6a4522bb5d07d48db6b3ac83bda25a08dff5bbd0cde7b05618d54520c9c83"
 }

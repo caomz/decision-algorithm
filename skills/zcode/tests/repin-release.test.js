@@ -8,6 +8,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { createHash } = require("node:crypto");
+const { cleanEnv } = require("./support/env.js");
 
 const skillDir = path.resolve(__dirname, "..");
 const MARKER = ".zcode-release.json";
@@ -79,13 +80,13 @@ function makeSkill({ leftOut = true } = {}) {
 }
 function runRepin(skill, ...args) {
   // The copy inside the skill runs with its default root.
-  const result = spawnSync(process.execPath, [path.join(skill, "scripts", "repin-release.js"), ...args], { encoding: "utf8", timeout: 15000 });
+  const result = spawnSync(process.execPath, [path.join(skill, "scripts", "repin-release.js"), ...args], { encoding: "utf8", timeout: 15000, env: cleanEnv() });
   const marker = path.join(skill, MARKER);
   if (fs.existsSync(marker)) createdFiles.add(marker);
   return { result, marker };
 }
 function installCheck(skill) {
-  return spawnSync(process.execPath, ["-e", `require(${JSON.stringify(path.join(skill, "scripts", "zcode-chat.js"))}).checkInstall();`], { encoding: "utf8", timeout: 15000 });
+  return spawnSync(process.execPath, ["-e", `require(${JSON.stringify(path.join(skill, "scripts", "zcode-chat.js"))}).checkInstall();`], { encoding: "utf8", timeout: 15000, env: cleanEnv() });
 }
 
 test("a re-pin of a fresh copy pins every skill file and repeats byte for byte", () => {
