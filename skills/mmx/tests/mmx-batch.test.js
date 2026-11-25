@@ -174,6 +174,56 @@ test("truncation at the profile budget: no pointless retry", () => {
   assert.equal(receipt.shards[0].truncated, true);
 });
 
+test("real wrapper chain: budget-exhausted replies heal once, a thinking-only end_turn reply is not retried", { skip: process.platform === "win32" && "POSIX fake mmx launcher" }, () => {
+  // No fake wrapper: mmx-batch -> mmx-chat.js -> a fake mmx CLI, so the
+  // wrapper's own classification decides what the batch retries.
+  const bin = path.join(root, "chain-bin");
+  const chainTmp = path.join(root, "chain-tmp");
+  const cliLog = path.join(root, "chain-cli.log");
+  fs.mkdirSync(bin);
+  fs.mkdirSync(chainTmp);
+  fs.writeFileSync(path.join(bin, "mmx"), `#!${process.execPath}
+"use strict";
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+const budget = Number(args[args.indexOf("--max-tokens") + 1]);
+const messages = fs.readFileSync(args[args.indexOf("--messages-file") + 1], "utf8");
+const scenario = (/CHAIN_[A-Z_]+/.exec(messages) || ["CHAIN_NONE"])[0];
+fs.appendFileSync(${JSON.stringify(cliLog)}, scenario + " " + budget + "\\n");
+const reply = { content: [{ type: "text", text: "HEALED" }], model: "MiniMax-M3", stop_reason: "end_turn",
+  usage: { input_tokens: 12, output_tokens: 3 }, base_resp: { status_code: 0, status_msg: "" } };
+if (budget < 524288 && scenario === "CHAIN_THINK_MAX") { reply.content = [{ type: "thinking", thinking: "internal" }]; reply.stop_reason = "max_tokens"; }
+if (budget < 524288 && scenario === "CHAIN_TEXT_MAX") { reply.content = [{ type: "text", text: "partial" }]; reply.stop_reason = "max_tokens"; }
+if (scenario === "CHAIN_THINK_END") reply.content = [{ type: "thinking", thinking: "internal" }];
+process.stdout.write(JSON.stringify(reply));
+`, { mode: 0o755 });
+  const files = [shardFile("chain-think-max.txt", "CHAIN_THINK_MAX shard"),
+    shardFile("chain-text-max.txt", "CHAIN_TEXT_MAX shard"), shardFile("chain-think-end.txt", "CHAIN_THINK_END shard")];
+  const run = runBatch([...files.flatMap(file => ["--prompt-file", file]), "--max-tokens", "128", "--concurrency", "1"], {
+    MMX_BATCH_WRAPPER: undefined, PATH: `${bin}${path.delimiter}${process.env.PATH || ""}`,
+    TMPDIR: chainTmp, TMP: chainTmp, TEMP: chainTmp, MMX_CONFIG_DIR: path.join(root, "chain-config-absent"),
+  });
+  const receipt = receiptOf(run);
+  assert.equal(run.status, 1);
+  assert.equal(receipt.gate, "NOT_EVALUATED");
+  const [thinkMax, textMax, thinkEnd] = receipt.shards;
+  assert.equal(thinkMax.first_attempt.status, "thinking_budget_exhausted");
+  assert.equal(thinkMax.retried, true);
+  assert.equal(thinkMax.retry_reason, "budget_exhausted");
+  assert.equal(thinkMax.status, "ok");
+  assert.equal(textMax.first_attempt.status, "ok");
+  assert.equal(textMax.first_attempt.truncated, true);
+  assert.equal(textMax.retried, true);
+  assert.equal(textMax.status, "ok");
+  assert.equal(textMax.truncated, false);
+  assert.equal(thinkEnd.status, "schema_mismatch");
+  assert.equal(thinkEnd.stop_reason, "end_turn");
+  assert.equal(thinkEnd.retried, false);
+  assert.deepEqual(fs.readFileSync(cliLog, "utf8").trim().split("\n"), [
+    "CHAIN_THINK_MAX 128", "CHAIN_THINK_MAX 524288", "CHAIN_TEXT_MAX 128", "CHAIN_TEXT_MAX 524288", "CHAIN_THINK_END 128",
+  ]);
+});
+
 test("quota retry: one backoff retry then ok", () => {
   const run = runBatch(["--prompt-file", shardFile("q.txt", "QUOTA limited shard")]);
   const receipt = receiptOf(run);

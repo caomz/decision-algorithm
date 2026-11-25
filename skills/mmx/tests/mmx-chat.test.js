@@ -7,7 +7,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
-const { safeCmdArgument, npmShimEntry, findMmx, terminateChildTree } = require(path.join(__dirname, "..", "scripts", "mmx-chat.js"));
+const { safeCmdArgument, npmShimEntry, mmxPackageEntry, linkedEntry, cliLaunch, withFetchLimitHint, findMmx, terminateChildTree } = require(path.join(__dirname, "..", "scripts", "mmx-chat.js"));
 const { cleanEnv } = require("./support/env.js");
 
 const skillRoot = path.resolve(__dirname, "..");
@@ -24,6 +24,8 @@ const overrideProfilePath = path.join(root, "profile.json");
 const messagesDumpPath = path.join(root, "messages.json");
 const childPidPath = path.join(root, "child.pid");
 const fakeJsPath = path.join(root, "fake-mmx.cjs");
+// Never created: keeps the wrapper away from the real ~/.mmx/config.json.
+const absentConfigDir = path.join(root, "mmx-config-absent");
 const fakeMmxPath = path.join(binDir, process.platform === "win32" ? "mmx.cmd" : "mmx");
 
 fs.mkdirSync(binDir);
@@ -37,6 +39,13 @@ const { spawn } = require("node:child_process");
 const args = process.argv.slice(2);
 if (process.env.FAKE_INVOCATIONS) fs.appendFileSync(process.env.FAKE_INVOCATIONS, args.slice(0, 2).join(" ") + "\\n");
 if (process.env.FAKE_ARGS_DUMP) fs.writeFileSync(process.env.FAKE_ARGS_DUMP, JSON.stringify(args));
+if (process.env.FAKE_ENV_DUMP) fs.writeFileSync(process.env.FAKE_ENV_DUMP, JSON.stringify({
+  argv: args,
+  minimax_base_url: process.env.MINIMAX_BASE_URL ?? null,
+  undici_path: process.env.MMX_CHAT_UNDICI_PATH || null,
+  https_proxy_set: Boolean(process.env.HTTPS_PROXY),
+  guard: globalThis.__fakeGuard ?? null,
+}));
 const messageIndex = args.indexOf("--messages-file");
 if (messageIndex >= 0 && process.env.FAKE_MESSAGES_DUMP) {
   fs.writeFileSync(process.env.FAKE_MESSAGES_DUMP, fs.readFileSync(args[messageIndex + 1]));
@@ -54,6 +63,9 @@ switch (process.env.FAKE_MODE || "success") {
   case "truncated": ok.stop_reason = "max_tokens"; process.stdout.write(JSON.stringify(ok)); break;
   case "auth": process.stderr.write(JSON.stringify({ error: { code: 3, message: "No credentials" } })); process.exitCode = 3; break;
   case "api_stdout": process.stdout.write(JSON.stringify({ error: { code: 500, message: "upstream failed", hint: "retry" } })); process.exitCode = 1; break;
+  // Verbatim mmx-cli 1.0.29 stderr for a real HTTP 404 (captured 2026-11-19).
+  case "http_404": process.stderr.write(JSON.stringify({ error: { code: 1, message: "API error: HTTP 404 (HTTP 404)" } })); process.exitCode = 1; break;
+  case "network": process.stderr.write(JSON.stringify({ error: { code: 6, message: "Network request failed." } })); process.exitCode = 6; break;
   case "api_stderr": process.stderr.write(JSON.stringify({ error: { code: 500, message: "Bearer synthetic-authorization-value and private prompt", hint: "sk-synthetic-secret" } })); process.exitCode = 1; break;
   case "quota": process.exitCode = 4; break;
   case "quota_api": process.stderr.write(JSON.stringify({ error: { code: 429 } })); process.exitCode = 1; break;
@@ -120,6 +132,7 @@ function runWrapper(args = [], extraEnv = {}, includeFake = true) {
     TMPDIR: wrapperTmp,
     TMP: wrapperTmp,
     TEMP: wrapperTmp,
+    MMX_CONFIG_DIR: absentConfigDir,
     FAKE_ARGS_DUMP: argsDumpPath,
     FAKE_INVOCATIONS: invocationLog,
     FAKE_MESSAGES_DUMP: messagesDumpPath,
@@ -161,18 +174,27 @@ after(() => {
 test("version remains a plain-text compatibility exception", () => {
   const run = runWrapper(["--version"]);
   assert.equal(run.status, 0);
-  assert.equal(run.stdout, "mmx-chat 2.4.0\n");
+  assert.equal(run.stdout, "mmx-chat 2.7.0\n");
+});
+
+test("the version constant and the SKILL.md frontmatter stay in sync", () => {
+  const frontmatter = /^version:\s*(\S+)\s*$/m.exec(fs.readFileSync(path.join(skillRoot, "SKILL.md"), "utf8"));
+  const constant = /^const VERSION = "([^"]+)";$/m.exec(fs.readFileSync(wrapper, "utf8"));
+  assert.ok(frontmatter, "SKILL.md has no version frontmatter");
+  assert.ok(constant, "mmx-chat.js has no VERSION constant");
+  assert.equal(frontmatter[1], constant[1]);
 });
 
 test("success preserves the public JSON schema and skips auth status", () => {
   writeInputs("hello");
-  const run = runChat();
+  const run = runChat([], { MINIMAX_BASE_URL: undefined });
   assert.equal(run.status, 0);
   assert.equal(run.stderr, "");
   assert.deepEqual(jsonResult(run), {
     status: "ok", exit_code: 0, requested_model: null, cli_invoked: true, text: "MMX_OK", model: "MiniMax-M3",
     model_identity_source: "response.model", stop_reason: "end_turn", complete: true,
     input_tokens: 12, output_tokens: 3, truncated: false,
+    fetch_timeout_guard: "custom_launcher", base_url_env: "unset",
   });
   const args = JSON.parse(fs.readFileSync(argsDumpPath, "utf8"));
   assert.deepEqual(args.slice(0, 2), ["text", "chat"]);
@@ -276,13 +298,20 @@ test("timeout flags win over the environment, which wins over the profile", () =
   assert.equal(jsonResult(runChat(["--timeout", "100", "--wrap-timeout", "100"])).status, "usage_error");
 });
 
-test("a reply made only of thinking blocks is a budget problem, not a contract problem", () => {
+test("thinking without text is a budget problem only when the model hit max_tokens", () => {
   writeInputs("thinking");
-  const result = jsonResult(runChat([], { FAKE_MODE: "thinking_only" }));
-  assert.equal(result.status, "thinking_budget_exhausted");
-  assert.match(result.note, /--max-tokens/);
-  const truncated = jsonResult(runChat([], { FAKE_MODE: "thinking_only_truncated" }));
-  assert.equal(truncated.status, "thinking_budget_exhausted");
+  const exhausted = jsonResult(runChat([], { FAKE_MODE: "thinking_only_truncated" }));
+  assert.equal(exhausted.status, "thinking_budget_exhausted");
+  assert.equal(exhausted.stop_reason, "max_tokens");
+  assert.equal(exhausted.truncated, true);
+  assert.equal(exhausted.complete, false);
+  assert.deepEqual(exhausted.content_block_types, ["thinking"]);
+  assert.match(exhausted.note, /--max-tokens/);
+  const drifted = jsonResult(runChat([], { FAKE_MODE: "thinking_only" }));
+  assert.equal(drifted.status, "schema_mismatch");
+  assert.equal(drifted.stop_reason, "end_turn");
+  assert.equal(drifted.complete, false);
+  assert.deepEqual(drifted.content_block_types, ["thinking"]);
 });
 
 test("auth and timeout failures carry an actionable instruction", () => {
@@ -515,6 +544,7 @@ test("managed release rejects mixed or interrupted installation before launching
   const files = {
     "agy/scripts/agy_runner.py": Buffer.from("# fixture runner"),
     "mmx/scripts/mmx-chat.js": fs.readFileSync(wrapper),
+    "mmx/scripts/fetch-timeout-guard.js": fs.readFileSync(path.join(skillRoot, "scripts", "fetch-timeout-guard.js")),
     "mmx/profiles/local.json": fs.readFileSync(profile),
     "cross-validation/scripts/cross_validate.py": Buffer.from("# fixture coordinator"),
   };
@@ -547,6 +577,9 @@ test("managed release rejects mixed or interrupted installation before launching
   fs.writeFileSync(path.join(managed, "mmx", "profiles", "local.json"), files["mmx/profiles/local.json"]);
   fs.writeFileSync(marker, JSON.stringify({ ...manifest, state: "installing" }));
   assert.equal(run().status, "install_mismatch");
+  assert.equal(fs.readFileSync(invocationLog, "utf8"), "");
+  fs.writeFileSync(marker, JSON.stringify({ ...manifest, files: { ...digests, "mmx/scripts/fetch-timeout-guard.js": undefined } }));
+  assert.equal(run().status, "install_mismatch", "the fetch guard is a required release file");
   assert.equal(fs.readFileSync(invocationLog, "utf8"), "");
   for (const name of Object.keys(files)) unlinkKnown(path.join(managed, name));
   unlinkKnown(marker);
@@ -613,6 +646,298 @@ test("a plain install without siblings and without a marker is not treated as ma
   fs.rmdirSync(plain);
 });
 
+// A real npm-style package entry on every platform: POSIX uses its executable
+// link and Windows uses the .cmd shim resolved by the production launcher.
+function buildFakePackage() {
+  const pkgBin = path.join(root, "pkg-bin");
+  const pkgRoot = path.join(pkgBin, "node_modules", "mmx-cli");
+  fs.mkdirSync(path.join(pkgRoot, "dist"), { recursive: true });
+  fs.mkdirSync(path.join(pkgRoot, "node_modules", "undici"), { recursive: true });
+  const entry = path.join(pkgRoot, "dist", "mmx.mjs");
+  fs.writeFileSync(path.join(pkgRoot, "package.json"), JSON.stringify({ name: "mmx-cli", bin: { mmx: "dist/mmx.mjs" } }));
+  fs.writeFileSync(entry, `#!${process.execPath}\nimport { createRequire } from 'node:module';\ncreateRequire(import.meta.url)(${JSON.stringify(fakeJsPath)});\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(pkgRoot, "node_modules", "undici", "package.json"), JSON.stringify({ name: "undici", main: "index.js" }));
+  fs.writeFileSync(path.join(pkgRoot, "node_modules", "undici", "index.js"),
+    "class Agent { constructor(options) { this.options = options; } }\n" +
+    "module.exports = { Agent, setGlobalDispatcher(dispatcher) { globalThis.__fakeGuard = dispatcher.options; } };\n");
+  if (process.platform === "win32") {
+    fs.writeFileSync(path.join(pkgBin, "mmx.cmd"), '@echo off\r\n"%_prog%" "%dp0%\\node_modules\\mmx-cli\\dist\\mmx.mjs" %*\r\n');
+  } else fs.symlinkSync(entry, path.join(pkgBin, "mmx"));
+  return { pkgRoot, pkgBin, entry };
+}
+
+function removeFakePackage(pkgRoot, pkgBin, entry) {
+  unlinkKnown(path.join(pkgBin, "mmx"));
+  unlinkKnown(path.join(pkgBin, "mmx.cmd"));
+  unlinkKnown(entry);
+  unlinkKnown(path.join(pkgRoot, "package.json"));
+  unlinkKnown(path.join(pkgRoot, "node_modules", "undici", "package.json"));
+  unlinkKnown(path.join(pkgRoot, "node_modules", "undici", "index.js"));
+  for (const dir of [path.join(pkgRoot, "dist"), path.join(pkgRoot, "node_modules", "undici"),
+                     path.join(pkgRoot, "node_modules"), pkgRoot, path.join(pkgBin, "node_modules"), pkgBin]) fs.rmdirSync(dir);
+}
+
+test("package entry resolution accepts linked mmx-cli entries and rejects other packages", () => {
+  const { pkgRoot, pkgBin, entry } = buildFakePackage();
+  try {
+    if (process.platform !== "win32") assert.equal(linkedEntry(path.join(pkgBin, "mmx")), fs.realpathSync(entry));
+    assert.equal(fs.realpathSync(findMmx(process.platform, pkgBin).argsPrefix[0]), fs.realpathSync(entry));
+    assert.equal(mmxPackageEntry(entry)?.root, fs.realpathSync(pkgRoot));
+    // The default fake is a custom launcher, not an mmx-cli package.
+    assert.equal(linkedEntry(fakeMmxPath), null);
+    fs.writeFileSync(path.join(pkgRoot, "package.json"), JSON.stringify({ name: "other-cli", bin: { mmx: "dist/mmx.cjs" } }));
+    assert.equal(mmxPackageEntry(entry), null);
+    fs.writeFileSync(path.join(pkgRoot, "package.json"), JSON.stringify({ name: "mmx-cli", bin: { mmx: "dist/elsewhere.cjs" } }));
+    assert.equal(mmxPackageEntry(entry), null);
+  } finally {
+    removeFakePackage(pkgRoot, pkgBin, entry);
+  }
+});
+
+test("the mmx-cli package entry launches with the fetch guard preloaded and a normalized base URL", () => {
+  const { pkgRoot, pkgBin, entry } = buildFakePackage();
+  const envDumpPath = path.join(root, "env-dump.json");
+  const noProxy = Object.fromEntries(["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy",
+                                      "ALL_PROXY", "all_proxy"].map(name => [name, undefined]));
+  try {
+    writeInputs("guard");
+    const result = jsonResult(runChat([], {
+      PATH: `${pkgBin}${path.delimiter}${process.env.PATH || ""}`,
+      MINIMAX_BASE_URL: "https://api.example.com/v1/",
+      FAKE_ENV_DUMP: envDumpPath,
+      ...noProxy,
+    }));
+    assert.equal(result.status, "ok");
+    assert.equal(result.fetch_timeout_guard, "preloaded");
+    assert.equal(result.base_url_env, "stripped_v1");
+    const dumped = JSON.parse(fs.readFileSync(envDumpPath, "utf8"));
+    assert.deepEqual(dumped.argv.slice(0, 2), ["text", "chat"]);
+    assert.equal(dumped.minimax_base_url, "https://api.example.com");
+    assert.equal(dumped.undici_path, fs.realpathSync(path.join(pkgRoot, "node_modules", "undici", "index.js")));
+    assert.equal(dumped.https_proxy_set, false);
+    // The preload really ran in the CLI process, before the CLI's own code.
+    assert.deepEqual(dumped.guard, { headersTimeout: 0, bodyTimeout: 0 });
+
+    const found = findMmx(process.platform, pkgBin);
+    assert.equal(cliLaunch(found, { Https_Proxy: "http://127.0.0.1:9" }, "win32").fetch_timeout_guard, "proxy_limited");
+    assert.equal(cliLaunch(found, { Https_Proxy: "http://127.0.0.1:9", MMX_CONFIG_DIR: absentConfigDir }, "linux").fetch_timeout_guard, "preloaded");
+    const noGuard = cliLaunch(found, {}, process.platform, path.join(root, "missing-fetch-timeout-guard.js"));
+    assert.equal(noGuard.fetch_timeout_guard, "guard_missing");
+    assert.deepEqual(noGuard.argsPrefix, [fs.realpathSync(entry)]);
+    assert.equal(Object.hasOwn(noGuard.env, "MMX_CHAT_UNDICI_PATH"), false);
+    // A fresh wrapper process: this one has cached the undici resolution.
+    unlinkKnown(path.join(pkgRoot, "node_modules", "undici", "index.js"));
+    unlinkKnown(path.join(pkgRoot, "node_modules", "undici", "package.json"));
+    unlinkKnown(envDumpPath);
+    const withoutUndici = jsonResult(runChat([], {
+      PATH: `${pkgBin}${path.delimiter}${process.env.PATH || ""}`, FAKE_ENV_DUMP: envDumpPath, ...noProxy,
+    }));
+    assert.equal(withoutUndici.status, "ok");
+    assert.equal(withoutUndici.fetch_timeout_guard, "undici_not_found");
+    const unguarded = JSON.parse(fs.readFileSync(envDumpPath, "utf8"));
+    assert.equal(unguarded.undici_path, null);
+    assert.equal(unguarded.guard, null);
+  } finally {
+    removeFakePackage(pkgRoot, pkgBin, entry);
+    unlinkKnown(envDumpPath);
+  }
+});
+
+test("a selected fetch guard fails before invoking the CLI if initialization throws", () => {
+  const { pkgRoot, pkgBin, entry } = buildFakePackage();
+  const undiciFile = path.join(pkgRoot, "node_modules", "undici", "index.js");
+  const secret = "synthetic-private-dependency-detail";
+  try {
+    writeInputs("guard initialization must precede request");
+    for (const broken of [
+      `throw new Error(${JSON.stringify(secret)});`,
+      "module.exports = { Agent: class {}, setGlobalDispatcher() { throw new Error('dispatcher rejected'); } };",
+    ]) {
+      fs.writeFileSync(undiciFile, broken);
+      const run = runChat([], { PATH: `${pkgBin}${path.delimiter}${process.env.PATH || ""}` });
+      const receipt = jsonResult(run);
+      assert.equal(run.status, 1);
+      assert.equal(receipt.status, "guard_error");
+      assert.equal(receipt.fetch_timeout_guard, "preload_failed");
+      assert.equal(receipt.exit_code, 78);
+      assert.equal(fs.readFileSync(invocationLog, "utf8"), "", "the CLI entry never runs");
+      assert.doesNotMatch(run.stdout + run.stderr, new RegExp(secret));
+      assert.deepEqual(fs.readdirSync(wrapperTmp), []);
+    }
+  } finally { removeFakePackage(pkgRoot, pkgBin, entry); }
+});
+
+test("fetch guard acknowledgement does not break inherited Worker preloads", () => {
+  const { pkgRoot, pkgBin, entry } = buildFakePackage();
+  try {
+    fs.writeFileSync(entry, "import { Worker } from 'node:worker_threads';\n" +
+      "import { createRequire } from 'node:module';\n" +
+      "const worker = new Worker('0', { eval: true });\n" +
+      "worker.on('exit', code => { if (code) process.exit(code); else createRequire(import.meta.url)(" +
+      JSON.stringify(fakeJsPath) + "); });\n");
+    writeInputs("worker preload");
+    const result = jsonResult(runChat([], { PATH: `${pkgBin}${path.delimiter}${process.env.PATH || ""}` }));
+    assert.equal(result.status, "ok");
+    assert.notEqual(result.fetch_timeout_guard, "preload_failed");
+    assert.deepEqual(fs.readdirSync(wrapperTmp), []);
+  } finally { removeFakePackage(pkgRoot, pkgBin, entry); }
+});
+
+test("a blocked guard import preserves timeout without claiming initialization", () => {
+  const { pkgRoot, pkgBin, entry } = buildFakePackage();
+  try {
+    fs.writeFileSync(path.join(pkgRoot, "node_modules", "undici", "index.js"),
+      "Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30000);\n");
+    writeInputs("blocked preload");
+    const run = runChat(["--timeout", "1", "--wrap-timeout", "2"],
+      { PATH: `${pkgBin}${path.delimiter}${process.env.PATH || ""}` });
+    const result = jsonResult(run);
+    assert.equal(run.status, 1);
+    assert.equal(result.status, "timeout");
+    assert.equal(result.fetch_timeout_guard, "preload_failed");
+    assert.equal(fs.readFileSync(invocationLog, "utf8"), "");
+    assert.deepEqual(fs.readdirSync(wrapperTmp), []);
+  } finally { removeFakePackage(pkgRoot, pkgBin, entry); }
+});
+
+test("the mmx config proxy key downgrades the guard the way mmx-cli reads it", () => {
+  const { pkgRoot, pkgBin, entry } = buildFakePackage();
+  const envDumpPath = path.join(root, "env-dump.json");
+  const noProxy = Object.fromEntries(["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy",
+                                      "ALL_PROXY", "all_proxy"].map(name => [name, undefined]));
+  const configDir = path.join(root, "mmx config");
+  const configFile = path.join(configDir, "config.json");
+  const home = path.join(root, "home");
+  const homeConfigDir = path.join(home, ".mmx");
+  const homeConfigFile = path.join(homeConfigDir, "config.json");
+  const run = extra => jsonResult(runChat([], {
+    PATH: `${pkgBin}${path.delimiter}${process.env.PATH || ""}`, FAKE_ENV_DUMP: envDumpPath, ...noProxy, ...extra,
+  }));
+  try {
+    writeInputs("config proxy guard");
+    fs.mkdirSync(configDir);
+    fs.writeFileSync(configFile, JSON.stringify({ api_key: "sk-synthetic-config-secret", proxy: "http://127.0.0.1:9" }));
+    const configured = run({ MMX_CONFIG_DIR: configDir });
+    assert.equal(configured.status, "ok");
+    assert.equal(configured.fetch_timeout_guard, "proxy_limited");
+    assert.deepEqual(JSON.parse(fs.readFileSync(envDumpPath, "utf8")).guard, { headersTimeout: 0, bodyTimeout: 0 });
+    assert.doesNotMatch(JSON.stringify(configured), /sk-synthetic-config-secret|127\.0\.0\.1:9/);
+    fs.writeFileSync(configFile, JSON.stringify({ proxy: "socks5://127.0.0.1:9" }));
+    assert.equal(run({ MMX_CONFIG_DIR: configDir }).fetch_timeout_guard, "preloaded", "mmx-cli ignores a proxy that does not start with http");
+    fs.writeFileSync(configFile, "{ not json");
+    assert.equal(run({ MMX_CONFIG_DIR: configDir }).fetch_timeout_guard, "preloaded", "an unreadable config has no proxy");
+    const found = findMmx(process.platform, pkgBin);
+    fs.mkdirSync(homeConfigDir, { recursive: true });
+    fs.writeFileSync(homeConfigFile, JSON.stringify({ proxy: "https://127.0.0.1:9" }));
+    assert.equal(cliLaunch(found, { HOME: home }, "linux").fetch_timeout_guard, "proxy_limited", "<home>/.mmx when MMX_CONFIG_DIR is unset");
+    assert.equal(cliLaunch(found, { HOME: home, MMX_CONFIG_DIR: absentConfigDir }, "linux").fetch_timeout_guard, "preloaded", "MMX_CONFIG_DIR wins over HOME");
+    assert.equal(cliLaunch(found, { UserProfile: home }, "win32").fetch_timeout_guard, "proxy_limited");
+    fs.writeFileSync(configFile, JSON.stringify({ proxy: "http://127.0.0.1:9" }));
+    assert.equal(cliLaunch(found, { Mmx_Config_Dir: configDir, UserProfile: absentConfigDir }, "win32").fetch_timeout_guard, "proxy_limited");
+  } finally {
+    removeFakePackage(pkgRoot, pkgBin, entry);
+    for (const file of [envDumpPath, configFile, homeConfigFile]) unlinkKnown(file);
+    for (const dir of [configDir, homeConfigDir, home]) { try { fs.rmdirSync(dir); } catch {} }
+  }
+});
+
+test("proxy variables downgrade the preloaded guard to proxy_limited", () => {
+  const { pkgRoot, pkgBin, entry } = buildFakePackage();
+  const envDumpPath = path.join(root, "env-dump.json");
+  try {
+    writeInputs("proxy guard");
+    const result = jsonResult(runChat([], {
+      PATH: `${pkgBin}${path.delimiter}${process.env.PATH || ""}`,
+      HTTPS_PROXY: "http://127.0.0.1:7890",
+      FAKE_ENV_DUMP: envDumpPath,
+    }));
+    assert.equal(result.status, "ok");
+    assert.equal(result.fetch_timeout_guard, "proxy_limited");
+    const dumped = JSON.parse(fs.readFileSync(envDumpPath, "utf8"));
+    assert.equal(dumped.https_proxy_set, true);
+    assert.equal(dumped.undici_path, fs.realpathSync(path.join(pkgRoot, "node_modules", "undici", "index.js")));
+    assert.deepEqual(dumped.guard, { headersTimeout: 0, bodyTimeout: 0 }, "the guard still loads; the CLI proxy dispatcher replaces it later");
+  } finally {
+    removeFakePackage(pkgRoot, pkgBin, entry);
+    unlinkKnown(envDumpPath);
+  }
+});
+
+test("HTTP 404 explains the base URL suffix and reports the normalized origin without secrets", () => {
+  writeInputs("404");
+  const run = runChat([], {
+    FAKE_MODE: "http_404",
+    MINIMAX_BASE_URL: "https://user:secret@api.example.com/v1",
+  });
+  assert.equal(run.status, 1);
+  const result = jsonResult(run);
+  assert.equal(result.status, "api_error");
+  assert.equal(result.http_status, 404);
+  assert.match(result.hint, /\/v1/);
+  assert.equal(result.base_url_env, "stripped_v1");
+  assert.equal(result.base_url_env_value, "https://api.example.com");
+  assert.doesNotMatch(JSON.stringify(result), /secret|token=/);
+  const pathToken = jsonResult(runChat([], {
+    FAKE_MODE: "http_404",
+    MINIMAX_BASE_URL: "https://gw.example.test/synthetic-path-token/v1",
+  }));
+  assert.equal(pathToken.base_url_env, "stripped_v1");
+  assert.equal(pathToken.base_url_env_value, "https://gw.example.test");
+  assert.doesNotMatch(JSON.stringify(pathToken), /synthetic-path-token/);
+});
+
+test("the CLI child gets MINIMAX_BASE_URL without a trailing /v1 and the receipt records it", () => {
+  writeInputs("base url");
+  const envDumpPath = path.join(root, "env-dump.json");
+  const cases = [
+    ["https://api.example.test/v1", "https://api.example.test", "stripped_v1"],
+    ["https://api.example.test/v1/", "https://api.example.test", "stripped_v1"],
+    ["https://api.example.test/anthropic", "https://api.example.test/anthropic", "unchanged"],
+    ["https://api.example.test/v10", "https://api.example.test/v10", "unchanged"],
+    [undefined, null, "unset"],
+  ];
+  try {
+    for (const [value, base, state] of cases) {
+      unlinkKnown(envDumpPath);
+      const result = jsonResult(runChat([], { FAKE_ENV_DUMP: envDumpPath, MINIMAX_BASE_URL: value }));
+      assert.equal(result.status, "ok");
+      assert.equal(result.base_url_env, state, String(value));
+      assert.equal(result.fetch_timeout_guard, "custom_launcher");
+      assert.equal(JSON.parse(fs.readFileSync(envDumpPath, "utf8")).minimax_base_url, base, String(value));
+    }
+  } finally {
+    unlinkKnown(envDumpPath);
+  }
+});
+
+test("Windows matches environment names case-insensitively and POSIX does not", () => {
+  const launcher = { cmd: "mmx", argsPrefix: [], shell: false };
+  const windows = cliLaunch(launcher, { minimax_base_url: "https://api.example.test/v1" }, "win32");
+  assert.equal(windows.base_url_env, "stripped_v1");
+  assert.deepEqual(windows.env, { minimax_base_url: "https://api.example.test" }, "the original spelling is updated in place");
+  assert.equal(windows.base_url, "https://api.example.test");
+  const posix = cliLaunch(launcher, { minimax_base_url: "https://api.example.test/v1" }, "linux");
+  assert.equal(posix.base_url_env, "unset");
+  assert.deepEqual(posix.env, { minimax_base_url: "https://api.example.test/v1" });
+  assert.equal(posix.base_url, null);
+});
+
+test("a CLI network failure after 300 s points at the fetch limit", () => {
+  const failure = { status: "api_error", exit_code: 6, code: 6, error: "MMX API or CLI failed." };
+  assert.match(withFetchLimitHint(failure, 301400).hint, /300 s/);
+  assert.match(withFetchLimitHint(failure, 905000).hint, /fetch_timeout_guard/);
+  for (const [result, elapsed] of [
+    [failure, 120000], [{ ...failure, exit_code: 1, code: 500 }, 301400],
+    [{ status: "ok", exit_code: 0 }, 301400], [failure, undefined],
+  ]) assert.equal(withFetchLimitHint(result, elapsed).hint, undefined);
+  assert.equal(withFetchLimitHint({ ...failure, hint: "kept" }, 301400).hint, "kept");
+  writeInputs("network");
+  const quick = jsonResult(runChat([], { FAKE_MODE: "network" }));
+  assert.equal(quick.status, "api_error");
+  assert.equal(quick.exit_code, 6);
+  assert.equal(Object.hasOwn(quick, "hint"), false, "a fast network failure gets no fetch-limit hint");
+});
+
 // Both sides of the cross-validation pair must return the same structure,
 // otherwise their findings cannot be compared.
 const siblingSchema = path.join(skillRoot, "..", "zcode", "references", "review-v1.schema.json");
@@ -621,4 +946,27 @@ test("the review schema matches the ZCode copy byte for byte", {
 }, () => {
   const local = fs.readFileSync(path.join(skillRoot, "references", "review-v1.schema.json"));
   assert.deepEqual(local, fs.readFileSync(siblingSchema));
+});
+
+// V2 distinguishes observed wrapper deadlines from CLI-reported/unknown origins.
+test("timeout telemetry distinguishes the local deadline and observed exit", () => {
+  writeInputs("timeout diagnostic");
+  const done = jsonResult(runChat([], { FAKE_MODE: "success" }));
+  assert.equal(done.timeout_origin, "none");
+  assert.equal(done.observed_exit_code, 0);
+  assert.equal(done.observed_signal, null);
+  assert.equal(done.queue_wait_ms, 0);
+  assert.equal(done.effective_supervisor_timeout_ms, null);
+  assert.ok(done.execution_ms >= 0);
+  const expired = jsonResult(runChat(["--timeout", "1", "--wrap-timeout", "2"], { FAKE_MODE: "hang" }));
+  assert.equal(expired.status, "timeout");
+  assert.equal(expired.timeout_origin, "wrapper");
+  assert.equal(expired.diagnosis_confidence, "observed");
+  assert.equal(expired.effective_request_timeout_ms, 1000);
+  assert.equal(expired.effective_wrapper_timeout_ms, 2000);
+  assert.ok(expired.cleanup_ms >= 0);
+  const network = jsonResult(runChat([], { FAKE_MODE: "network" }));
+  assert.equal(network.timeout_origin, "unknown");
+  assert.equal(network.diagnosis_confidence, "unknown");
+  assert.equal(network.observed_exit_code, 6);
 });
