@@ -23,8 +23,7 @@ const {
 } = require('./api');
 
 const {
-    safeName,
-    resolveTitle,
+    noteBaseName,
     parseStartTimeMs,
     parseChapters,
     buildTranscript,
@@ -49,11 +48,9 @@ const SINCE_DATE = process.env.SINCE_DATE || ''; // Only sync notes from this da
 function saveNote(note, originalData, outputDir) {
     const createdDate = note.created_at || '';
     const dateStr = createdDate.split(' ')[0] || 'unknown-date';
-    // Use HHMMSS (6 digits) for better uniqueness
-    const rawTime = createdDate.split(' ')[1] || '00:00:00';
-    const timeStr = rawTime.substring(0, 8).replace(/:/g, '');
-    const safeTitle = safeName(resolveTitle(note));
-    let baseName = `${timeStr}_${safeTitle}`;
+    // File name stem comes from the shared naming rule (format.noteBaseName), so
+    // rebuild-state.js derives exactly the same file name from the same note.
+    let baseName = noteBaseName(note);
 
     // Create date directory
     const dateDir = path.join(outputDir, dateStr);
@@ -248,7 +245,13 @@ async function lockedMain() {
     try { await main(); } finally { release(); }
 }
 
-lockedMain().catch(e => {
-    console.error(`❌ ${e.message}`);
-    process.exit(1);
-});
+// saveNote is exported for the offline regression tests; everything else here is
+// only meaningful with a logged-in account.
+module.exports = { saveNote };
+
+if (require.main === module) {
+    lockedMain().catch(e => {
+        console.error(`❌ ${e.message}`);
+        process.exit(1);
+    });
+}

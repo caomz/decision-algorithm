@@ -126,7 +126,9 @@ get-biji/
 │   └── lock.js               # ⭐ 跨平台锁（macOS O_EXLOCK / win32+linux 独占 holder）
 ├── tests/
 │   ├── dedupe.test.cjs       # node:test 回归测试（不触网）
-│   └── lock.test.cjs         # 锁的互斥 / 释放 / 崩溃接管回归（不触网）
+│   ├── format.test.cjs       # 章节时间戳 / frontmatter 重建 / 文件名规则回归（不触网）
+│   ├── lock.test.cjs         # 锁的互斥 / 释放 / 崩溃接管回归（不触网）
+│   └── test_get_biji_regression.py  # pytest 入口，运行上面的 node:test 套件
 ├── package.json              # 依赖 playwright；scripts.sync / scripts.dedupe
 └── package-lock.json
 ```
@@ -136,6 +138,10 @@ get-biji/
 ```bash
 # Node 24 下 `node --test <目录>` 会把目录当模块解析而报错，用 glob 形式
 node --test "skills/get-biji/tests/**/*.test.cjs"
+
+# 同一套用例的 pytest 入口；跑之前先清代理变量（宿主代理 env 会让 node 单测假失败）
+unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY all_proxy NODE_USE_ENV_PROXY
+python3 -m pytest skills/get-biji/tests -q
 
 # 登录态检查（不弹浏览器）
 node -e "require('playwright')"
