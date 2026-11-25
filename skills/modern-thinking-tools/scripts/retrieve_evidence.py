@@ -14,7 +14,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 ROOT = SKILL_ROOT.parents[1]
 GETNOTE_SCRIPTS = SKILL_ROOT / "scripts" / "getnote"
@@ -501,7 +500,6 @@ def build_evidence(
         chapter = match_course_chapter(source["title"], chapters)
         if chapter is None:
             source["full_text_status"] = "recall_excerpt_only"
-            normalized = normalize_title(source["title"])
             if re.match(r"^wwg\d+", str(source["title"]), flags=re.IGNORECASE):
                 source["source_quality"] = (
                     "course_dictionary_excerpt" if "现代思维工具词典" in source["title"] else "course_file_excerpt"

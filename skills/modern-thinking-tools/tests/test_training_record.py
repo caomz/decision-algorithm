@@ -8,7 +8,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "training_record.py"
 SPEC = importlib.util.spec_from_file_location("training_record", SCRIPT)
 assert SPEC and SPEC.loader

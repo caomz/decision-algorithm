@@ -5,11 +5,10 @@ from __future__ import annotations
 import json
 import logging
 import os
-from pathlib import Path
 import re
 import shlex
+from pathlib import Path
 from threading import Lock
-
 
 _LOG = logging.getLogger(__name__)
 _SKILL_NAME = "decision-algorithm"

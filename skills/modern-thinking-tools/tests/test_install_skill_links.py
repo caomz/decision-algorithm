@@ -3,7 +3,6 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
-
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "install_skill_links.py"
 SPEC = importlib.util.spec_from_file_location("modern_thinking_links", SCRIPT_PATH)
 assert SPEC and SPEC.loader

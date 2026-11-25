@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pytest
 
-
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "retrieve_evidence.py"
 SPEC = importlib.util.spec_from_file_location("modern_thinking_retrieve", SCRIPT_PATH)
 assert SPEC and SPEC.loader

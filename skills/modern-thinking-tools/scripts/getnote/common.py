@@ -4,8 +4,8 @@
 
 from __future__ import annotations
 
-import atexit
 import argparse
+import atexit
 import gzip
 import http.client
 import io
