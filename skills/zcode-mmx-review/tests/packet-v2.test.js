@@ -14,6 +14,7 @@ const { createHash } = require("node:crypto");
 
 const RUNNER = path.resolve(__dirname, "../scripts/review-run.js");
 const runner = require(RUNNER);
+const { cleanEnv } = require("./support/env.js");
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "zmx-packet-v2-"));
 const sha256 = bytes => createHash("sha256").update(bytes).digest("hex");
 
@@ -223,8 +224,8 @@ describe("run re-verifies changes", () => {
 
 describe("pack", () => {
   const write = (name, contents) => { const file = path.join(root, name); fs.writeFileSync(file, contents); return file; };
-  const packCli = args => spawnSync(process.execPath, [RUNNER, "pack", ...args], { encoding: "utf8", timeout: 60000, env: { ...process.env } });
-  const runCli = args => spawnSync(process.execPath, [RUNNER, ...args], { encoding: "utf8", timeout: 120000, env: { ...process.env } });
+  const packCli = args => spawnSync(process.execPath, [RUNNER, "pack", ...args], { encoding: "utf8", timeout: 60000, env: cleanEnv() });
+  const runCli = args => spawnSync(process.execPath, [RUNNER, ...args], { encoding: "utf8", timeout: 120000, env: cleanEnv() });
 
   test("patch-only and goal-only packets each survive pack → run → verify", () => {
     const patchFile = write("p.patch", PATCH_MODIFY);
@@ -739,7 +740,7 @@ describe("quoted astral paths and byte-ordered DIFFSTAT (W1-W4, fix4)", () => {
     const patchFile = path.join(root, "nonutf8-escaped.patch");
     fs.writeFileSync(patchFile, patch);
     const out = path.join(root, "nonutf8-packet.json");
-    const result = spawnSync(process.execPath, [RUNNER, "pack", "--out", out, "--patch-file", patchFile, "--base", BASE, "--kind", "worktree_patch"], { encoding: "utf8", timeout: 60000, env: { ...process.env } });
+    const result = spawnSync(process.execPath, [RUNNER, "pack", "--out", out, "--patch-file", patchFile, "--base", BASE, "--kind", "worktree_patch"], { encoding: "utf8", timeout: 60000, env: cleanEnv() });
     assert.equal(result.status, 2, result.stderr);
     assert.match(result.stderr, /not valid UTF-8/);
     assert.equal(fs.existsSync(out), false, "pack must not write the packet for a non-UTF-8 path");
@@ -769,7 +770,7 @@ describe("quoted astral paths and byte-ordered DIFFSTAT (W1-W4, fix4)", () => {
     const patchFile = path.join(root, "order-raw.patch");
     fs.writeFileSync(patchFile, patch);
     const out = path.join(root, "order-raw-packet.json");
-    const result = spawnSync(process.execPath, [RUNNER, "pack", "--out", out, "--patch-file", patchFile, "--base", BASE, "--kind", "worktree_patch"], { encoding: "utf8", timeout: 60000, env: { ...process.env } });
+    const result = spawnSync(process.execPath, [RUNNER, "pack", "--out", out, "--patch-file", patchFile, "--base", BASE, "--kind", "worktree_patch"], { encoding: "utf8", timeout: 60000, env: cleanEnv() });
     assert.equal(result.status, 2, result.stderr);
     assert.match(result.stderr, /not valid UTF-8/);
     assert.equal(fs.existsSync(out), false, "pack must not write the packet for a non-UTF-8 path");
@@ -926,7 +927,7 @@ describe("rename/copy names must agree with --- and +++ (Z1, fix7)", () => {
 
   test("pack exits 2 on such a patch and writes no packet", () => {
     const out = path.join(root, "z1-packet.json");
-    const result = spawnSync(process.execPath, [RUNNER, "pack", "--out", out, "--patch-file", path.join(__dirname, "fixtures/parse/renmod_ab.noprefix.patch"), "--base", BASE, "--kind", "worktree_patch"], { encoding: "utf8", timeout: 60000, env: { ...process.env } });
+    const result = spawnSync(process.execPath, [RUNNER, "pack", "--out", out, "--patch-file", path.join(__dirname, "fixtures/parse/renmod_ab.noprefix.patch"), "--base", BASE, "--kind", "worktree_patch"], { encoding: "utf8", timeout: 60000, env: cleanEnv() });
     assert.equal(result.status, 2, result.stderr);
     assert.match(result.stderr, /--- line does not match rename from\/copy from/);
     assert.equal(fs.existsSync(out), false, "pack must not write the packet for a rejected patch");
@@ -963,7 +964,7 @@ describe("rename/copy names must agree with --- and +++ (Z1, fix7)", () => {
     const patchFile = path.join(root, "z2-raw.patch");
     fs.writeFileSync(patchFile, patch);
     const out = path.join(root, "z2-packet.json");
-    const result = spawnSync(process.execPath, [RUNNER, "pack", "--out", out, "--patch-file", patchFile, "--base", BASE, "--kind", "worktree_patch"], { encoding: "utf8", timeout: 60000, env: { ...process.env } });
+    const result = spawnSync(process.execPath, [RUNNER, "pack", "--out", out, "--patch-file", patchFile, "--base", BASE, "--kind", "worktree_patch"], { encoding: "utf8", timeout: 60000, env: cleanEnv() });
     assert.equal(result.status, 2, result.stderr);
     assert.match(result.stderr, /--patch-file \(.*\) is not valid UTF-8/);
     assert.equal(fs.existsSync(out), false, "pack must not write the packet for a non-UTF-8 patch file");
@@ -987,7 +988,7 @@ describe("test evidence cmd must be single-line (V7)", () => {
     const logFile = path.join(root, "v7.log");
     fs.writeFileSync(logFile, "ok\n");
     const out = path.join(root, "v7-packet.json");
-    const result = spawnSync(process.execPath, [RUNNER, "pack", "--out", out, "--test-log", logFile, "--test-cmd", "echo a\nexit_code=0", "--test-exit", "0"], { encoding: "utf8", timeout: 60000, env: { ...process.env } });
+    const result = spawnSync(process.execPath, [RUNNER, "pack", "--out", out, "--test-log", logFile, "--test-cmd", "echo a\nexit_code=0", "--test-exit", "0"], { encoding: "utf8", timeout: 60000, env: cleanEnv() });
     assert.equal(result.status, 2);
     assert.match(result.stderr, /cmd must not contain CR or LF/);
     assert.equal(fs.existsSync(out), false, "pack must not write the packet before validating cmd");

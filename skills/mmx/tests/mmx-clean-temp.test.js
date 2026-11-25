@@ -10,6 +10,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const { cleanEnv } = require("./support/env.js");
 
 const script = path.resolve(__dirname, "..", "scripts", "mmx-clean-temp.js");
 const base = fs.mkdtempSync(path.join(os.tmpdir(), "mmx-clean-contract-"));
@@ -42,7 +43,7 @@ function makeFixture(name) {
 function run(args, root) {
   return spawnSync(process.execPath, [script, ...args], {
     encoding: "utf8", windowsHide: true, shell: false,
-    env: { ...process.env, TEMP: root, TMP: root, TMPDIR: root },
+    env: cleanEnv({ TEMP: root, TMP: root, TMPDIR: root }),
   });
 }
 

@@ -14,6 +14,7 @@ const { createHash } = require("node:crypto");
 
 const RUNNER = path.resolve(__dirname, "../scripts/review-run.js");
 const runner = require(RUNNER);
+const { cleanEnv } = require("./support/env.js");
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "zmx-review-run-"));
 const sha256 = bytes => createHash("sha256").update(bytes).digest("hex");
 
@@ -57,7 +58,7 @@ function roundFor(scenario, name, options = {}) {
 function runCli(args, extraEnv = {}) {
   return spawnSync(process.execPath, [RUNNER, ...args], {
     encoding: "utf8", timeout: 120000, maxBuffer: 16 * 1024 * 1024,
-    env: { ...process.env, ...extraEnv },
+    env: cleanEnv(extraEnv),
   });
 }
 
@@ -355,7 +356,7 @@ describe("cli run smoke", () => {
 test("SIGTERM mid-run cancels but preserves the bound FAIL", { timeout: 60000 }, async () => {
   const out = path.join(root, "cli-cancel");
   const child = spawn(process.execPath, [RUNNER, "run", "--backend", "fixture", "--scenario", "zcode-fail-mmx-hang", "--packet", packetFile, "--out", out], {
-    stdio: ["ignore", "pipe", "pipe"], env: { ...process.env },
+    stdio: ["ignore", "pipe", "pipe"], env: cleanEnv(),
   });
   let stdout = "";
   child.stdout.on("data", data => { stdout += data; });
@@ -363,6 +364,10 @@ test("SIGTERM mid-run cancels but preserves the bound FAIL", { timeout: 60000 },
   const mmxStarted = path.join(out, "mmx-observed-input.json");
   for (let i = 0; i < 200 && !fs.existsSync(mmxStarted); i++) await new Promise(resolve => setTimeout(resolve, 100));
   assert.ok(fs.existsSync(mmxStarted), "mmx side should have started before cancellation");
+  // 快速失败的 zcode 一侧在 mmx observed 出现后几十毫秒内 close；给入口留出处理
+  // close、绑定 FAIL 的时间再发取消信号，避免"取消先于 zcode close"的负载竞态
+  // 把本用例变成假失败。
+  await new Promise(resolve => setTimeout(resolve, 300));
   child.kill("SIGTERM");
   const code = await new Promise(resolve => child.once("close", resolve));
   assert.equal(code, 2);
@@ -392,7 +397,7 @@ describe("second signals and entry hardening (fix2)", () => {
   const spawnRun = (name, scenario, extraEnv = {}) => {
     const out = path.join(root, name);
     const child = spawn(process.execPath, [RUNNER, "run", "--backend", "fixture", "--scenario", scenario, "--packet", packetFile, "--out", out], {
-      stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...extraEnv },
+      stdio: ["ignore", "pipe", "pipe"], env: cleanEnv(extraEnv),
     });
     return { out, child };
   };
@@ -1092,7 +1097,7 @@ describe("run-level regression locks (F2: M27, M28, M33)", () => {
     const out = path.join(root, "f2-m33-out");
     const result = spawnSync(process.execPath, [path.join(tree, "zcode-mmx-review", "scripts", "review-run.js"),
       "run", "--backend", "fixture", "--scenario", "both-pass", "--packet", packetFile, "--out", out],
-      { encoding: "utf8", timeout: 60000, env: { ...process.env } });
+      { encoding: "utf8", timeout: 60000, env: cleanEnv() });
     assert.equal(result.status, 2);
     assert.match(result.stderr, /regular file|link/);
     assert.equal(fs.existsSync(out), false, "no run directory may be created");

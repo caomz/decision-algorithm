@@ -10,6 +10,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const { cleanEnv } = require("./support/env.js");
 
 const skillRoot = path.resolve(__dirname, "..");
 const batch = path.join(skillRoot, "scripts", "mmx-batch.js");
@@ -50,8 +51,8 @@ emit(ok());
 function runBatch(args, extraEnv = {}) {
   return spawnSync(process.execPath, [batch, ...args], {
     encoding: "utf8", windowsHide: true, shell: false,
-    env: { ...process.env, MMX_BATCH_WRAPPER: fakeWrapper, FAKE_STATE_DIR: stateDir,
-           FAKE_ARGS_DUMP: argsDump, MMX_BATCH_QUOTA_RETRY_MS: "10", ...extraEnv },
+    env: cleanEnv({ MMX_BATCH_WRAPPER: fakeWrapper, FAKE_STATE_DIR: stateDir,
+                    FAKE_ARGS_DUMP: argsDump, MMX_BATCH_QUOTA_RETRY_MS: "10", ...extraEnv }),
   });
 }
 

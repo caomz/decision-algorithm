@@ -12,6 +12,7 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
 const runner = require("../scripts/review-run.js");
+const { cleanEnv } = require("./support/env.js");
 const wrapperSource = fs.readFileSync(path.join(__dirname, "../../zcode/scripts/zcode-chat.js"), "utf8");
 const zcodeChat = path.resolve(__dirname, "../../zcode/scripts/zcode-chat.js");
 const fakeCli = path.join(__dirname, "fixtures/native/fake-zcode-cli.cjs");
@@ -49,7 +50,7 @@ function runDelivery(material, name) {
   args.push("--output-dir", outputDir);
   const result = spawnSync(process.execPath, args, {
     encoding: "utf8", timeout: 60000, maxBuffer: 32 * 1024 * 1024,
-    env: { ...process.env, FAKE_CLI_DUMP: dumpPath },
+    env: cleanEnv({ FAKE_CLI_DUMP: dumpPath }),
   });
   assert.equal(result.stderr, "", result.stderr);
   const receipt = JSON.parse(result.stdout);

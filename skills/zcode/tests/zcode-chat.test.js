@@ -8,6 +8,7 @@ const { spawnSync } = require("node:child_process");
 const { createHash } = require("node:crypto");
 const { resolveLaunch, isolatedEnv, setupMacKeychain, resolveMode, DENIED_TOOLS } = require("../scripts/zcode-chat.js");
 const { validateReview, strictJson } = require("../scripts/review.js");
+const { cleanEnv } = require("./support/env.js");
 
 const wrapper = path.resolve(__dirname, "../scripts/zcode-chat.js");
 const fixture = path.resolve(__dirname, "fixtures/fake-zcode.cjs");
@@ -34,7 +35,7 @@ function run(scenario = "ok", options = {}) {
   }
   if (options.timeout) args.push("--timeout-seconds", String(options.timeout));
   const result = spawnSync(process.execPath, args, {
-    env: { ...process.env, ZCODE_MODEL: "must-not-reach-child", FAKE_UNTRUSTED: "must-not-reach-child" },
+    env: cleanEnv({ ZCODE_MODEL: "must-not-reach-child", FAKE_UNTRUSTED: "must-not-reach-child" }),
     encoding: "utf8", timeout: 15000, maxBuffer: 8 * 1024 * 1024,
   });
   assert.equal(result.stderr, "");
@@ -125,7 +126,7 @@ test("existing output directories remain untouched", () => {
   fs.writeFileSync(prompt, "question");
   const cli = path.join(root, "existing-fake.cjs");
   fs.writeFileSync(cli, `require(${JSON.stringify(fixture)}).run("ok");`);
-  const result = spawnSync(process.execPath, [wrapper, "--prompt-file", prompt, "--cli-path", cli, "--output-dir", directory], { encoding: "utf8" });
+  const result = spawnSync(process.execPath, [wrapper, "--prompt-file", prompt, "--cli-path", cli, "--output-dir", directory], { encoding: "utf8", env: cleanEnv() });
   assert.equal(result.status, 1);
   assert.equal(JSON.parse(result.stdout).cli_invoked, false);
   assert.deepEqual(fs.readdirSync(directory), []);
@@ -144,10 +145,10 @@ test("installed manifest mismatch blocks model invocation", () => {
     files[name] = createHash("sha256").update(data.toString("utf8").replace(/\r\n/g, "\n"), "utf8").digest("hex");
   }
   fs.writeFileSync(path.join(directory, ".zcode-release.json"), JSON.stringify({ format: 1, files }));
-  const baseline = spawnSync(process.execPath, ["-e", `require(${JSON.stringify(path.join(directory, "scripts/zcode-chat.js"))}).checkInstall();`], { encoding: "utf8" });
+  const baseline = spawnSync(process.execPath, ["-e", `require(${JSON.stringify(path.join(directory, "scripts/zcode-chat.js"))}).checkInstall();`], { encoding: "utf8", env: cleanEnv() });
   assert.equal(baseline.status, 0, baseline.stderr);
   fs.appendFileSync(path.join(directory, "SKILL.md"), "\nchanged\n");
-  const result = spawnSync(process.execPath, [path.join(directory, "scripts/zcode-chat.js"), "--prompt-file", "unused.txt"], { encoding: "utf8" });
+  const result = spawnSync(process.execPath, [path.join(directory, "scripts/zcode-chat.js"), "--prompt-file", "unused.txt"], { encoding: "utf8", env: cleanEnv() });
   const receipt = JSON.parse(result.stdout);
   assert.equal(result.status, 1);
   assert.equal(receipt.status, "install_mismatch");
@@ -182,7 +183,7 @@ test("one manifest verifies both a CRLF and an LF copy of the same file", () => 
       "references/review-v1.schema.json": digest(schemaSource),
     },
   }));
-  const check = () => spawnSync(process.execPath, ["-e", `require(${JSON.stringify(path.join(directory, "scripts/zcode-chat.js"))}).checkInstall();`], { encoding: "utf8" });
+  const check = () => spawnSync(process.execPath, ["-e", `require(${JSON.stringify(path.join(directory, "scripts/zcode-chat.js"))}).checkInstall();`], { encoding: "utf8", env: cleanEnv() });
   fs.writeFileSync(path.join(directory, "SKILL.md"), Buffer.from(crlf, "utf8"));
   assert.equal(check().status, 0, "a CRLF checkout must pass the manifest");
   fs.writeFileSync(path.join(directory, "SKILL.md"), Buffer.from(lf, "utf8"));
@@ -298,7 +299,7 @@ test("macOS auth bridge links the existing default keychain without copying or c
 });
 test("empty invocation and version do not invoke a CLI", () => {
   for (const args of [[], ["--version"]]) {
-    const result = spawnSync(process.execPath, [wrapper, ...args], { encoding: "utf8" });
+    const result = spawnSync(process.execPath, [wrapper, ...args], { encoding: "utf8", env: cleanEnv() });
     assert.equal(result.status, 0);
     assert.ok(["usage", "version"].includes(JSON.parse(result.stdout).status));
   }
@@ -400,7 +401,7 @@ test("SKILL.md, the release manifest and the wrapper agree on one version", () =
   assert.ok(frontmatter, "SKILL.md needs a frontmatter block");
   const declared = frontmatter[1].match(/^version:\s*(\S+)\s*$/m);
   assert.ok(declared, "SKILL.md frontmatter needs a version");
-  const reported = JSON.parse(spawnSync(process.execPath, [wrapper, "--version"], { encoding: "utf8" }).stdout);
+  const reported = JSON.parse(spawnSync(process.execPath, [wrapper, "--version"], { encoding: "utf8", env: cleanEnv() }).stdout);
   assert.equal(declared[1], manifest.version);
   assert.equal(reported.version, manifest.version);
 });

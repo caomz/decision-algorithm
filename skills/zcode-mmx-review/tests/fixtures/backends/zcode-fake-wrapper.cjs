@@ -56,17 +56,20 @@ function writeObserved(materialB64) {
 }
 
 if (config.behavior === "hang") {
-  writeObserved(materialBytes.toString("base64"));
+  // 信号处理器必须先于 observed 安装：取消用例在 observed 文件出现的瞬间就会发
+  // 信号；若处理器尚未就位，默认行为会立即杀死 wrapper，取消语义失去确定性。
   process.on("SIGTERM", () => process.exit(143));
   process.on("SIGINT", () => process.exit(130));
+  writeObserved(materialBytes.toString("base64"));
   setInterval(() => {}, 1000);
 } else if (config.behavior === "slow-exit") {
-  // 取消竞态用：先写完 observed 与回执再挂起；收到 SIGTERM 后延迟 exitMs 才退出，
-  // 用于确定性复现"取消信号已到、进程退出晚于父层截止"的窗口。
-  writeObserved(materialBytes.toString("base64"));
-  process.stdout.write(JSON.stringify(buildReceipt()) + "\n");
+  // 取消竞态用：先挂好延迟退出的信号处理器，再写 observed 与回执并挂起；收到
+  // SIGTERM 后延迟 exitMs 才退出，用于确定性复现"取消信号已到、进程退出晚于父层
+  // 截止"的窗口。处理器先于 observed 安装，理由同 hang。
   process.on("SIGTERM", () => setTimeout(() => process.exit(143), config.exitMs ?? 800));
   process.on("SIGINT", () => setTimeout(() => process.exit(130), config.exitMs ?? 800));
+  writeObserved(materialBytes.toString("base64"));
+  process.stdout.write(JSON.stringify(buildReceipt()) + "\n");
   setInterval(() => {}, 1000);
 } else {
   if (config.behavior === "bad-observed") {

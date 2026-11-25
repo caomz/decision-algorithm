@@ -11,6 +11,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { createHash } = require("node:crypto");
+const { cleanEnv } = require("./support/env.js");
 
 const skillDir = path.resolve(__dirname, "..");
 const repin = path.join(skillDir, "scripts", "repin-release.js");
@@ -93,14 +94,14 @@ function makeRelease({ leftOut = true, omit = [] } = {}) {
   return managed;
 }
 function runRepin(managed, ...args) {
-  const result = spawnSync(process.execPath, [repin, "--root", managed, ...args], { encoding: "utf8", timeout: 15000 });
+  const result = spawnSync(process.execPath, [repin, "--root", managed, ...args], { encoding: "utf8", timeout: 15000, env: cleanEnv() });
   const marker = path.join(managed, MARKER);
   if (fs.existsSync(marker)) createdFiles.add(marker);
   return { result, marker };
 }
 function installCheck(managed) {
   const run = spawnSync(process.execPath, [path.join(managed, "mmx", "scripts", "mmx-chat.js"),
-    "--prompt-file", path.join(managed, "missing-prompt.txt")], { encoding: "utf8", timeout: 15000 });
+    "--prompt-file", path.join(managed, "missing-prompt.txt")], { encoding: "utf8", timeout: 15000, env: cleanEnv() });
   const receipt = JSON.parse(run.stdout);
   assert.equal(receipt.cli_invoked, false);
   return receipt.status;
