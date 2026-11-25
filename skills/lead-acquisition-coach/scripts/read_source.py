@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Locate exact passages in the bundled course notes. No external packages needed."""
 from __future__ import annotations
+
 import argparse
 import hashlib
 import json
-from pathlib import Path
 import re
 import sys
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / 'sources' / 'course-notes.md'

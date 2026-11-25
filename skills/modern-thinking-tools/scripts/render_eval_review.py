@@ -8,7 +8,6 @@ import html
 import json
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_EVALS = ROOT / "skills" / "modern-thinking-tools" / "evals" / "evals.json"
 DEFAULT_OUTPUT = ROOT / "tmp" / "modern-thinking-tools" / "eval-review.html"

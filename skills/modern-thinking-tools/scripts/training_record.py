@@ -13,7 +13,6 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-
 DEFAULT_DB = Path.home() / ".local/share/modern-thinking-tools/training.sqlite3"
 TOOL_ID = re.compile(r"T(?:00[1-9]|0[1-9]\d|100)\Z")
 SAFE_REF = re.compile(r"[A-Za-z0-9_.:-]{1,120}\Z")

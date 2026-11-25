@@ -13,7 +13,6 @@ import os
 import subprocess
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[3]
 CANONICAL = (ROOT / "skills" / "modern-thinking-tools").resolve()
 

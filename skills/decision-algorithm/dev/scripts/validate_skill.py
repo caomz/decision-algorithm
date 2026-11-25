@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
 from typing import Optional
 
@@ -125,7 +124,6 @@ class SkillValidator:
     def _validate_formulas(self):
         """验证核心公式是否正确"""
         content = self.skill_path.read_text(encoding="utf-8")
-        knowledge = json.loads(self.knowledge_path.read_text(encoding="utf-8"))
 
         # 验证期望值公式
         # 检查是否包含期望值的核心要素
@@ -234,7 +232,6 @@ class SkillValidator:
     def _validate_no_contradictions(self):
         """验证没有与课程内容直接矛盾的内容"""
         content = self.skill_path.read_text(encoding="utf-8")
-        knowledge = json.loads(self.knowledge_path.read_text(encoding="utf-8"))
 
         contradictions = []
 
@@ -346,7 +343,6 @@ class SkillValidator:
     def _extract_keywords(self, text: str) -> list[str]:
         """从中文文本中提取关键词（简化版）"""
         # 移除标点，保留中文字符和关键英文词
-        import re
         # 提取核心词组
         keywords = []
         # 对于"只做正期望值的事"，提取关键部分

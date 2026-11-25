@@ -13,13 +13,13 @@
 
 from __future__ import annotations
 
+import argparse
 import io
 import json
 import shutil
-import argparse
 import sys
-from pathlib import Path
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 # Fix Windows console encoding

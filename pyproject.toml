@@ -1,0 +1,15 @@
+# Python 代码规范基线（ruff）
+# 运行方式：ruff check .
+[tool.ruff]
+line-length = 100
+
+# skills/github_open_skills/ 是从上游开源项目同步来的 skill 快照记录仓（见其 README），
+# 只做记录、不接管安装，内容以上游为准；不纳入本仓 lint 基线，
+# 以免下次同步上游时覆盖本地为过 lint 所做的改动。
+# force-exclude 让该排除对显式传入的路径同样生效（ruff 默认只对自动发现生效）。
+extend-exclude = ["skills/github_open_skills"]
+force-exclude = true
+
+[tool.ruff.lint]
+# I = isort（import 排序），F = pyflakes（未使用 import / 变量等）
+select = ["I", "F"]

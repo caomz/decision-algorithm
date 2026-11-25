@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Check package structure, preserved source, evidence lines and local file links."""
 from __future__ import annotations
+
 import hashlib
 import json
-from pathlib import Path
 import re
 import subprocess
 import sys
+from pathlib import Path
 from urllib.parse import unquote
 
 ROOT = Path(__file__).resolve().parents[1]

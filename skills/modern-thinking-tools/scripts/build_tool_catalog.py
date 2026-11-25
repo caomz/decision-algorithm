@@ -16,7 +16,6 @@ import re
 from pathlib import Path
 from typing import Any
 
-
 ROOT = Path(__file__).resolve().parents[3]
 COURSE_PATH = ROOT / "knowledge" / "raw" / "05-素材库" / "万维钢·现代思维工具100讲.md"
 OUTPUT_PATH = ROOT / "skills" / "modern-thinking-tools" / "references" / "tool-catalog.json"
