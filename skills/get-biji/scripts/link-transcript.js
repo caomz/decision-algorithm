@@ -32,6 +32,7 @@ const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 const { CONFIG, getToken } = require('./api');
 const { STATE_FILES, readState, writeState } = require('./paths');
+const { yamlDoubleQuoted } = require('./format');
 
 const NOTES_API = CONFIG.authApiUrl;   // notes-api.biji.com
 const LEGACY_API = CONFIG.baseUrl;     // get-notes.luojilab.com
@@ -261,7 +262,9 @@ async function transcribe(input, { keep = false } = {}) {
 
 function renderMarkdown(r) {
     const dateStr = new Date().toISOString().slice(0, 10);
-    const esc = s => String(s || '').replace(/"/g, '\\"');
+    // Frontmatter values may carry newlines or backslashes (titles from web pages);
+    // proper YAML escaping keeps the rebuilt block parseable.
+    const esc = yamlDoubleQuoted;
     const isUpload = r.source === 'get-upload-raw';
     let md = `---\n`;
     md += `date: ${dateStr}\n`;

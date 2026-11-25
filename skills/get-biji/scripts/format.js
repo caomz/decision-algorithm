@@ -61,6 +61,40 @@ function resolveTitle(note) {
 }
 
 /**
+ * File name stem (no extension) the sync stage saves a note under: HHMMSS_<safe title>.
+ * rebuild-state.js must derive the same stem from the same note fields, so this is the
+ * single naming rule both stages share — otherwise rebuild marks saved notes as missing
+ * and the next sync writes duplicates.
+ */
+function noteBaseName(note) {
+    const rawTime = ((note && note.created_at) || '').split(' ')[1] || '00:00:00';
+    const timeStr = rawTime.substring(0, 8).replace(/:/g, '');
+    return `${timeStr}_${safeName(resolveTitle(note || {}))}`;
+}
+
+/**
+ * Escape a string for use inside a YAML double-quoted scalar.
+ *
+ * Frontmatter is rebuilt from note fields that may contain newlines (multi-line
+ * titles) or backslashes (Windows-style paths). A raw newline folds into a space
+ * under YAML rules and pushes the rest of the value onto its own line, corrupting
+ * the block for regex-based readers; an unescaped backslash turns `\U` and friends
+ * into invalid escapes. Escaping keeps the value byte-for-byte, so rebuild keeps
+ * the original YAML semantics.
+ */
+function yamlDoubleQuoted(value) {
+    return String(value ?? '')
+        .replace(/\\/g, '\\\\')
+        .replace(/"/g, '\\"')
+        .replace(/[\u0000-\u001F]/g, ch => (
+            ch === '\n' ? '\\n'
+                : ch === '\r' ? '\\r'
+                    : ch === '\t' ? '\\t'
+                        : `\\x${ch.charCodeAt(0).toString(16).padStart(2, '0')}`
+        ));
+}
+
+/**
  * Parse "2026-03-02 13:21:12" → milliseconds since midnight.
  */
 function parseStartTimeMs(createdAt) {
@@ -104,7 +138,10 @@ function parseChapters(content) {
 
     const chapters = [];
     // Match patterns like: [00:03:25](https://getnotes.seek:205) **title**
-    const regex = /\[(\d{2}:\d{2}:\d{2})\]\(https:\/\/getnotes\.seek:(\d+)\)\s+\*\*(.+?)\*\*/g;
+    // Get emits chapter stamps as MM:SS or HH:MM:SS (references/检索.md shows
+    // [13:27]); the seek link's trailing number stays the authoritative offset,
+    // so both shapes must parse or whole sections drop out of the transcript.
+    const regex = /\[(\d{1,2}:\d{2}(?::\d{2})?)\]\(https:\/\/getnotes\.seek:(\d+)\)\s+\*\*(.+?)\*\*/g;
     let match;
 
     while ((match = regex.exec(content)) !== null) {
@@ -303,12 +340,13 @@ function buildPlainTranscript(originalData, startTimeMs) {
 
 /**
  * Convert chapter timestamps in summary content from relative to absolute clock time.
- * Transforms [HH:MM:SS](https://getnotes.seek:N) → [HH:MM](https://getnotes.seek:N)
+ * Transforms [MM:SS](https://getnotes.seek:N) / [HH:MM:SS](https://getnotes.seek:N)
+ * → [HH:MM](https://getnotes.seek:N)
  */
 function convertChapterTimestamps(content, startTimeMs) {
     if (!content || !startTimeMs) return content;
     return content.replace(
-        /\[(\d{2}:\d{2}:\d{2})\]\(https:\/\/getnotes\.seek:(\d+)\)/g,
+        /\[(\d{1,2}:\d{2}(?::\d{2})?)\]\(https:\/\/getnotes\.seek:(\d+)\)/g,
         (match, _relTime, seekSeconds) => {
             const relativeMs = parseInt(seekSeconds) * 1000;
             const absTime = formatAbsoluteTime(relativeMs, startTimeMs);
@@ -342,17 +380,17 @@ function buildSummaryMarkdown(note, transcript, transcriptFilename, startTimeMs)
 
     let md = `---\n`;
     md += `date: ${dateStr}\n`;
-    md += `time: "${timeStr}"\n`;
-    md += `title: "${(note.title || 'Untitled').replace(/"/g, '\\"')}"\n`;
+    md += `time: "${yamlDoubleQuoted(timeStr)}"\n`;
+    md += `title: "${yamlDoubleQuoted(note.title || 'Untitled')}"\n`;
     md += `note_id: ${note.note_id}\n`;
     if (note.note_type) md += `note_type: ${note.note_type}\n`;
-    if (note.source) md += `source: "${note.source}"\n`;
-    if (note.created_at) md += `created_at: "${note.created_at}"\n`;
-    if (note.updated_at) md += `updated_at: "${note.updated_at}"\n`;
+    if (note.source) md += `source: "${yamlDoubleQuoted(note.source)}"\n`;
+    if (note.created_at) md += `created_at: "${yamlDoubleQuoted(note.created_at)}"\n`;
+    if (note.updated_at) md += `updated_at: "${yamlDoubleQuoted(note.updated_at)}"\n`;
     md += yamlList('tags', note.tags, 'name');
     md += yamlList('topics', note.topics, 'topic_name', 'name');
     if (durationMin > 0) md += `duration_min: ${durationMin}\n`;
-    if (transcriptFilename) md += `transcript: "${transcriptFilename}"\n`;
+    if (transcriptFilename) md += `transcript: "${yamlDoubleQuoted(transcriptFilename)}"\n`;
     md += `---\n\n`;
 
     if (content) md += `${content}\n\n`;
@@ -385,14 +423,14 @@ function buildTranscriptMarkdown(note, transcript, summaryFilename) {
     let md = `---\n`;
     md += `date: ${dateStr}\n`;
     md += `note_id: ${note.note_id}\n`;
-    md += `title: "${(note.title || 'Untitled').replace(/"/g, '\\"')}"\n`;
+    md += `title: "${yamlDoubleQuoted(note.title || 'Untitled')}"\n`;
     if (note.note_type) md += `note_type: ${note.note_type}\n`;
-    if (note.source) md += `source: "${note.source}"\n`;
-    if (note.created_at) md += `created_at: "${note.created_at}"\n`;
-    if (note.updated_at) md += `updated_at: "${note.updated_at}"\n`;
+    if (note.source) md += `source: "${yamlDoubleQuoted(note.source)}"\n`;
+    if (note.created_at) md += `created_at: "${yamlDoubleQuoted(note.created_at)}"\n`;
+    if (note.updated_at) md += `updated_at: "${yamlDoubleQuoted(note.updated_at)}"\n`;
     md += yamlList('tags', note.tags, 'name');
     md += yamlList('topics', note.topics, 'topic_name', 'name');
-    if (summaryFilename) md += `summary: "${summaryFilename}"\n`;
+    if (summaryFilename) md += `summary: "${yamlDoubleQuoted(summaryFilename)}"\n`;
     md += `---\n\n`;
     md += `${transcript}\n`;
 
@@ -427,7 +465,7 @@ function yamlList(key, items, ...nameFields) {
         .filter(Boolean)
         .map(String);
     if (!values.length) return '';
-    return `${key}:\n${values.map(v => `  - "${v.replace(/"/g, '\\"')}"`).join('\n')}\n`;
+    return `${key}:\n${values.map(v => `  - "${yamlDoubleQuoted(v)}"`).join('\n')}\n`;
 }
 
 module.exports = {
@@ -439,6 +477,8 @@ module.exports = {
     getDurationMinutes,
     safeName,
     resolveTitle,
+    noteBaseName,
+    yamlDoubleQuoted,
     parseChapters,
     buildTranscript,
     buildPlainTranscript,
