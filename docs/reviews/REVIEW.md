@@ -59,6 +59,7 @@
 
 **潜在逻辑问题**：
 - Step 2.5 计算器工具提到 `python3 tools/decision_calculator.py`，但未说明该文件是否存在或如何获取
+  - **现状（2026-11-25）**：文件已在仓库 `skills/decision-algorithm/tools/decision_calculator.py`，可直接运行（如 `python3 skills/decision-algorithm/tools/decision_calculator.py --full -p 0.3 -g 100000 -l 20000 --capital 100000`）；opt-02 已为其补输入校验与除零处理，无需另行获取。
 - "混合问题"（用具体案例讨论抽象道理）的处理逻辑稍简，可补充更多判断标准
 
 ---
@@ -136,12 +137,14 @@
 ### 发现的问题
 
 1. **轻微**：计算器工具路径 `tools/decision_calculator.py` 未说明该文件的存在性或获取方式
+   - **现状（2026-11-25）**：文件已在仓库 `skills/decision-algorithm/tools/decision_calculator.py`，入口命令见 README「🧰 各 Skill 命令速查」。
 2. **轻微**："混合问题"处理逻辑可以更细化
 3. **轻微**：感情/关系场景的覆盖相对投资/职业场景较为简略
 
 ### 改进建议
 
 1. 在 Step 2 或 Step 2.5 中补充说明 `decision_calculator.py` 的来源（自含或需创建）
+   - **现状（2026-11-25）**：无需再补——文件已随仓库提供：`skills/decision-algorithm/tools/decision_calculator.py`。
 2. 为"混合问题"增加更具体的判断示例
 3. 感情/关系场景可考虑增加更多典型案例（如满意主义在感情中的应用）
 

@@ -10,7 +10,7 @@
 |------|---------|------|
 | 问题分类 | ✅ 高 | 分类表清晰，三类问题（需要事实/纯框架/混合）边界明确 |
 | 决策式研究 | ⚠️ 中 | 研究维度完善，但依赖 WebSearch 等工具，未说明如何获取数据 |
-| 计算器工具 | ❓ 未验证 | 引用 `python3 tools/decision_calculator.py`，但该文件未在仓库中确认存在 |
+| 计算器工具 | ❓ 未验证 | 引用 `python3 tools/decision_calculator.py`，但该文件未在仓库中确认存在<br>**现状（2026-11-25）**：文件已在仓库 `skills/decision-algorithm/tools/decision_calculator.py`，可直接运行；opt-02 已补输入校验与除零处理。 |
 | EKB 框架分析 | ✅ 高 | 八步流程清晰，每步有具体操作指引 |
 | 五种资源审视 | ✅ 高 | 表格化呈现，审视要点明确 |
 | 交互检查点 | ✅ 高 | 模板化的分析摘要输出格式，用户反馈机制完善 |
@@ -21,6 +21,7 @@
 1. **计算器工具未提供**：`tools/decision_calculator.py` 在文档中被引用，但文件不存在
    - 期望值计算、凯利公式计算依赖此工具
    - 若无此工具，需手动计算或降级为定性分析
+   - **现状（2026-11-25）**：文件已提供：`skills/decision-algorithm/tools/decision_calculator.py`，入口 `python3 skills/decision-algorithm/tools/decision_calculator.py --full -p 0.3 -g 100000 -l 20000 --capital 100000`。
 
 2. **研究阶段工具依赖**：Step 2 要求使用 WebSearch 等工具获取真实信息，但未说明：
    - 搜索哪些关键词
@@ -110,6 +111,7 @@
 ### 缺失或不足的细节
 
 1. **计算器工具文件不存在**：`tools/decision_calculator.py` 被引用但未提供
+   - **现状（2026-11-25）**：文件已在仓库 `skills/decision-algorithm/tools/decision_calculator.py`，可直接运行。
 2. **"混合问题"判断标准模糊**：何种情况算"用具体案例讨论抽象道理"，边界不够清晰
 3. **置信度评估的主观性**：低/中/高置信度的划分依赖用户主观判断，缺少客观标准
 4. **贝叶斯更新的可操作性**：十六字诀清晰，但"最小可行动方案"的具体判断方法缺失
@@ -122,7 +124,7 @@
 
 | 改进项 | 当前状态 | 建议 |
 |--------|---------|------|
-| 计算器工具 | 引用但不存在 | 提供 `tools/decision_calculator.py` 源代码，或明确标注需自行创建 |
+| 计算器工具 | 引用但不存在 | 提供 `tools/decision_calculator.py` 源代码，或明确标注需自行创建<br>**现状（2026-11-25）**：已随仓库提供真实文件 `skills/decision-algorithm/tools/decision_calculator.py`。 |
 | "混合问题"判断 | 描述模糊 | 增加具体判断示例，如"用某只股票讨论价值投资"属于混合问题 |
 
 ### 中优先级改进
@@ -209,7 +211,7 @@
 
 | 优先级 | 改进项 | 预期效果 |
 |--------|--------|---------|
-| P0 | 提供 `decision_calculator.py` | 量化分析可直接执行 |
+| P0 | 提供 `decision_calculator.py` | 量化分析可直接执行<br>**现状（2026-11-25）**：已落地于 `skills/decision-algorithm/tools/decision_calculator.py`。 |
 | P1 | 细化混合问题判断标准 | 问题分类更准确 |
 | P1 | 增强感情/关系场景分析框架 | 覆盖度更完整 |
 | P2 | 增加置信度评估的客观标准 | 分析质量更稳定 |
