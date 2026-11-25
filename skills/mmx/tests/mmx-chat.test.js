@@ -195,7 +195,13 @@ test("success preserves the public JSON schema and skips auth status", () => {
     model_identity_source: "response.model", stop_reason: "end_turn", complete: true,
     input_tokens: 12, output_tokens: 3, truncated: false,
     fetch_timeout_guard: "custom_launcher", base_url_env: "unset",
+    queue_wait_ms: 0, execution_ms: jsonResult(run).execution_ms, cleanup_ms: 0,
+    timeout_origin: "none", diagnosis_confidence: "observed", observed_exit_code: 0, observed_signal: null,
+    local_process_exit_observed: true, local_tree_cleanup: process.platform === "win32" ? "unknown" : "posix_group_absent",
+    effective_request_timeout_ms: 600000, effective_wrapper_timeout_ms: 630000,
+    effective_supervisor_timeout_ms: null, effective_cleanup_timeout_ms: 4000,
   });
+  assert.ok(Number.isFinite(jsonResult(run).execution_ms) && jsonResult(run).execution_ms >= 0);
   const args = JSON.parse(fs.readFileSync(argsDumpPath, "utf8"));
   assert.deepEqual(args.slice(0, 2), ["text", "chat"]);
   assert.ok(!args.includes("--quiet"));
@@ -544,6 +550,7 @@ test("managed release rejects mixed or interrupted installation before launching
   const files = {
     "agy/scripts/agy_runner.py": Buffer.from("# fixture runner"),
     "mmx/scripts/mmx-chat.js": fs.readFileSync(wrapper),
+    "mmx/scripts/batch-safety.js": fs.readFileSync(path.join(skillRoot, "scripts", "batch-safety.js")),
     "mmx/scripts/fetch-timeout-guard.js": fs.readFileSync(path.join(skillRoot, "scripts", "fetch-timeout-guard.js")),
     "mmx/profiles/local.json": fs.readFileSync(profile),
     "cross-validation/scripts/cross_validate.py": Buffer.from("# fixture coordinator"),

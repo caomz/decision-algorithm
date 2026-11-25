@@ -92,7 +92,7 @@ function validateInstall() {
   if (!isObject(release) || release.format !== 1 || release.state !== "active" ||
       typeof release.release_id !== "string" || !/^[a-f0-9]{64}$/.test(release.release_id) ||
       !isObject(release.files)) throw new Error("release marker is invalid");
-  for (const required of ["mmx/scripts/mmx-chat.js", "mmx/scripts/fetch-timeout-guard.js", "mmx/profiles/local.json",
+  for (const required of ["mmx/scripts/mmx-chat.js", "mmx/scripts/fetch-timeout-guard.js", "mmx/scripts/batch-safety.js", "mmx/profiles/local.json",
                           "cross-validation/scripts/cross_validate.py"]) {
     if (!Object.hasOwn(release.files, required)) throw new Error("release manifest is incomplete");
   }
@@ -117,7 +117,9 @@ function readProfile(file) {
   let profile;
   try {
     if (!fs.statSync(file).isFile()) throw new Error();
-    profile = JSON.parse(fs.readFileSync(file, "utf8"));
+    const bytes = fs.readFileSync(file);
+    profile = JSON.parse(bytes.toString("utf8"));
+    if (process.env.ZMX_BATCH_ATTEMPT_ID) telemetry.batch_config_sha256 = createHash("sha256").update(bytes).digest("hex");
   } catch { usageError("MMX runtime profile is unreadable or is not JSON."); }
   if (!isObject(profile) || profile.format !== 1 ||
       Object.keys(profile).some(key => !["format", "model", "max_tokens", "request_timeout_seconds", "wrapper_timeout_seconds"].includes(key)) ||
@@ -171,6 +173,7 @@ function cleanup() {
 }
 
 let cancelCurrentRequest = null;
+function batchCancelled() { return Boolean(process.env.ZMX_BATCH_CANCEL_FILE && fs.existsSync(process.env.ZMX_BATCH_CANCEL_FILE)); }
 function terminateChildTree(child, force, grouped, platform = process.platform, killTree = spawnSync, killGroup = process.kill) {
   if (!child || !child.pid) return false;
   if (platform === "win32") {
@@ -225,13 +228,23 @@ function runCmd(cmd, args, timeoutSecs, useShell, childEnv) {
     let timeout;
     let grace;
     let deadline;
+    let cancelPoll;
 
+    // Verify the immediate POSIX process group only; detached descendants and
+    // the remote provider are outside this observation. Never infer Windows
+    // tree disappearance from taskkill return codes.
+    function groupGone() {
+      if (!grouped || !child?.pid || !exitObserved) return false;
+      try { process.kill(-child.pid, 0); return false; }
+      catch (err) { return err.code === "ESRCH"; }
+    }
     function finish(kind) {
       if (finished) return;
       finished = true;
       clearTimeout(timeout);
       clearTimeout(grace);
       clearTimeout(deadline);
+      clearInterval(cancelPoll);
       cancelCurrentRequest = null;
       fs.closeSync(stdoutFd);
       fs.closeSync(stderrFd);
@@ -240,7 +253,7 @@ function runCmd(cmd, args, timeoutSecs, useShell, childEnv) {
         observed_exit_code: childCode, observed_signal: childSignal, local_process_exit_observed: exitObserved,
         execution_ms: Math.max(0, Math.round((stopAt ?? ended) - executionStarted)),
         cleanup_ms: stopAt === null ? 0 : Math.max(0, Math.round(ended - stopAt)),
-        local_tree_cleanup: stopAt === null ? "not_checked" : "unknown" });
+        local_tree_cleanup: groupGone() ? "posix_group_absent" : child?.pid ? "unknown" : "not_checked" });
     }
 
     function stop(kind, code = null) {
@@ -248,7 +261,6 @@ function runCmd(cmd, args, timeoutSecs, useShell, childEnv) {
       stopReason = kind;
       stopAt = performance.now();
       forcedExitCode = code;
-      if (!terminateChildTree(child, false, grouped)) terminationFailed = true;
       grace = setTimeout(() => {
         // The main child may exit before a descendant. On POSIX the group
         // still needs escalation even after the close event.
@@ -263,6 +275,7 @@ function runCmd(cmd, args, timeoutSecs, useShell, childEnv) {
         terminationFailed = true;
         finish(stopReason);
       }, 4000);
+      if (!terminateChildTree(child, false, grouped)) terminationFailed = true;
     }
 
     function capture(fd, bytes) {
@@ -295,9 +308,14 @@ function runCmd(cmd, args, timeoutSecs, useShell, childEnv) {
       closed = true;
       if (code !== null || signal !== null) exitObserved = true;
       childCode = code; childSignal = signal;
+      if (!stopReason && grouped && !groupGone()) { stop("cleanup_error"); return; }
       if (!stopReason || escalated) finish(stopReason || "closed");
     });
     timeout = setTimeout(() => stop("timeout", 124), timeoutSecs * 1000);
+    if (process.env.ZMX_BATCH_CANCEL_FILE) {
+      cancelPoll = setInterval(() => { if (batchCancelled()) stop("cancelled", 143); }, 75);
+      if (batchCancelled()) stop("cancelled", 143);
+    }
   });
 }
 
@@ -493,6 +511,7 @@ function readInput(file, label) {
   try {
     if (!fs.statSync(file).isFile()) throw new Error();
     raw = fs.readFileSync(file);
+    if (label === "prompt" && process.env.ZMX_BATCH_ATTEMPT_ID) telemetry.batch_material_sha256 = createHash("sha256").update(raw).digest("hex");
   } catch { usageError(`${label} file is not a readable regular file`); }
   if ((raw[0] === 0xff && raw[1] === 0xfe) || (raw[0] === 0xfe && raw[1] === 0xff) || raw.includes(0)) {
     throw Object.assign(new Error(), { envelope: { status: "unsupported_encoding", error: `${label} must be UTF-8.` } });
@@ -647,6 +666,13 @@ async function main() {
   telemetry.effective_cleanup_timeout_ms = 4000;
   const prompt = readInput(promptFile, "prompt");
   if (!prompt.length) usageError("prompt file is empty");
+  if (process.env.ZMX_BATCH_ATTEMPT_ID) {
+    telemetry.batch_attempt_id = process.env.ZMX_BATCH_ATTEMPT_ID;
+    if (!/^[a-f0-9-]{36}$/.test(telemetry.batch_attempt_id) ||
+        telemetry.batch_material_sha256 !== process.env.ZMX_BATCH_MATERIAL_SHA256 ||
+        telemetry.batch_config_sha256 !== process.env.ZMX_BATCH_CONFIG_SHA256) usageError("batch snapshot binding mismatch");
+  }
+  if (batchCancelled()) { fail({ status: "cancelled", complete: false }); return; }
   const systemFile = options.get("--system-file");
   const system = systemFile ? readInput(systemFile, "system") : "";
   const mmx = findMmx();
@@ -683,6 +709,7 @@ async function main() {
   if (mmx.shell && ![mmx.cmd, ...chatArgs].every(safeCmdArgument)) {
     usageError("cmd.exe cannot safely represent the CLI path or arguments.");
   }
+  if (batchCancelled()) { fail({ status: "cancelled", complete: false }); return; }
   const requestStarted = Date.now();
   const chat = await runCmd(mmx.cmd, [...launch.argsPrefix, ...chatArgs], wrapperTimeout, mmx.shell, launch.env);
   const elapsedMs = Date.now() - requestStarted;

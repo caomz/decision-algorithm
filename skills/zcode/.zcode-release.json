@@ -2,22 +2,23 @@
   "format": 1,
   "version": "1.5.1",
   "files": {
-    "README.md": "0c6d98f0a2461ea1172d6c87b8decdd6adef812ad10dbdfb88d7cf4a1c6676a2",
-    "SKILL.md": "cc5827497e2bd0aa22d68664c5dccb4b8c8610e98747f34f95c1f4c971172ef7",
+    "README.md": "ed8d8213edecb5f62ba1205cdc1ab92bef80d6901dad696f1ea73d2a5612ab0b",
+    "SKILL.md": "de60c6bb61fac8bf3d4435a1bba70c6676847b945417c32f31922124a7d864e5",
     "agents/openai.yaml": "e9b77f7b33258700dfae902efc91a4058f7fc76f6d5f675641eb201fb9fd2052",
     "references/review-v1.schema.json": "f269a080098ecb4ab34ed8fd5aa4e76206ba662a6358be7fbd5451e9392bc546",
-    "references/verification.md": "1b77b3e7366e26953bfd6f8df0377600818ce7bbf147295569f4b99c7e581d2f",
-    "scripts/repin-release.js": "2a4e7c6dd12f3ffe25e24c9ac5d07df24c4989f45898f4d629d7aa684c6a2bc5",
+    "references/verification.md": "923c438a933c5aef17acaa6ed7776c58c9ea2673ea3613b010ed86db1490b084",
+    "scripts/batch-safety.js": "a152ada8a7d23aa0a719034ff350ee08037db0b5065cfd2290887bb7df19c1ac",
+    "scripts/repin-release.js": "8f6530517272363e6fcc9f3e2d6f385109514c04c3bfd73aec09dc06bfaa4498",
     "scripts/review.js": "f4a6a4522bb5d07d48db6b3ac83bda25a08dff5bbd0cde7b05618d54520c9c83",
-    "scripts/zcode-batch.js": "671169b40b7e56730d6379bcf3e84d1c1918260e9630677d86f2827000609553",
-    "scripts/zcode-chat.js": "5b2e1ca10869f260cf33ddca6070f55647144a4f4cd277adef5c19aaafb5a38a",
+    "scripts/zcode-batch.js": "8412d99fd64052a1898a7e28fe50ecc9708c0febc4fb7a4571003165e903fbae",
+    "scripts/zcode-chat.js": "2e28f00718f3b27d3b1c58eacc5699b2014ceb2d81ec39676e9e3e6eba6c2d86",
     "scripts/zcode-run.js": "b4fceac86283521fb799bb87033da53a97b6b1c5dcef7a5fe18c6d180d83b432",
     "tests/fixtures/fake-zcode.cjs": "a2e5648cdcf8d1fe270c012625553528366d01d89ff4e430424991b8d9a480df",
     "tests/repin-release.test.js": "2663a24bcd46ec01583e1656740bb585151f2bab87758f0750927d05a1bc8da0",
     "tests/review-golden.test.js": "e36ffebea6e6456f6b3c6362eab3429e43fa4beac9cf91e61e9155792ce6d04e",
     "tests/support/env.js": "ea798670d54db6c29191581bfa0ba3e5aad3f7b913100fc7fa70ec0222906e50",
-    "tests/zcode-batch.test.js": "a1b8244010ea6fe87f98067534f0fd84fa8e3caa739d1e12161cb6bdc186fad5",
-    "tests/zcode-chat.test.js": "a8bf1bd75ea14b5cd3d3c2ed7bedfc315f81c88bf0029572dd76f6b3eeaf60af"
+    "tests/zcode-batch.test.js": "87eefcb28c1b27bf154145ffb0694e1030eff9293c05fa097cc34456e6b023ff",
+    "tests/zcode-chat.test.js": "1809e9877084db00be5732a9bb08a125a49e766238f227935b7b76d731775f16"
   },
   "review_sha256": "f4a6a4522bb5d07d48db6b3ac83bda25a08dff5bbd0cde7b05618d54520c9c83"
 }

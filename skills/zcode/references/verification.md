@@ -51,11 +51,11 @@ NDJSON 逐行解析并检查唯一末尾 result、匹配的会话/回合和成�
 
 `scripts/zcode-batch.js` 在单片契约之上做批量编排，每片仍是完整的 `zcode-chat.js` 调用：
 
-- **stdout 契约**：恰好一个 JSON 对象，字段 `status`（ok|partial|failed）、`gate`（PASS|FAIL|NOT_EVALUATED，内容级）、`transport_gate`（PASS|NOT_EVALUATED）、`batch`（shards/ok/transport_ok/truncated_or_incomplete/retried/review_pass/review_fail/review_not_evaluated/mode/concurrency/wall_seconds）、`shards[]`（每片完整单片回执 + shard/prompt_file/retried/retry_reason/duration_seconds，重试时含 `first_attempt`）。可选 `--receipt-file` 落盘，内容与 stdout 字段一致。
+- **stdout 契约**：恰好一个 JSON 对象，字段 `status`（ok|partial|failed）、`gate`（PASS|FAIL|NOT_EVALUATED，内容级）、`transport_gate`（PASS|NOT_EVALUATED）、`batch`（shards/ok/transport_ok/truncated_or_incomplete/retried/review_pass/review_fail/review_not_evaluated/mode/concurrency/wall_seconds）、`shards[]`（每片完整单片回执 + shard/prompt_file/retried/retry_reason/duration_seconds）。可选 `--receipt-file` 落盘，内容与 stdout 字段一致。
 - **双 gate**：`transport_gate` 仅在全部片 `status=ok`、`complete=true`、`truncated!==true` 时为 PASS；内容 `gate` 任一片 `review_gate=FAIL` → FAIL（不被其他片的传输失败掩盖），全 PASS → PASS，其余 NOT_EVALUATED；chat 模式恒 NOT_EVALUATED。退出码只跟 `status`：`ok` → 0（即使内容 FAIL），partial/failed → 1。与单片一致，内容 FAIL 是有效审核结果而非调用故障。
-- **重试边界**：仅 `quota_error` / `timeout` 退避 30 秒重发一次（`first_attempt` 完整保留）；`auth_error`、`policy_violation`、schema 类、无法解析的 stdout、内容 FAIL 均不重试。持续失败恰好两次调用。
+- **重试边界**：额度、超时、网络失败、未知终态和其他失败均不自动重发；内容 FAIL 是有效评审结果，不是传输失败。
 - **隔离与证据**：不提供批量 `--output-dir`；每片每次尝试由 wrapper 自建 `zcode-text-*` 目录并保留全部证据。错误回执不回显子进程 stderr，明细在各片 `artifacts_dir`。
-- **外层超时公式**：`ceil(片数/并发) × (2×(timeout-seconds+45s) + 30s) + 60s`（两次尝试 + 每试监督余量 + 退避 + 批级余量）。
+- **监督时限**：单片默认 请求时限 + 45 秒；批次默认按片数与并发计算、上限 86400 秒。可显式使用 `--supervisor-timeout-seconds` / `--batch-timeout-seconds`（1–86400 秒）；另有 8 秒监督清理预算，超时不自动重发。
 - **测试钩子**：`ZCODE_BATCH_WRAPPER`（替换为假 wrapper）、`ZCODE_BATCH_RETRY_MS`（仅离线缩短退避，生产默认 30000ms，非法值回退默认）。
 
 ## Launcher 与平台
@@ -85,7 +85,7 @@ node scripts/zcode-batch.js --version
 
 测试使用独立 fake CLI，覆盖隔离配置、参数数组、UTF-8/BOM/畸形输入、原始流保留、分块中文、大回复、缺失用量、模型与终态缺失、重复/不匹配终态、工具违规、结构化错误、非零退出、超时进程树和 review-v1 语义。
 
-批量测试经 `ZCODE_BATCH_WRAPPER` 注入假 wrapper，覆盖参数拒绝、mode/evidence 组合、透传、双 gate 聚合（含内容 FAIL 与传输失败并存）、quota/timeout 重试与不重试边界、坏 stdout、自然序与落盘一致性，以及实际并发不超过设定值。
+批量测试经 `ZCODE_BATCH_WRAPPER` 注入假 wrapper，覆盖参数拒绝、mode/evidence 组合、透传、双 gate 聚合（含内容 FAIL 与传输失败并存）、quota/timeout 不重试边界、坏 stdout、自然序与落盘一致性，以及实际并发不超过设定值。
 
 监督器测试还覆盖后台成功、超时退出、wrapper 被 SIGKILL 后独立保存退出信号与残留运行阶段，以及冲突目录拒绝。`status` 先查 `execution.json` 再判活；判活结果不是"存活"时会再查一次，所以 supervisor 恰在两步之间写完 `execution.json` 退出，也判为 `finished`，不会误报 `interrupted`（用注入的探针确定性复现）。假 CLI 不访问真实模型；Keychain 适配使用合成数据，监督器测试使用注入的本地 fake driver。
 
@@ -98,3 +98,6 @@ node scripts/zcode-batch.js --version
 清单哈希按 **LF 归一化**内容计算（`sha256(content.replace(/\r\n/g, "\n"))`）。仓库在 Windows 上以 CRLF 检出、在 macOS 上以 LF 检出，按原始字节计算会让一端生成的清单在另一端必然失配。归一化后同一份清单在两个平台双向有效。改动任何受管文件后清单按设计失效，用 `node scripts/repin-release.js` 重钉（`--dry-run` 只报告不写入）；**Mac 正本同步 wrapper 变更后同样必须重钉**，否则安装副本报 `install_mismatch`。
 
 安装前记录目标状态与源文件指纹；遇到目录冲突、并发变化或不一致时停止覆盖。运行文件与凭据不得加入安装包。更新先备份当前安装文件再审查逐文件差异；恢复只依据本轮快照处理对应补丁，不批量删除目录或覆盖后续改动。
+
+### V2 逐片证据与监督
+`receipt.json.shards/plan.json` 绑定输入快照、配置、分片、attempt ID 和请求摘要；`000.started.json` 是发送前意图，`000.raw.json` 是通过初步结构/绑定核验的原始 stdout，`000.json` 是实际退出及校验结果。只有计划而没有意图为 NOT_STARTED；已有意图但无有效完成记录时保守为 UNKNOWN，禁止自动重发。私有材料和回执可能包含敏感业务文本，不得提交或分享未脱敏目录。Windows 的 taskkill 返回不证明树退出；POSIX 组消失不证明 detached 后代或远端停止。同步文件系统操作与 OS 调度不提供硬实时保证。

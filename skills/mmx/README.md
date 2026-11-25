@@ -8,7 +8,7 @@ MMX 一方的文本复核 skill：`/mmx <问题>`、`/mmx review <文件>`、`/m
 >
 > **2026-11-17 三方合并**：macOS 侧 `skills/mmx`（加固 wrapper，受管发布 + review-v1 协议）、Windows 侧 `~/.claude/skills/mmx`（实战版：auth 指引、thinking 分类、mcode 通道、Windows 运维）、官方 `mmx-cli` skill（全模态 CLI 指南）合并为本 skill v2.4.0。
 >
-> **2026-11-18 v2.5.0**：新增 `scripts/mmx-batch.js` 分片批量入口（有界并发池 + 传输层 gate + 预算自愈），修复多分片交叉验证的两大复发故障：裸 CLI 默认 4096 预算截断、逐片串行墙钟求和。
+> **2026-11-18 v2.5.0**：新增 `scripts/mmx-batch.js` 分片批量入口（有界并发池 + 传输层 gate + 单次调用安全门禁），修复多分片交叉验证的两大复发故障：裸 CLI 默认 4096 预算截断、逐片串行墙钟求和。
 >
 > **2026-11-19 v2.7.0**：从 macOS 线回传三项修复：预加载 fetch 防护，取消 Node fetch 的 300 秒响应头上限；`thinking_budget_exhausted` 只在 `stop_reason=max_tokens` 时成立；只对子进程去掉 `MINIMAX_BASE_URL` 末尾的 `/v1`，并给 HTTP 404 诊断。wrapper 版本与 `SKILL.md` 统一为 2.7.0，并加一致性测试。只在 macOS 实测过，Windows 待测，见 [test-matrix](references/test-matrix.md)。
 
@@ -33,7 +33,7 @@ mmx/
 │   └── h3-video/                     # 官方 MiniMax-H3 视频子指南收编
 ├── scripts/
 │   ├── mmx-chat.js                   # 同步文本 wrapper（唯一 JSON 回执信封）
-│   ├── mmx-batch.js                  # 分片批量入口（并行池 + 传输层 gate + 预算自愈）
+│   ├── mmx-batch.js                  # 分片批量入口（并行池 + 传输层 gate + 单次调用安全门禁）
 │   ├── mcode-verify.js               # 最高思考等级独立通道（mcode --effort max）
 │   ├── mmx-clean-temp.js             # Windows %TEMP% 外层目录清理（特征形态 + 显式豁免，默认 dry-run）
 │   └── repin-release.js              # 受管发布清单重钉工具

@@ -41,14 +41,14 @@ Review/Challenge 为材料分配稳定 ID（例如 `E1`、`E2`），在材料中
 多分片评审不要逐片串行调用：一次工具调用送整批，`zcode-batch.js` 经有界并发池并行执行每片 `zcode-chat.js`，合并回执并聚合双 gate：
 
 ```text
-node <ZCODE_SKILL_DIR>/scripts/zcode-batch.js --prompt-file <f1> [--prompt-file <f2> ...] | --prompts-dir <dir> [--concurrency 2] [--mode chat|review|challenge --evidence-ids-file <ids.json>] [--timeout-seconds 1200] [--cli-path <exe>] [--receipt-file <path>]
+node <ZCODE_SKILL_DIR>/scripts/zcode-batch.js --prompt-file <f1> [--prompt-file <f2> ...] | --prompts-dir <dir> [--concurrency 1] [--mode chat|review|challenge --evidence-ids-file <ids.json>] [--timeout-seconds 1200] [--cli-path <exe>] [--receipt-file <path>]
 ```
 
-- 每片仍是一次完整 `zcode-chat.js` 调用（guarded 权限、独立 HOME/cwd、零工具校验、每片独立 `zcode-text-*` 证据目录原样继承）。**不要给批量传 `--output-dir`**：每片及每次重试由 wrapper 自建目录，全部证据保留。
+- 每片仍是一次完整 `zcode-chat.js` 调用（guarded 权限、独立 HOME/cwd、零工具校验、每片独立 `zcode-text-*` 证据目录原样继承）。**不要给批量传 `--output-dir`**：每片由 wrapper 自建目录，全部证据保留。
 - 批级回执含每片完整回执与**双 gate**：`transport_gate`（全片 `status=ok`、`complete` 且未截断）与内容 `gate`（任一片 `review_gate=FAIL` → FAIL，即使他片传输失败也保留确定发现；全 PASS → PASS；其余 NOT_EVALUATED；chat 模式恒 NOT_EVALUATED）。
 - `status=ok` 时退出 0，即使内容 gate 为 `FAIL`（P1 发现是有效审核结果，与单片一致）；传输或批处理失败退出 1。
-- 重试：仅 `quota_error` / `timeout` 退避 30 秒重发一次，`first_attempt` 完整保留；auth/policy/schema 类错误与内容 FAIL 不重试。
-- `--concurrency` 默认 2（上限 8，不声称已标定账号限流阈值）；分片目录按 `pN.txt` 自然序整批读取。外层工具超时按 `ceil(片数/并发) × (2×(timeout-seconds+45s) + 30s) + 60s` 预留（两次尝试 + 每试监督余量 + 退避 + 批级余量）。
+- **重试边界**：额度、超时、网络失败、未知终态和其他失败均不自动重发；内容 FAIL 是有效评审结果，不是传输失败。
+- **监督时限**：单片默认 请求时限 + 45 秒；批次默认按片数与并发计算、上限 86400 秒。可显式使用 `--supervisor-timeout-seconds` / `--batch-timeout-seconds`（1–86400 秒）；另有 8 秒监督清理预算，超时不自动重发。
 - 单片或易断线场景仍用上面的 `zcode-run.js` 持久 job；批量入口面向持续会话的一次宿主工具调用，不宣称自身具备跨终端持久恢复能力。
 
 ## 执行与结果
@@ -64,3 +64,6 @@ node <ZCODE_SKILL_DIR>/scripts/zcode-batch.js --prompt-file <f1> [--prompt-file 
 - 截断、未知终态、工具违规、超时、认证/额度错误或协议错误如实报告，原始流留在私有目录。失败不自动重试。stderr 不原样复制到公开错误提示。
 
 当前适配 ZCode `0.17.1`（本机 `zcode --version` 输出两行，取其中的 `zcode-runtime` 版本）。真实验收结论以对应完整回执为准。其他版本先按参考文档重新验收，不降级权限继续调用。独立安装清单存在时调用前核对文件哈希；清单按 LF 归一化内容计算，Mac 与 Windows 共用同一份。安装到新会话后，Codex 使用 `$zcode`，Claude 使用 `/zcode`。
+
+### V2 Phase 2 安全边界
+每批默认并发 1，所有分片先保存输入快照和请求意图，逐片保留独立回执。`--receipt-file` 必须是新路径；未指定时建立私有临时证据目录。MMX 批次有效请求和 wrapper 时限均不得超过 3600 秒。批量 `gate` 保持原协议含义，不能代替两方独立统一评审。仅本地退出/管道关闭不能证明远端停止或未计费；未知分片禁止重放。供应方 CLI/SDK 内部重试尚未完成真实固定版本传输栈验证，本候选不得据此进入付费使用。

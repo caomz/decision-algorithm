@@ -27,6 +27,7 @@ const REQUIRED_FILES = [
   "scripts/zcode-chat.js",
   "scripts/zcode-run.js",
   "scripts/zcode-batch.js",
+  "scripts/batch-safety.js",
   "scripts/review.js",
   "references/review-v1.schema.json",
 ];

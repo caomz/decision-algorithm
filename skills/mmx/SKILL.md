@@ -33,15 +33,15 @@ prompt 和 system 只经文件传递。按当前平台使用[调用与验证参�
 
 ## 分片批量（多片交叉验证的默认入口）
 
-分片评审 NEVER 逐片串行调用：一次工具调用送整批，`mmx-batch.js` 经有界并发池并行执行、合并回执并自愈预算：
+分片评审 NEVER 逐片串行调用：一次工具调用送整批，`mmx-batch.js` 经有界并发池并行执行、合并回执：
 
 ```text
-node <MMX_SKILL_DIR>/scripts/mmx-batch.js --prompt-file <f1> [--prompt-file <f2> ...] | --prompts-dir <dir> [--concurrency 2] [--model <id>] [--max-tokens <n>] [--timeout <sec>] [--wrap-timeout <sec>] [--receipt-file <path>]
+node <MMX_SKILL_DIR>/scripts/mmx-batch.js --prompt-file <f1> [--prompt-file <f2> ...] | --prompts-dir <dir> [--concurrency 1] [--model <id>] [--max-tokens <n>] [--timeout <sec>] [--wrap-timeout <sec>] [--receipt-file <path>]
 ```
 
 - 每片仍是一次完整 `mmx-chat.js` 调用（单发语义不变，wrapper 契约原样继承）。批级回执含每片完整回执、`batch` 统计与**传输层 gate**：全片 `status=ok` 且 `complete` 且未截断 → `PASS`；任一片截断/超时/失败 → `NOT_EVALUATED`（与 zcode-mmx-review 的 COMPLETED 语义对齐）。findings 级 P1/P2 判定仍由宿主完成，批级 gate 不冒充内容判定。
-- **预算自愈**：某片 `thinking_budget_exhausted` 或截断、且调用预算低于 profile 预算时，自动按 profile 预算重发一次；`quota_error` 退避 30 秒重试一次。重试显式记录：`shard.retried`、`shard.retry_reason`、`shard.first_attempt`（旧回执完整保留），不隐藏内部重试。
-- `--concurrency` 默认 2（上限 8）；分片目录按 `pN.txt` 命名可被 `--prompts-dir` 按自然序（p2 在 p10 前）整批读取。外层工具超时按 `ceil(片数/并发) × (2×wrap-timeout + 30s) + 60s` 预留——**必须含 2 倍 wrap-timeout**：单片最坏情况 = 首次调用 + 一次自愈重发（+30s 限流退避），漏算重试会把重试中的批次误判为超时。
+- **重试边界**：预算不足、截断、额度、超时、网络失败或终态未知时均不自动重发。本阶段不提供自动付费重试入口；如需再请求须另行授权并先检查原任务证据。
+- **监督时限**：单片默认 有效 wrapper 时限 + 20 秒；批次默认按片数与并发计算、上限 86400 秒。可显式使用 `--supervisor-timeout-seconds` / `--batch-timeout-seconds`（1–86400 秒）；另有 8 秒监督清理预算，超时不自动重发。
 - **NEVER 裸调 `mmx text chat` 送评审**：CLI 自身默认 `--max-tokens 4096`，服务端思考轻易超限（2026-11-18 实证：6 断言评审即截断）；一切评审调用必须经 `mmx-chat.js` / `mmx-batch.js`。
 
 调用使用 `mmx text chat`，认证和额度以该次请求为准。wrapper 的临时文件捕获 stdout 和 stderr，错误回执仅输出分类、数值码和固定提示，不回显上游原文。受管安装按结构判定：与 `agy/`、`cross-validation/` 同级且缺少发布清单时判定为受管并 fail closed，不依赖任何一台机器的绝对路径；清单存在时按清单逐文件校验哈希。
@@ -92,7 +92,7 @@ python3 <CROSS_VALIDATION_SKILL_DIR>/scripts/cross_validate.py validate-review -
 - `complete=false` 与 `truncated=true` 表示达到输出预算，保留收到的正文和截断状态。
 - 请求模型与实际模型不同时分别展示 `requested_model` 和 `model`。模型以响应里的 `model` 为准，CLI 静默回退不改变这个事实。
 - `auth_error`、`quota_error`、`timeout`、`schema_mismatch`、`install_mismatch`、`thinking_budget_exhausted` 等状态按实际分类报告。一次调用结束后交还结论，不自动重试。
-- `thinking_budget_exhausted` 表示 `stop_reason=max_tokens`、只有思考块、没有正文（输出预算被服务端思考吃光），**不是**契约问题：省略或加大 `--max-tokens` 重发，不要去核对 CLI schema。没有正文、但不是 `max_tokens` 结束的回复记 `schema_mismatch`，回执附 `stop_reason` 与 `content_block_types`。
+- `thinking_budget_exhausted` 表示 `stop_reason=max_tokens`、只有思考块、没有正文（输出预算被服务端思考吃光），**不是**契约问题：经另行授权且核实原任务后才可省略或加大 `--max-tokens` 重新提交，不要去核对 CLI schema。没有正文、但不是 `max_tokens` 结束的回复记 `schema_mismatch`，回执附 `stop_reason` 与 `content_block_types`。
 - 回执的 `fetch_timeout_guard` 说明 wrapper 有没有取消 Node fetch 等待响应的 300 秒上限：`preloaded` 表示预加载器已确认初始化；`preload_failed` / `guard_error` 表示初始化未确认并中止本次调用；`proxy_limited`（子进程环境有非空的代理变量，或 mmx 配置的 `proxy` 以 `http` 开头）、`undici_not_found`、`guard_missing` 时没有取消；`custom_launcher` 表示 PATH 上的 `mmx` 不是 mmx-cli 包入口（自定义 batch 或启动脚本），由它自己处理。上限还在时，超过 300 秒的非流式回复会以网络错误失败（CLI 退出码 6），回执附 `hint`。
 - wrapper 只对 CLI 子进程去掉 `MINIMAX_BASE_URL` 末尾的 `/v1`，回执 `base_url_env` 记 `stripped_v1`、`unchanged` 或 `unset`。HTTP 404 时回执附 `http_status` 与 `hint`；设了该变量时另附只含协议和主机的 `base_url_env_value`。
 - `auth_error` 时提示用户交互运行 `mmx auth login` 后重试；`cli_missing` 时提示 `npm install -g mmx-cli`。
@@ -121,7 +121,7 @@ stdout 恒为单个 JSON，字段与 `mmx-chat.js` 对齐，多出 `effort` 与 
 
 - **300 秒响应头上限**（2026-11-19 macOS 实测）：Node 内置 fetch 等响应头最多 300 秒，非流式回复生成完才发响应头。wrapper 能预加载防护时（`fetch_timeout_guard=preloaded`）不受影响；代理（非空的代理环境变量，或 mmx 配置中以 `http` 开头的 `proxy`，回执记 `proxy_limited`）或自定义启动入口下上限仍在，超时表现为 `api_error`、退出码 6，回执附 `hint`。Windows 尚未实测。
 
-- **裸 CLI 截断陷阱**（2026-11-18 实证）：绕过 wrapper 直接 `mmx text chat` 时 CLI 默认 `--max-tokens 4096`，服务端默认思考计入输出预算，6 断言级评审即可吃光预算出现截断或纯思考回执。所有评审调用必须经 `mmx-chat.js` / `mmx-batch.js`；分片预算自愈由 `mmx-batch.js` 承担。
+- **裸 CLI 截断陷阱**（2026-11-18 实证）：绕过 wrapper 直接 `mmx text chat` 时 CLI 默认 `--max-tokens 4096`，服务端默认思考计入输出预算，6 断言级评审即可吃光预算出现截断或纯思考回执。所有评审调用必须经 `mmx-chat.js` / `mmx-batch.js`；分片预算不足由 `mmx-batch.js` 报告，不自动重发。
 
 - 服务端**默认就开启思考**（响应含 `{"type":"thinking",...}` 内容块且 `usage.thinking_tokens` 非零），代价是慢且吃 token：一次 `input_tokens 504` 的 prompt 实测 `output_tokens 8732`（几乎全是思考）；一次 10 断言设计评审 prompt 实测 `output_tokens 25793`、耗时超 240s。复杂评审类 prompt 会撞穿默认时限返回 `api_error`(code 5)，这类错误会附 `note` 提示重试或加超时；仍不够时用 `--timeout` / `--wrap-timeout` 调大。
 - wrapper 在 `--output json` 非流式路径只拼接 `type=="text"` 块，**思考块不进 `text`**（返回文本不含推理痕迹），但 `output_tokens` 仍包含 thinking token，做算术前别把两者混为一谈。
@@ -133,3 +133,6 @@ stdout 恒为单个 JSON，字段与 `mmx-chat.js` 对齐，多出 `effort` 与 
 ## 文本之外的 CLI 能力
 
 图片、视频、语音、网页搜索、工具调用及凭证管理走 [MMX CLI 参考](references/cli-reference.md)，H3 视频见 `references/h3-video/SKILL.md`。壳层纪律与文本 wrapper 相同（见「调用」）：Windows NEVER `cmd /c`，PowerShell 配方见 [调用与验证参考](references/verification.md)。
+
+### V2 Phase 2 安全边界
+每批默认并发 1，所有分片先保存输入快照和请求意图，逐片保留独立回执。`--receipt-file` 必须是新路径；未指定时建立私有临时证据目录。MMX 批次有效请求和 wrapper 时限均不得超过 3600 秒。批量 `gate` 保持原协议含义，不能代替两方独立统一评审。仅本地退出/管道关闭不能证明远端停止或未计费；未知分片禁止重放。供应方 CLI/SDK 内部重试尚未完成真实固定版本传输栈验证，本候选不得据此进入付费使用。

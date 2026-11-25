@@ -52,7 +52,7 @@ test("UTF-8, literal shell syntax and slash commands remain data; isolation is e
   assert.equal(receipt.stop_reason, "stop");
   assert.equal(receipt.text, "中文🌟 `literal` $(do-not-run) /logout\n--model remains data");
   assert.equal(receipt.complete, true);
-  assert.equal(receipt.cleanup_confirmed, true);
+  assert.equal(receipt.cleanup_confirmed, process.platform === "win32" ? null : true);
   assert.deepEqual(receipt.usage, { inputTokens: 12, outputTokens: 4 });
   for (const name of ["stdout.ndjson", "stderr.log", "receipt.json", "prompt.txt", "launch.json", "progress.json"]) {
     assert.ok(fs.existsSync(path.join(output, name)));
@@ -133,7 +133,7 @@ test("existing output directories remain untouched", () => {
 });
 test("installed manifest mismatch blocks model invocation", () => {
   const directory = path.join(root, "install-fixture");
-  const names = ["SKILL.md", "scripts/zcode-chat.js", "scripts/zcode-run.js", "scripts/zcode-batch.js", "scripts/review.js", "references/review-v1.schema.json"];
+  const names = ["SKILL.md", "scripts/zcode-chat.js", "scripts/zcode-run.js", "scripts/zcode-batch.js", "scripts/batch-safety.js", "scripts/review.js", "references/review-v1.schema.json"];
   const files = {};
   for (const name of names) {
     const target = path.join(directory, name);
@@ -170,6 +170,7 @@ test("one manifest verifies both a CRLF and an LF copy of the same file", () => 
   fs.writeFileSync(path.join(directory, "scripts/review.js"), reviewSource);
   fs.writeFileSync(path.join(directory, "scripts/zcode-run.js"), "module.exports = {};\n");
   fs.writeFileSync(path.join(directory, "scripts/zcode-batch.js"), "module.exports = {};\n");
+  fs.writeFileSync(path.join(directory, "scripts/batch-safety.js"), "module.exports = {};\n");
   fs.writeFileSync(path.join(directory, "references/review-v1.schema.json"), schemaSource);
   const digest = data => createHash("sha256").update(data.toString("utf8").replace(/\r\n/g, "\n"), "utf8").digest("hex");
   fs.writeFileSync(path.join(directory, ".zcode-release.json"), JSON.stringify({
@@ -179,6 +180,7 @@ test("one manifest verifies both a CRLF and an LF copy of the same file", () => 
       "scripts/zcode-chat.js": digest(wrapperSource),
       "scripts/zcode-run.js": digest(Buffer.from("module.exports = {};\n", "utf8")),
       "scripts/zcode-batch.js": digest(Buffer.from("module.exports = {};\n", "utf8")),
+      "scripts/batch-safety.js": digest(Buffer.from("module.exports = {};\n", "utf8")),
       "scripts/review.js": digest(reviewSource),
       "references/review-v1.schema.json": digest(schemaSource),
     },
@@ -193,7 +195,7 @@ test("timeout terminates the child process group", () => {
   const { receipt } = run("hang", { timeout: 0.2 });
   assert.equal(receipt.status, "timeout");
   assert.equal(receipt.complete, false);
-  assert.equal(receipt.cleanup_confirmed, true);
+  assert.equal(receipt.cleanup_confirmed, process.platform === "win32" ? null : true);
 });
 test("timeout also kills a descendant ignoring SIGTERM", { skip: process.platform === "win32" }, () => {
   const { receipt, output } = run("tree", { timeout: 0.4 });
@@ -337,7 +339,7 @@ test("supervisor preserves nonzero timeout and child cleanup evidence", async ()
   assert.equal(result.status, "finished");
   assert.equal(result.execution.exit_code, 1);
   assert.equal(result.receipt.status, "timeout");
-  assert.equal(result.receipt.cleanup_confirmed, true);
+  assert.equal(result.receipt.cleanup_confirmed, process.platform === "win32" ? null : true);
 });
 test("abrupt wrapper death leaves startup state and independently captured signal", { skip: process.platform === "win32" }, async () => {
   const { result, job } = await runSupervised("kill_wrapper");

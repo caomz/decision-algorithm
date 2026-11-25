@@ -72,12 +72,12 @@ WSL 内 `node -p "process.platform"` 为 `linux` 时使用 POSIX 路径；调用
 
 `scripts/mmx-batch.js` 在单片契约之上做批量编排，每片仍是一次完整的 `mmx-chat.js` 调用（预算、超时、错误分类与回执结构原样继承）：
 
-- **stdout 契约**：恰好一个 JSON 对象，字段 `status`（ok|partial|failed，按传输可用性）、`gate`（PASS|NOT_EVALUATED，**传输层**：全片 `status=ok`、`complete=true`、未截断 → PASS）、`batch`（shards/ok/transport_ok/truncated_or_incomplete/retried/concurrency/wall_seconds/effective_max_tokens/retry_max_tokens）、`shards[]`（每片完整单片回执 + shard/prompt_file/retried/retry_reason/duration_seconds，重试时含 `first_attempt` 旧回执）。findings 级 P1/P2 判定仍由宿主完成，批级 gate 不冒充内容判定。可选 `--receipt-file` 落盘，内容与 stdout 字段一致。
-- **预算自愈**：片 `thinking_budget_exhausted` 或截断、且调用预算低于 profile 预算时，自动按 profile 预算（默认 524288）重发一次；`quota_error` 退避 30 秒重试一次。两类重试都显式记录（`retried`/`retry_reason`/`first_attempt`），不隐藏内部重试；`auth_error`、`schema_mismatch` 类与其余失败不重试。
+- **stdout 契约**：恰好一个 JSON 对象，字段 `status`（ok|partial|failed，按传输可用性）、`gate`（PASS|NOT_EVALUATED，**传输层**：全片 `status=ok`、`complete=true`、未截断 → PASS）、`batch`（shards/ok/transport_ok/truncated_or_incomplete/retried/concurrency/wall_seconds/effective_max_tokens/retry_max_tokens）、`shards[]`（每片完整单片回执 + shard/prompt_file/retried/retry_reason/duration_seconds）。findings 级 P1/P2 判定仍由宿主完成，批级 gate 不冒充内容判定。可选 `--receipt-file` 落盘，内容与 stdout 字段一致。
+- **重试边界**：预算不足、截断、额度、超时、网络失败或终态未知时均不自动重发。本阶段不提供自动付费重试入口；如需再请求须另行授权并先检查原任务证据。
 - **退出码**：`gate=PASS` → 0，否则 1。
 - **调用面**：`--prompt-file`（可重复）与 `--prompts-dir` 互斥（`.txt` 自然序，≤32 片）；`--concurrency` 默认 2、上限 8；`--model`/`--max-tokens`/`--timeout`/`--wrap-timeout`/`--profile-file` 透传给每片。
-- **外层超时公式**：`ceil(片数/并发) × (2×wrap-timeout + 30s) + 60s`（两次完整尝试 + 30s 退避 + 批级余量）；漏算重试会把重试中的批次误判为超时。
-- **测试钩子**：`MMX_BATCH_WRAPPER`（替换为假 wrapper）、`MMX_BATCH_QUOTA_RETRY_MS`（仅离线缩短退避，生产默认 30000ms，非法值回退默认）。
+- **监督时限**：单片默认 有效 wrapper 时限 + 20 秒；批次默认按片数与并发计算、上限 86400 秒。可显式使用 `--supervisor-timeout-seconds` / `--batch-timeout-seconds`（1–86400 秒）；另有 8 秒监督清理预算，超时不自动重发。
+- **测试钩子**：`MMX_BATCH_WRAPPER` 仅用于受控离线假 wrapper；旧退避变量不再触发重试。
 - **裸 CLI 陷阱**：绕过 wrapper 直接 `mmx text chat` 时 CLI 自身默认 `--max-tokens 4096`，服务端思考计入输出预算，评审类 prompt 必截断；所有评审调用必须经 `mmx-chat.js` / `mmx-batch.js`。
 
 ## 契约与来源
@@ -87,7 +87,7 @@ WSL 内 `node -p "process.platform"` 为 `linux` 时使用 POSIX 路径；调用
 - `code 3 = AUTH`：本机 `mmx-cli` 的 `dist/sdk.mjs` 与[官方错误表](https://github.com/MiniMax-AI/cli/blob/main/ERRORS.md)。wrapper 不调用 `auth status`，只按真实 chat 结果分类。
 - 默认读取 `profiles/local.json`。本机配置包含 524288 输出预算、600 秒 request 超时和 630 秒 wrapper 超时。模型为 `null` 时沿用 CLI 配置。显式 `--model`、`--max-tokens`、`--timeout`、`--wrap-timeout` 覆盖对应值，其中命令行 flag 优先于环境变量 `MMX_CHAT_REQ_TIMEOUT` / `MMX_CHAT_WRAP_TIMEOUT`，环境变量优先于 profile。`--wrap-timeout` 必须大于 `--timeout`，两者上限 3600 秒。`--profile-file` 可指定另一份同结构的非秘密配置文件。
 - prompt 与 system 不设字节上限，也不静默截断——材料范围由宿主负责，超出上下文预算时如实告知并缩小范围。`mcode-verify.js` 另有自己的 256 KiB 上限（`prompt_too_large`），两者互不影响。
-- `thinking_budget_exhausted`：`stop_reason=max_tokens`，且响应只有 `thinking` / `redacted_thinking` 块、没有非空 `text`，说明输出预算被服务端思考吃光，**不是**契约漂移；处理方式是省略或加大 `--max-tokens` 重发，而不是核对 CLI schema。其他结束原因下没有正文记 `schema_mismatch`。两种回执都附 `stop_reason`、`truncated`、`complete=false` 与 `content_block_types`。
+- `thinking_budget_exhausted`：`stop_reason=max_tokens`，且响应只有 `thinking` / `redacted_thinking` 块、没有非空 `text`，说明输出预算被服务端思考吃光，**不是**契约漂移；处理方式是经另行授权且核实原任务后才可省略或加大 `--max-tokens` 重新提交，而不是核对 CLI schema。其他结束原因下没有正文记 `schema_mismatch`。两种回执都附 `stop_reason`、`truncated`、`complete=false` 与 `content_block_types`。
 - 受管发布按**结构**判定，不再依赖某台机器的绝对路径：发布清单 `<skills_root>/.gstack-cross-validation-release.json` 存在时逐文件校验哈希；清单缺失时，若 `<skills_root>` 下同时存在 `agy/` 与 `cross-validation/` 两个同级目录，判定为受管安装并 fail closed（`install_mismatch`），否则视为普通安装放行。普通安装包括本仓库、符号链接安装位与单 skill 安装。
 - 受管安装更新 wrapper 后清单哈希必然失配，用 `node scripts/repin-release.js --root <skills_root>` 重钉：脚本按 wrapper 的校验契约重建清单（`format:1`、`state:"active"`、64 位 `release_id`、逐文件 sha256），路径段不符合 `[A-Za-z0-9_.-]+` 的文件跳过并报告，缺 `mmx/scripts/mmx-chat.js`、`mmx/scripts/fetch-timeout-guard.js`、`mmx/profiles/local.json`、`cross-validation/scripts/cross_validate.py` 任一必需项时拒绝写入并列出缺失项；wrapper 校验清单时要求同一组文件。`--dry-run` 只报告不写入。
 - 完整传递 UTF-8 prompt/system（兼容 BOM），拒绝 UTF-16 和畸形 UTF-8。stdout 与 stderr 在运行期间写入私有文件，按完整结果解码。传输预算由 MMX API 决定。POSIX 子进程组先收到终止信号再升级为强制结束；Windows 使用 taskkill 树终止。无法确认清理时在回执注明。
@@ -120,3 +120,6 @@ node scripts/mmx-chat.js --version
 v2.7.0 只在 macOS 上运行过。Windows 两列仍是 2026-11-17 对 v2.4.0 的结果，v2.7.0 的 Windows 实测（npm shim 预加载、PowerShell / Git Bash、超过 300 秒的真实请求）待值班机完成。
 
 Windows：在 PowerShell 中 `Set-Location 'C:\absolute\path\to\current\mmx'` 后执行三条 `node` 命令。Git Bash：`cd '/c/absolute/path/to/current/mmx'` 后执行三条 `node` 命令，并按上面示例核对 `cygpath` 与 MSYS 参数转换。真实 API 冒烟会消耗 quota，必须经用户明确授权后进行。2026-09-04 的 macOS + `mmx-cli 1.0.19` Chat/Review/Challenge smoke 3/3 是历史文档声明，不代表当前版本或其他平台。逐路径的实测记录见 [test-matrix.md](test-matrix.md)。
+
+### V2 逐片证据与监督
+`receipt.json.shards/plan.json` 绑定输入快照、配置、分片、attempt ID 和请求摘要；`000.started.json` 是发送前意图，`000.raw.json` 是通过初步结构/绑定核验的原始 stdout，`000.json` 是实际退出及校验结果。只有计划而没有意图为 NOT_STARTED；已有意图但无有效完成记录时保守为 UNKNOWN，禁止自动重发。私有材料和回执可能包含敏感业务文本，不得提交或分享未脱敏目录。Windows 的 taskkill 返回不证明树退出；POSIX 组消失不证明 detached 后代或远端停止。同步文件系统操作与 OS 调度不提供硬实时保证。
