@@ -18,9 +18,9 @@ from typing import Any, Callable
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 ROOT = SKILL_ROOT.parents[1]
 GETNOTE_SCRIPTS = SKILL_ROOT / "scripts" / "getnote"
-DEFAULT_COURSE_PATH = Path(
-    "/Volumes/WorkSSD/Dev/openclaw_mz/knowledge/raw/05-素材库/万维钢·现代思维工具100讲.md"
-)
+# 课程原文不入库（见 .gitignore 的 /knowledge/）：默认按仓库根相对路径解析，
+# 其余机器用 MODERN_THINKING_COURSE_PATH 覆盖。
+DEFAULT_COURSE_PATH = ROOT / "knowledge" / "raw" / "05-素材库" / "万维钢·现代思维工具100讲.md"
 COURSE_PATH = Path(os.environ.get("MODERN_THINKING_COURSE_PATH") or DEFAULT_COURSE_PATH)
 OUTPUT_ROOT = ROOT / "tmp" / "modern-thinking-tools"
 TOOL_CATALOG_PATH = SKILL_ROOT / "references" / "tool-catalog.json"

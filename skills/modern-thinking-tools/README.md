@@ -9,7 +9,7 @@
 | 依赖 | 说明 |
 |------|------|
 | `GETNOTE_API_KEY` / `GETNOTE_CLIENT_ID` | GetNote（biji.com）开放 API 凭证，环境变量注入 |
-| 课程原文 | 默认指向 `/Volumes/WorkSSD/Dev/openclaw_mz/knowledge/raw/05-素材库/万维钢·现代思维工具100讲.md`，可用环境变量 `MODERN_THINKING_COURSE_PATH` 覆盖；缺失时自动进入检索降级模式 |
+| 课程原文 | 相对仓库根解析 `knowledge/raw/05-素材库/万维钢·现代思维工具100讲.md`，可用环境变量 `MODERN_THINKING_COURSE_PATH` 覆盖；缺失时自动进入检索降级模式 |
 | 知识库 ID | `0Rp2K3pn`（可用 `--topic-id` 覆盖） |
 
 ## 目录结构

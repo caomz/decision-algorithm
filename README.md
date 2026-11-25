@@ -150,7 +150,7 @@ python scripts\install_skills.py --uninstall
 
 | 环境变量 | 指向 | 覆盖的默认路径 |
 |---|---|---|
-| `MODERN_THINKING_COURSE_PATH` | 万维钢《现代思维工具100讲》课程原文 md | `/Volumes/WorkSSD/.../万维钢·现代思维工具100讲.md` |
+| `MODERN_THINKING_COURSE_PATH` | 万维钢《现代思维工具100讲》课程原文 md | 仓库根 `knowledge/raw/05-素材库/万维钢·现代思维工具100讲.md` |
 | `DEDAO_COURSE_PATH` | 老喻《人生算法课》课程根目录（含 `chapters/`、`images/`） | `/Volumes/HDD/kuake/得到课程md文件/老喻的人生算法课（公众号懒人找资源）` |
 
 `get-biji` 还需要装运行时依赖（Playwright + Chromium 仅用于登录，ffmpeg 用于读本地音视频时长），用 `--with-deps` 可一并装上：
