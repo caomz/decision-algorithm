@@ -1,0 +1,42 @@
+# 离线 CI：只跑仓库自带的离线测试。
+# 约定：不设置任何代理环境变量（测试已对宿主代理 env 免疫，但也不主动引入），
+# 不加任何需要 API key 的步骤。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python:
+    name: Python tests (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+      - name: Root tests
+        run: python -m pytest tests -q
+      - name: modern-thinking-tools tests
+        run: python -m pytest skills/modern-thinking-tools/tests -q
+      - name: lead-acquisition-coach structure validation tests
+        run: python -m pytest skills/lead-acquisition-coach/tests -q
+
+  node:
+    name: Node tests (node --test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: zcode tests
+        run: node --test "skills/zcode/tests/**/*.test.js"
+      - name: mmx tests
+        run: node --test "skills/mmx/tests/**/*.test.js"
+      - name: zcode-mmx-review tests
+        run: node --test "skills/zcode-mmx-review/tests/**/*.test.js"
