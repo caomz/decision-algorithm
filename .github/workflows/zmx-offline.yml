@@ -1,0 +1,60 @@
+name: ZCode MMX offline regression
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/zmx-offline.yml"
+      - "skills/zcode/**"
+      - "skills/mmx/**"
+      - "skills/zcode-mmx-review/**"
+  push:
+    branches:
+      - "cloud/**"
+    paths:
+      - ".github/workflows/zmx-offline.yml"
+      - "skills/zcode/**"
+      - "skills/mmx/**"
+      - "skills/zcode-mmx-review/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zmx-offline-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  offline:
+    name: Offline contract (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Runtime and syntax
+        run: |
+          node --version
+          node --check skills/zcode/scripts/zcode-chat.js
+          node --check skills/zcode/scripts/zcode-run.js
+          node --check skills/zcode/scripts/zcode-batch.js
+          node --check skills/mmx/scripts/mmx-chat.js
+          node --check skills/mmx/scripts/mmx-batch.js
+          node --check skills/zcode-mmx-review/scripts/review-run.js
+      - name: ZCode offline regression
+        run: node --test skills/zcode/tests/*.test.js
+      - name: MMX offline regression
+        run: node --test skills/mmx/tests/*.test.js
+      - name: Cross-review offline regression
+        run: node --test skills/zcode-mmx-review/tests/*.test.js
+      - name: Unified runner offline doctor
+        run: node skills/zcode-mmx-review/scripts/review-run.js doctor --offline --json
