@@ -1,0 +1,20 @@
+{
+  "runtime": "Node v24.22.3",
+  "tests": 458,
+  "pass": 458,
+  "fail": 0,
+  "skipped": 0,
+  "isolation": "Linux user+network namespace with only loopback, kernel unreachable external probe, allowlisted environment and fresh home",
+  "command": "unshare --user --map-root-user --net -- python .github/scripts/zmx-userns-exec.py NEW_ENV node --test 'skills/zcode/tests/**/*.test.js' 'skills/mmx/tests/**/*.test.js' 'skills/zcode-mmx-review/tests/**/*.test.js'",
+  "raw_log_sha256": "82ae4ae378bdf979cb994dd6c61f6e450b777fdf5a54a1f9f6e8c6c87a740e48",
+  "suites": {
+    "zcode": 94,
+    "mmx": 127,
+    "cross_review": 237
+  },
+  "python_local": "NOT_EVALUATED: pytest is not installed; exact final SHA CI runs existing Python suites",
+  "native_macos_windows": "syntax-only CI; lifecycle NOT_EVALUATED",
+  "tested_local_commit": "4389f2438d96e6f945038e390cdb6286314176fb",
+  "published_equivalent_commit": "e5dfeeabb1cca20dd0f30bf256a8b47151148468",
+  "verified_equivalent_git_tree": "ae3d8f528174ea4265cdc25fb3e978c6bc6b13b6"
+}

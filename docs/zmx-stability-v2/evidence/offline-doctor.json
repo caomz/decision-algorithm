@@ -1,0 +1,106 @@
+{
+  "isolation": {
+    "isolation": "Linux user/network namespace",
+    "interfaces": [
+      "lo"
+    ],
+    "external_probe": "kernel_unreachable",
+    "environment": "allowlist with fresh home",
+    "command": [
+      "node",
+      "skills/zcode-mmx-review/scripts/review-run.js",
+      "doctor",
+      "--offline",
+      "--json"
+    ]
+  },
+  "result": {
+    "status": "ok",
+    "mode": "offline",
+    "platform": "linux",
+    "arch": "x64",
+    "checks": [
+      {
+        "name": "file:zcode/scripts/review.js",
+        "ok": true
+      },
+      {
+        "name": "file:zcode/scripts/zcode-chat.js",
+        "ok": true
+      },
+      {
+        "name": "file:zcode/references/review-v1.schema.json",
+        "ok": true
+      },
+      {
+        "name": "file:zcode/.zcode-release.json",
+        "ok": true
+      },
+      {
+        "name": "file:mmx/scripts/mmx-chat.js",
+        "ok": true
+      },
+      {
+        "name": "file:mmx/references/review-v1.schema.json",
+        "ok": true
+      },
+      {
+        "name": "file:mmx/profiles/local.json",
+        "ok": true
+      },
+      {
+        "name": "file:zcode-mmx-review/scripts/review-run.js",
+        "ok": true
+      },
+      {
+        "name": "file:zcode-mmx-review/examples/packet.json",
+        "ok": true
+      },
+      {
+        "name": "file:zcode-mmx-review/examples/packet-v2.json",
+        "ok": true
+      },
+      {
+        "name": "file:zcode-mmx-review/tests/fixtures/backends/zcode-fake-wrapper.cjs",
+        "ok": true
+      },
+      {
+        "name": "file:zcode-mmx-review/tests/fixtures/backends/mmx-fake-wrapper.cjs",
+        "ok": true
+      },
+      {
+        "name": "file:zcode-mmx-review/tests/fixtures/backends/scenarios.json",
+        "ok": true
+      },
+      {
+        "name": "file:zcode-mmx-review/tests/fixtures/native/fake-zcode-cli.cjs",
+        "ok": true
+      },
+      {
+        "name": "file:zcode-mmx-review/tests/fixtures/native/mmx",
+        "ok": true
+      },
+      {
+        "name": "review_schema_byte_equal",
+        "ok": true
+      },
+      {
+        "name": "zcode_release_version_matches_wrapper",
+        "ok": true,
+        "manifest_version": "1.5.1",
+        "wrapper_version": "1.5.1"
+      },
+      {
+        "name": "zcode_check_install",
+        "ok": true
+      },
+      {
+        "name": "cli",
+        "ok": true,
+        "result": "unchecked"
+      }
+    ],
+    "real_api": "not_called",
+    "note": "proves only that the manifest matches local files; it does not vouch for provenance or CLI readiness"
+  }
+}

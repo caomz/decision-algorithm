@@ -1,0 +1,34 @@
+{
+  "case": "headers-unguarded",
+  "elapsed_ms": 301579,
+  "guarded": false,
+  "guard_initialized": false,
+  "requests": 1,
+  "requests_after_first": 0,
+  "events": [
+    {
+      "ordinal": 1,
+      "method": "POST",
+      "path": "/anthropic/v1/messages",
+      "received_ms": 157,
+      "body_bytes": 20,
+      "body_sha256": "828ca8135baa00dc3874a41b38503eec76537634da35e1bdc4f29fe4dad9cf38"
+    }
+  ],
+  "exit_code": 1,
+  "signal": null,
+  "local_process_exit_observed": true,
+  "supervisor_expired": false,
+  "stop_reason": null,
+  "local_tree_cleanup": "NOT_VERIFIED",
+  "capture_truncated": false,
+  "stdout_bytes": 76,
+  "stdout_sha256": "33bd54395e0ca2f3b73ebdc3bd448bea189a151892236146e93edc3cfb8517eb",
+  "stderr_bytes": 0,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "receipt": {
+    "error": "TypeError",
+    "cause": "UND_ERR_HEADERS_TIMEOUT",
+    "elapsed_ms": 301493
+  }
+}

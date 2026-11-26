@@ -1,0 +1,34 @@
+{
+  "format": 1,
+  "suite": "node-fetch",
+  "created_at": "2026-11-26T03:02:12.038Z",
+  "node": "v24.22.3",
+  "bundled_undici": "7.30.2",
+  "undici": {
+    "name": "undici",
+    "version": "6.28.0",
+    "package_sha256": "f529aa8b145f6e270a72700ceb6c8dd3b87f742313078ea9f774a9d2ce8c865d"
+  },
+  "cli": null,
+  "isolation": {
+    "mechanism": "linux-network-namespace",
+    "interfaces": [
+      "lo"
+    ],
+    "ipv4_default_route": false,
+    "addresses": [
+      "127.0.0.1"
+    ]
+  },
+  "delay_ms": 305000,
+  "threshold_300s_exercised": true,
+  "request_timeout_ms": 600000,
+  "wrapper_timeout_ms": null,
+  "supervisor_timeout_ms": 650000,
+  "supervisor_cleanup_timeout_ms": 8000,
+  "runner_sha256": "540a5ac02c5b4b20dbd14cfb8f6e51a77d06223598b25b7e9c61d1674a18e928",
+  "guard_sha256": "d242a47aa6342f378d225939da7c76a09127e27e2ecabc96aab4200a35202941",
+  "real_provider": "NOT_EVALUATED",
+  "real_mmx_transport": "NOT_EVALUATED",
+  "note": "Raw CLI/fetch transport controls; the production 630s wrapper is not exercised by this runner."
+}
