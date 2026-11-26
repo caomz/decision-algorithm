@@ -26,7 +26,7 @@ test("T06 synthetic HTTP count: both batches dispatch once per failed shard", { 
     'http.get({hostname:"127.0.0.1",port:Number(process.env.FAKE_PORT),path:"/"+side+"/"+status},res=>{',
     'res.resume();res.on("end",()=>{',
     'const receipt={status,complete:false,exit_code:1,cli_invoked:true,batch_attempt_id:process.env.ZMX_BATCH_ATTEMPT_ID,batch_material_sha256:digest(bytes),batch_config_sha256:idx<0?"":digest(fs.readFileSync(args[idx+1]))};',
-    'if(status==="truncated"){Object.assign(receipt,{status:"ok",exit_code:0,model:"Synthetic",text:"partial",complete:false,truncated:true,signal:null});}',
+    'if(status==="truncated"){Object.assign(receipt,{status:"ok",exit_code:0,model:"Synthetic",text:"partial",complete:false,truncated:true,signal:null,observed_exit_code:0,observed_signal:null,local_process_exit_observed:true});}',
     'process.stdout.write(JSON.stringify(receipt)+"\\n");process.exitCode=receipt.exit_code===0?0:1;',
     '});}).on("error",()=>{process.exitCode=1;});',
   ].join("\n"));

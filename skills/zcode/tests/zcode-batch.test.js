@@ -70,6 +70,13 @@ if (prompt.includes("CONC_PROBE")) {
   }, 250);
   return;
 }
+if (prompt.includes("OK_SIGNAL_EXIT")) {
+  process.stdout.write(JSON.stringify(bind(ok())) + "\\n", () => process.kill(process.pid, "SIGTERM")); return;
+}
+if (prompt.includes("BAD_CLI_SIGNAL")) { emit(ok({ signal: "SIGTERM" })); return; }
+if (prompt.includes("MISSING_TRUNCATED")) { const receipt = ok(); delete receipt.truncated; emit(receipt); return; }
+if (prompt.includes("OUTPUT_OVERFLOW")) { process.stdout.write(Buffer.alloc(16 * 1024 * 1024 + 1024, 32)); return; }
+if (prompt.includes("CRASH_HOLD")) { setTimeout(() => {}, 2500); return; }
 if (prompt.includes("WRONG_BINDING")) { process.stdout.write(JSON.stringify(ok()) + "\\n"); return; }
 if (prompt.includes("HANG_WRAPPER")) { process.on("SIGTERM", () => {}); setInterval(() => {}, 1000); return; }
 if (prompt.includes("PIPE_HOLDER")) {
@@ -415,4 +422,58 @@ test("Phase 2: repeated cancellation preserves completed evidence and prevents q
     assert.equal(receipt.shards[2].request_state,"NOT_STARTED");
     assert.equal(fs.existsSync(path.join(stateDir,"p2-cancel-c.txt")),false);
   } finally { if (child.exitCode===null && child.signalCode===null) child.kill("SIGTERM"); }
+});
+
+test("Phase 2: contradictory CLI signal or missing truncation is rejected", () => {
+  for (const marker of ["BAD_CLI_SIGNAL","MISSING_TRUNCATED"]) {
+    const result = receiptOf(runBatch(["--prompt-file", shardFile("p2-"+marker+".txt", marker)]));
+    assert.equal(result.shards[0].status,"child_error");
+    assert.equal(result.shards[0].transport_validation,"NOT_EVALUATED");
+    assert.equal(result.gate,"NOT_EVALUATED");
+  }
+});
+test("Phase 2: success JSON followed by actual signal exit cannot pass",
+  { skip: process.platform === "win32" && "POSIX signal fixture; native Windows verification pending" }, () => {
+  const result = receiptOf(runBatch(["--prompt-file", shardFile("p2-signal.txt","OK_SIGNAL_EXIT")]));
+  assert.equal(result.shards[0].status,"child_error");
+  assert.equal(result.shards[0].wrapper_signal,"SIGTERM");
+  assert.equal(result.gate,"NOT_EVALUATED");
+});
+test("Phase 2: partially captured oversized chunk fails closed", () => {
+  const result = receiptOf(runBatch(["--prompt-file", shardFile("p2-overflow.txt","OUTPUT_OVERFLOW")]));
+  assert.equal(result.shards[0].status,"child_error");
+  assert.equal(result.shards[0].capture_truncated,true);
+  assert.equal(result.gate,"NOT_EVALUATED");
+});
+test("Phase 2: abrupt batch crash leaves completed shard and unknown intent",
+  { skip: process.platform === "win32" && "POSIX crash fixture; native Windows verification pending", timeout: 12000 }, async () => {
+  const a = shardFile("p2-crash-a.txt","completed");
+  const b = shardFile("p2-crash-b.txt","CRASH_HOLD");
+  const c = shardFile("p2-crash-c.txt","queued");
+  const output = path.join(root,"p2-crash.json");
+  const child = spawn(process.execPath,[batch,"--prompt-file",a,"--prompt-file",b,"--prompt-file",c,
+    "--concurrency","1","--receipt-file",output], {stdio:["ignore","pipe","pipe"],
+    env:cleanEnv({ ZCODE_BATCH_WRAPPER:fakeWrapper, FAKE_STATE_DIR:stateDir,
+      TMPDIR:archiveTmp,TMP:archiveTmp,TEMP:archiveTmp })});
+  child.stdout.resume(); child.stderr.resume();
+  const terminal = new Promise(resolve=>child.once("close",(code,signal)=>resolve({code,signal})));
+  try {
+    for(let i=0;i<200 && !(fs.existsSync(output+".shards/000.json") &&
+      fs.existsSync(path.join(stateDir,"p2-crash-b.txt")));i++) await new Promise(resolve=>setTimeout(resolve,25));
+    assert.ok(fs.existsSync(output+".shards/000.json"));
+    assert.ok(fs.existsSync(path.join(stateDir,"p2-crash-b.txt")));
+    child.kill("SIGKILL");
+    assert.equal((await terminal).signal,"SIGKILL");
+    const first=JSON.parse(fs.readFileSync(output+".shards/000.json","utf8"));
+    const raw=fs.readFileSync(path.join(output+".shards",first.raw_receipt_file));
+    assert.equal(require("node:crypto").createHash("sha256").update(raw).digest("hex"),first.captured_stdout_sha256);
+    assert.equal(first.transport_validation,"PASS");
+    assert.equal(JSON.parse(fs.readFileSync(output+".shards/001.started.json","utf8")).request_state,"UNKNOWN");
+    assert.equal(fs.existsSync(output+".shards/001.json"),false);
+    assert.equal(fs.existsSync(output+".shards/002.started.json"),false);
+    assert.equal(fs.existsSync(path.join(stateDir,"p2-crash-c.txt")),false);
+    // The finite synthetic wrapper has no descendants, no provider request and
+    // exits by itself after 2.5s; give it time before removing fixture paths.
+    await new Promise(resolve=>setTimeout(resolve,2700));
+  } finally { if(child.exitCode===null&&child.signalCode===null) child.kill("SIGKILL"); }
 });

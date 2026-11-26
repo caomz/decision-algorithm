@@ -129,6 +129,8 @@ function createBatch({ side, args, shards, fixedArgs, configFiles, supervisorSec
     ensureArchive();
     // Intent precedes spawn. If the terminal file is absent or corrupt after a
     // crash, the request is UNKNOWN and must never be automatically replayed.
+    // In-memory intent cannot become NOT_STARTED if the archive is replaced.
+    j.intentWritten = true;
     writeOnce(path.join(archive.dir, j.label + ".started.json"),
       json({ ...identity, request_state: "UNKNOWN", state: "launch_intent" }));
     return new Promise(resolve => {
@@ -239,6 +241,10 @@ function createBatch({ side, args, shards, fixedArgs, configFiles, supervisorSec
               typeof receipt.model !== "string" || !receipt.model.trim() || !binding))) {
           finish(errorReceipt("child_error", "wrapper exit, binding or required receipt fields did not agree"), digest, binding); return;
         }
+        if (side === "mmx" && receipt.status === "ok" && (receipt.observed_exit_code !== 0 ||
+            receipt.observed_signal !== null || receipt.local_process_exit_observed !== true)) {
+          finish(errorReceipt("child_error", "MMX CLI observed outcome contradicted successful receipt"), digest, binding); return;
+        }
         if (side === "zcode" && receipt.status === "ok" && receipt.signal !== null) {
           finish(errorReceipt("child_error", "CLI signal contradicted successful receipt"), digest, binding); return;
         }
@@ -273,7 +279,7 @@ function createBatch({ side, args, shards, fixedArgs, configFiles, supervisorSec
     try { await Promise.all(Array.from({ length: Math.min(concurrency, jobs.length) }, worker)); }
     finally { clearTimeout(batchTimer); }
     for (const j of jobs) if (!results[j.i]) results[j.i] = { ...prefix(j), status: "not_started",
-      request_state: fs.existsSync(path.join(archive.dir, j.label + ".started.json")) ? "UNKNOWN" : "NOT_STARTED",
+      request_state: j.intentWritten ? "UNKNOWN" : "NOT_STARTED",
       transport_validation: "NOT_EVALUATED" };
     return results;
   }
