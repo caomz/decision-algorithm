@@ -51,11 +51,15 @@ function roundFor(scenario, name, options = {}) {
   return runner.runFixtureRound(inputs, {
     out: dir, scenario, timeoutSeconds: 600, maxTokens: 524288,
     argv, envBase: { PATH: process.env.PATH },
+    strategy: options.strategy ?? "dual-parallel",
     fakeProcessMs: options.fakeProcessMs ?? 10000,
   }).then(round => ({ round, dir, argv }));
 }
 
+// Existing adjudication and lifecycle regressions explicitly exercise full parallel acceptance.
+// The primary-first default is covered independently in staged-review.test.js.
 function runCli(args, extraEnv = {}) {
+  if (args[0] === "run" && !args.includes("--strategy")) args = [...args, "--strategy", "dual-parallel"];
   return spawnSync(process.execPath, [RUNNER, ...args], {
     encoding: "utf8", timeout: 120000, maxBuffer: 16 * 1024 * 1024,
     env: cleanEnv(extraEnv),
@@ -355,7 +359,7 @@ describe("cli run smoke", () => {
 
 test("SIGTERM mid-run cancels but preserves the bound FAIL", { timeout: 60000, skip: process.platform === "win32" && "POSIX signal semantics; Windows process-tree cancellation requires separate native tests" }, async () => {
   const out = path.join(root, "cli-cancel");
-  const child = spawn(process.execPath, [RUNNER, "run", "--backend", "fixture", "--scenario", "zcode-fail-mmx-hang", "--packet", packetFile, "--out", out], {
+  const child = spawn(process.execPath, [RUNNER, "run", "--backend", "fixture", "--strategy", "dual-parallel", "--scenario", "zcode-fail-mmx-hang", "--packet", packetFile, "--out", out], {
     stdio: ["ignore", "pipe", "pipe"], env: cleanEnv({ ZMX_TEST_CLOSE_MARKER: "1" }),
   });
   let stdout = "";
@@ -369,11 +373,11 @@ test("SIGTERM mid-run cancels but preserves the bound FAIL", { timeout: 60000, s
   assert.ok(fs.existsSync(zcodeClosed), "zcode close marker must precede cancellation");
   child.kill("SIGTERM");
   const code = await new Promise(resolve => child.once("close", resolve));
-  assert.equal(code, 2);
+  assert.equal(code, 1);
   const result = JSON.parse(fs.readFileSync(path.join(out, "result.json"), "utf8"));
   assert.equal(result.cancelled, true);
   assert.equal(result.round_status, "NOT_EVALUATED");
-  assert.equal(result.review_gate, "NOT_EVALUATED");
+  assert.equal(result.review_gate, "FAIL");
   assert.equal(result.providers.zcode.eligible, true);
   assert.equal(result.providers.zcode.gate, "FAIL");
   const mmxExecution = JSON.parse(fs.readFileSync(path.join(out, "mmx-execution.json"), "utf8"));
@@ -395,7 +399,7 @@ describe("second signals and entry hardening (fix2)", { skip: process.platform =
   };
   const spawnRun = (name, scenario, extraEnv = {}) => {
     const out = path.join(root, name);
-    const child = spawn(process.execPath, [RUNNER, "run", "--backend", "fixture", "--scenario", scenario, "--packet", packetFile, "--out", out], {
+    const child = spawn(process.execPath, [RUNNER, "run", "--backend", "fixture", "--strategy", "dual-parallel", "--scenario", scenario, "--packet", packetFile, "--out", out], {
       stdio: ["ignore", "pipe", "pipe"], env: cleanEnv(extraEnv),
     });
     return { out, child };
@@ -404,9 +408,12 @@ describe("second signals and entry hardening (fix2)", { skip: process.platform =
     const mmxStarted = path.join(out, "mmx-observed-input.json");
     for (let i = 0; i < 200 && !fs.existsSync(mmxStarted); i++) await sleep(100);
     assert.ok(fs.existsSync(mmxStarted), "mmx side should have started");
+    const primary = path.join(out, "primary-result.json");
+    for (let i = 0; i < 200 && !fs.existsSync(primary); i++) await sleep(50);
+    assert.ok(fs.existsSync(primary), "primary checkpoint must precede the signal");
   };
 
-  const doubleSignalCase = (name, scenario, signal) => test(`${signal} twice: records survive, exit 2, mmx cancelled by SIGKILL, verify match (${name})`, { timeout: 60000 }, async () => {
+  const doubleSignalCase = (name, scenario, signal) => test(`${signal} twice: records survive, valid P1 veto survives, mmx cancelled by SIGKILL, verify match (${name})`, { timeout: 60000 }, async () => {
     const { out, child } = spawnRun(`cli-2x-${name}-${signal.toLowerCase()}`, scenario);
     await waitForMmxObserved(out);
     child.kill(signal);
@@ -415,11 +422,11 @@ describe("second signals and entry hardening (fix2)", { skip: process.platform =
     child.kill(signal); // 第二次：立即 SIGKILL，不再等宽限期
     const code = await new Promise(resolve => child.once("close", resolve));
     const elapsed = Date.now() - secondAt;
-    assert.equal(code, 2, "the entry must survive the second signal and exit 2");
+    assert.equal(code, 1, "the entry must survive the second signal and retain the valid primary P1 veto");
     assert.ok(elapsed < 4500, `second signal must escalate immediately (took ${elapsed}ms; grace is 5000ms)`);
     const result = JSON.parse(fs.readFileSync(path.join(out, "result.json"), "utf8"));
     assert.equal(result.cancelled, true);
-    assert.equal(result.review_gate, "NOT_EVALUATED");
+    assert.equal(result.review_gate, "FAIL");
     const mmxExecution = JSON.parse(fs.readFileSync(path.join(out, "mmx-execution.json"), "utf8"));
     assert.equal(mmxExecution.state, "cancelled");
     // 决定性判别：不升级时 slow-exit 会走自己的 SIGTERM 处理记 exit 143。
@@ -441,7 +448,7 @@ describe("second signals and entry hardening (fix2)", { skip: process.platform =
     const secondAt = Date.now();
     child.kill("SIGTERM");
     const code = await new Promise(resolve => child.once("close", resolve));
-    assert.equal(code, 2);
+    assert.equal(code, 1);
     assert.ok(Date.now() - secondAt < 4500, "second signal must SIGKILL immediately");
     const result = JSON.parse(fs.readFileSync(path.join(out, "result.json"), "utf8"));
     assert.equal(result.cancelled, true);
@@ -615,10 +622,19 @@ describe("verify", () => {
     assert.deepEqual(report(result).drifted, ["review.js"]);
   });
 
-  test("editing a non-adjudicating file still replays to match", () => {
+  test("non-adjudicating source drift still replays a self-consistent launch intent", () => {
     const request = JSON.parse(fs.readFileSync(path.join(baseBoth, "request.json"), "utf8"));
     request.provenance_code["mmx-profile"] = "0".repeat(64);
-    const dir = copyArchive(baseBoth, "verify-nonadj", { edits: { "request.json": Buffer.from(JSON.stringify(request, null, 2) + "\n") } });
+    const requestBytes = Buffer.from(JSON.stringify(request, null, 2) + "\n");
+    // Model a profile hash captured at launch that differs from today's file.
+    // The checkpoint must still bind that exact original request; editing the
+    // request alone is covered as tampering by staged-review.test.js.
+    const primary = JSON.parse(fs.readFileSync(path.join(baseBoth, "primary-result.json"), "utf8"));
+    primary.request_sha256 = sha256(requestBytes);
+    const dir = copyArchive(baseBoth, "verify-nonadj", { edits: {
+      "request.json": requestBytes,
+      "primary-result.json": Buffer.from(JSON.stringify(primary, null, 2) + "\n"),
+    } });
     const result = verifyCli(dir);
     assert.equal(result.status, 0);
     assert.equal(report(result).replay, "match");
@@ -673,6 +689,8 @@ describe("verify", () => {
     result.providers.mmx = { eligible: false, gate: null, reason: "execution:not_started", model: null, model_family: null, material_bound: false, review: null, diagnostic: { receipt_status: null, gate: null, text: null } };
     result.round_status = "NOT_EVALUATED";
     result.review_gate = "NOT_EVALUATED";
+    result.SECONDARY_REVIEW_GATE = "NOT_EVALUATED";
+    result.REVIEW_GATE = "NOT_EVALUATED";
     result.exit_code = 2;
     result.families_known = false;
     result.independent = false;
@@ -868,7 +886,7 @@ describe("cancellation state machine", { skip: process.platform === "win32" && "
     const { dir, assembled, argvBySide } = await prepareRoundDir("cancel-a");
     let mmxAtSignal = null;
     const roundPromise = runner.runFixtureRound(inputs, {
-      out: dir, scenario: "zcode-fail-mmx-slow", timeoutSeconds: 600, maxTokens: 524288,
+      out: dir, scenario: "zcode-fail-mmx-slow", strategy: "dual-parallel", timeoutSeconds: 600, maxTokens: 524288,
       argv: argvBySide, envBase: { PATH: process.env.PATH }, fakeProcessMs: 300, // 截止时间短于 exitMs 1500
       onSpawn: (side, child) => {
         if (side !== "mmx") return;
@@ -900,7 +918,7 @@ describe("cancellation state machine", { skip: process.platform === "win32" && "
     const { dir, assembled, argvBySide } = await prepareRoundDir("cancel-a2");
     let signalled = false;
     const roundPromise = runner.runFixtureRound(inputs, {
-      out: dir, scenario: "zcode-fail-mmx-slow", timeoutSeconds: 600, maxTokens: 524288,
+      out: dir, scenario: "zcode-fail-mmx-slow", strategy: "dual-parallel", timeoutSeconds: 600, maxTokens: 524288,
       argv: argvBySide, envBase: { PATH: process.env.PATH }, fakeProcessMs: 1200, // 仍短于 exitMs 1500
       onSideClosed: side => {
         if (side !== "zcode" || signalled) return;
@@ -913,7 +931,7 @@ describe("cancellation state machine", { skip: process.platform === "win32" && "
     const round = await roundPromise;
     assert.ok(signalled, "onSideClosed should have fired for zcode");
     assert.equal(round.cancelled, true);
-    assert.equal(round.outcome.review_gate, "NOT_EVALUATED");
+    assert.equal(round.outcome.review_gate, "FAIL");
     assert.equal(round.executions.zcode.execution.state, "completed");
     assert.equal(round.executions.mmx.execution.state, "cancelled");
     assert.equal(round.evaluated.zcode.eligible, true);
@@ -922,7 +940,7 @@ describe("cancellation state machine", { skip: process.platform === "win32" && "
       scenario: "zcode-fail-mmx-slow", timeoutSeconds: 600, maxTokens: 524288,
       argv: argvBySide, envKeys: Object.keys(assembled.zcode.env).sort(), round,
     });
-    assert.equal(result.review_gate, "NOT_EVALUATED");
+    assert.equal(result.review_gate, "FAIL");
     const verify = runCli(["verify", "--run", dir]);
     assert.equal(verify.status, 0, verify.stdout);
     assert.equal(JSON.parse(verify.stdout).replay, "match");
@@ -931,7 +949,7 @@ describe("cancellation state machine", { skip: process.platform === "win32" && "
   test("(b) cancel while terminating: result identical to (a)", { timeout: 60000 }, async () => {
     const { dir, assembled, argvBySide } = await prepareRoundDir("cancel-b");
     const roundPromise = runner.runFixtureRound(inputs, {
-      out: dir, scenario: "zcode-fail-mmx-slow", timeoutSeconds: 600, maxTokens: 524288,
+      out: dir, scenario: "zcode-fail-mmx-slow", strategy: "dual-parallel", timeoutSeconds: 600, maxTokens: 524288,
       argv: argvBySide, envBase: { PATH: process.env.PATH }, fakeProcessMs: 300,
     });
     await waitFor(() => fs.existsSync(path.join(dir, "mmx-observed-input.json")), "mmx observed");
@@ -940,7 +958,7 @@ describe("cancellation state machine", { skip: process.platform === "win32" && "
     process.kill(process.pid, "SIGTERM");
     const round = await roundPromise;
     assert.equal(round.cancelled, true);
-    assert.equal(round.outcome.review_gate, "NOT_EVALUATED");
+    assert.equal(round.outcome.review_gate, "FAIL");
     assert.equal(round.executions.mmx.execution.state, "cancelled"); // 取消接管 terminating，不再记 timed_out
     assert.equal(round.evaluated.zcode.gate, "FAIL");
     runner.writeRunRecords(dir, {

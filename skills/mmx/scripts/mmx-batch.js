@@ -24,6 +24,8 @@ const DEFAULT_WRAPPER = path.join(__dirname, "mmx-chat.js");
 const DEFAULT_CONCURRENCY = 1;
 const MAX_CONCURRENCY = 8;
 const MAX_SHARDS = 32;
+const DEFAULT_SHARD_MAX_BYTES = 16 * 1024;
+const SHARD_TARGET_BYTES = 12 * 1024;
 const MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 // Gate enum literals live in named constants: the scanner password rule
 // misreads a bare ternary of the two literals as a credential assignment,
@@ -87,7 +89,7 @@ function readProfileBudget(file) {
 
 function parseArgs(argv) {
   const out = { promptFiles: [], promptsDir: null, concurrency: null, model: null,
-    maxTokens: null, timeout: null, wrapTimeout: null, profileFile: null, receiptFile: null, supervisorTimeout: null, batchTimeout: null };
+    maxTokens: null, timeout: null, wrapTimeout: null, profileFile: null, receiptFile: null, supervisorTimeout: null, batchTimeout: null, shardMaxBytes: DEFAULT_SHARD_MAX_BYTES, expectedCliVersion: null };
   const seen = new Set();
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -106,6 +108,17 @@ function parseArgs(argv) {
         const value = next();
         if (!/^\d+$/.test(value)) usageError("--concurrency must be a positive integer.");
         out.concurrency = Number(value);
+        break;
+      }
+      case "--shard-max-bytes": {
+        const value = next();
+        if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) < 8192 || Number(value) > 16384) usageError("--shard-max-bytes must be 8192..16384 bytes (experimental logical-shard limit).");
+        out.shardMaxBytes = Number(value);
+        break;
+      }
+      case "--expected-cli-version": {
+        out.expectedCliVersion = next();
+        if (!/^\d+\.\d+\.\d+$/.test(out.expectedCliVersion)) usageError("--expected-cli-version must be an exact numeric semver.");
         break;
       }
       case "--model": out.model = next(); break;
@@ -190,7 +203,12 @@ function collectShardFiles(args) {
     let unique = label;
     for (let n = 2; labeled.some(s => s.label === unique); n++) unique = `${label}-${n}`;
     label = unique;
-    labeled.push({ label, file, real });
+    let bytes;
+    try { bytes = sourceBytes(real); }
+    catch { usageError("Prompt shard is unreadable or changed while reading."); }
+    const shardMaxBytes = args.shardMaxBytes ?? DEFAULT_SHARD_MAX_BYTES;
+    if (bytes.length > shardMaxBytes) usageError(`Logical shard exceeds ${shardMaxBytes} bytes. Regenerate task-focused 8–16 KiB shards; do not truncate or split through evidence units.`);
+    labeled.push({ label, file, real, bytes });
   }
   return labeled;
 }
@@ -213,7 +231,7 @@ async function main() {
     return;
   }
   if (argv.length === 1 && argv[0] === "--help") {
-    process.stdout.write(JSON.stringify({ status: "usage", usage: "node mmx-batch.js --prompt-file FILE [--prompt-file FILE ...] | --prompts-dir DIR [--concurrency 1] [--model ID] [--max-tokens N] [--timeout SEC] [--wrap-timeout SEC] [--profile-file FILE] [--receipt-file FILE] [--supervisor-timeout-seconds SEC] [--batch-timeout-seconds SEC]" }) + "\n");
+    process.stdout.write(JSON.stringify({ status: "usage", usage: "node mmx-batch.js --prompt-file FILE [--prompt-file FILE ...] | --prompts-dir DIR [--concurrency 1] [--model ID] [--max-tokens N] [--timeout SEC] [--wrap-timeout SEC] [--profile-file FILE] [--receipt-file FILE] [--supervisor-timeout-seconds SEC] [--batch-timeout-seconds SEC] [--shard-max-bytes 8192..16384] [--expected-cli-version VERSION]" }) + "\n");
     return;
   }
 
@@ -228,6 +246,7 @@ async function main() {
   const effectiveBudget = args.maxTokens !== null ? args.maxTokens : retryBudget;
 
   const fixedArgs = [];
+  if (args.expectedCliVersion !== null) fixedArgs.push("--expected-cli-version", args.expectedCliVersion);
   if (args.model !== null) fixedArgs.push("--model", args.model);
   if (args.maxTokens !== null) fixedArgs.push("--max-tokens", String(args.maxTokens));
 
@@ -274,6 +293,8 @@ async function main() {
       truncated_or_incomplete: truncatedCount, retried: retriedCount,
       concurrency, wall_seconds: Number(((Date.now() - started) / 1000).toFixed(1)),
       effective_max_tokens: effectiveBudget, retry_max_tokens: retryBudget,
+      automatic_retries: 0,
+      logical_sharding: { recommended_target_bytes: SHARD_TARGET_BYTES, experimental_range_bytes: [8192, 16384], max_prompt_bytes: args.shardMaxBytes, shard_bytes: shards.map(s => s.bytes.length), coverage: "caller_declared_logical_units" },
     },
     shards: results,
   };

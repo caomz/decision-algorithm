@@ -94,7 +94,7 @@ function createBatch({ side, args, shards, fixedArgs, configFiles, supervisorSec
     for (const item of config) effectiveArgs.push(item.flag, item.file);
     for (const [i, shard] of shards.entries()) {
       ensureArchive();
-      const bytes = sourceBytes(shard.real), digest = hash(bytes), label = String(i).padStart(3, "0");
+      const bytes = shard.bytes ?? sourceBytes(shard.real), digest = hash(bytes), label = String(i).padStart(3, "0");
       const dir = path.join(archive.dir, label + ".input");
       fs.mkdirSync(dir, { mode: 0o700 });
       const file = path.join(dir, path.basename(shard.file)); writeOnce(file, bytes);
@@ -111,6 +111,7 @@ function createBatch({ side, args, shards, fixedArgs, configFiles, supervisorSec
       config: config.map(x => ({ flag: x.flag, file: path.basename(x.file), sha256: x.sha256 })),
       argv: jobs[0]?.effectiveArgs ?? [], shards: jobs.map(j => ({ shard_id: j.shardId, attempt_id: j.attemptId,
         material_sha256: j.digest, request_sha256: j.requestSha, snapshot: path.relative(archive.dir, j.file),
+        material_bytes: shards[j.i].bytes?.length ?? fs.statSync(j.file).size,
         request_state: "NOT_STARTED" })) }));
   } catch (err) { fs.closeSync(archive.fd); throw err; }
 

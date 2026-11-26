@@ -343,7 +343,7 @@ function mmxPackageEntry(candidate) {
       const declared = fs.realpathSync(path.resolve(directory, bin));
       const relative = path.relative(root, declared);
       if (!relative || relative.startsWith(".." + path.sep) || path.isAbsolute(relative) || declared !== entry) return null;
-      return { entry, root };
+      return { entry, root, version: typeof pkg.version === "string" && /^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(pkg.version) ? pkg.version : null };
     }
   } catch { return null; }
   return null;
@@ -437,7 +437,9 @@ function cliLaunch(mmx, env = process.env, platform = process.platform, guardFil
       guard = proxied ? "proxy_limited" : "preloaded";
     }
   }
-  return { argsPrefix, env: childEnv, base_url: baseUrl, fetch_timeout_guard: guard, base_url_env: baseUrlEnv };
+  const identity = pkg ? { source: "installed_package_metadata", package: "mmx-cli", version: pkg.version,
+    entry_sha256: createHash("sha256").update(fs.readFileSync(pkg.entry)).digest("hex") } : { source: "unverified_launcher", package: null, version: null, entry_sha256: null };
+  return { argsPrefix, env: childEnv, base_url: baseUrl, fetch_timeout_guard: guard, base_url_env: baseUrlEnv, cli_identity: identity };
 }
 
 // Windows environment names are case-insensitive, but a copied environment
@@ -533,7 +535,7 @@ function apiFailure(exitCode, code) {
   }
   if (exitCode === 5 || [408, 504].includes(code)) {
     return { ...result, status: "timeout", error: "The MMX CLI reported a request timeout.",
-      note: "Retry with a larger --timeout/--wrap-timeout pair if the prompt is large." };
+      note: "Inspect the fixed CLI, guard initialization, proxy and deadline evidence before another attempt. An uncertain request must not be automatically replayed." };
   }
   if (exitCode === 130) {
     return { ...result, status: "cancelled", error: "The MMX CLI was interrupted." };
@@ -619,7 +621,7 @@ async function main() {
   for (let i = 0; i < argv.length; i += 2) {
     const flag = argv[i] === "-m" ? "--model" : argv[i];
     if (!["--prompt-file", "--system-file", "--model", "--max-tokens", "--profile-file",
-          "--timeout", "--wrap-timeout"].includes(flag)) {
+          "--timeout", "--wrap-timeout", "--expected-cli-version"].includes(flag)) {
       usageError("Unknown MMX wrapper option.");
     }
     if (i + 1 >= argv.length || !argv[i + 1] || argv[i + 1].startsWith("--") || options.has(flag)) {
@@ -682,6 +684,14 @@ async function main() {
   }
   if (mmx.unsafe) usageError("Unsafe cmd.exe batch path. Use a resolvable npm shim.");
   const launch = cliLaunch(mmx);
+  telemetry.cli_identity = launch.cli_identity;
+  telemetry.provider_internal_retry = "NOT_EVALUATED";
+  const expectedVersion = options.get("--expected-cli-version");
+  if (expectedVersion !== undefined && !/^\d+\.\d+\.\d+$/.test(expectedVersion)) usageError("--expected-cli-version must be an exact numeric semver.");
+  if (expectedVersion !== undefined && launch.cli_identity.version !== expectedVersion) {
+    fail({ status: "cli_version_mismatch", expected_cli_version: expectedVersion, error: "The installed CLI could not be matched to the requested fixed version; no request was sent." });
+    return;
+  }
   telemetry.fetch_timeout_guard = launch.fetch_timeout_guard;
   telemetry.base_url_env = launch.base_url_env;
 

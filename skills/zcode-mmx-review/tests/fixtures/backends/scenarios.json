@@ -86,5 +86,25 @@
   "zcode-cleanup-false": {
     "zcode": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "signal": null, "complete": true, "truncated": false, "text": "@auto:pass", "provider": "fixture-zcode", "model": "glm-4.7", "model_identity_source": "runtime.model_request", "stop_reason": "stop", "tool_calls": 0, "tool_requests": 0, "cleanup_confirmed": false, "review_gate": "@auto"}},
     "mmx": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "text": "@auto:pass", "model": "MiniMax-M2", "model_identity_source": "response.model", "stop_reason": "end_turn", "complete": true, "truncated": false, "input_tokens": 12, "output_tokens": 3}}
+  },
+  "primary-pass-secondary-delayed": {
+    "zcode": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "signal": null, "complete": true, "truncated": false, "text": "@auto:pass", "provider": "fixture-zcode", "model": "glm-4.7", "model_identity_source": "runtime.model_request", "stop_reason": "stop", "tool_calls": 0, "tool_requests": 0, "cleanup_confirmed": true, "review_gate": "@auto"}},
+    "mmx": {"behavior": "delayed-success", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "text": "@auto:pass", "model": "MiniMax-M2", "model_identity_source": "response.model", "stop_reason": "end_turn", "complete": true, "truncated": false, "input_tokens": 12, "output_tokens": 3}, "exitMs": 800}
+  },
+  "primary-fail-secondary-delayed": {
+    "zcode": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "signal": null, "complete": true, "truncated": false, "text": "@auto:p1-defect", "provider": "fixture-zcode", "model": "glm-4.7", "model_identity_source": "runtime.model_request", "stop_reason": "stop", "tool_calls": 0, "tool_requests": 0, "cleanup_confirmed": true, "review_gate": "@auto"}},
+    "mmx": {"behavior": "delayed-success", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "text": "@auto:pass", "model": "MiniMax-M2", "model_identity_source": "response.model", "stop_reason": "end_turn", "complete": true, "truncated": false, "input_tokens": 12, "output_tokens": 3}, "exitMs": 800}
+  },
+  "primary-invalid-secondary-fail": {
+    "zcode": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "signal": null, "complete": true, "truncated": false, "text": "@auto:pass", "provider": "", "model": "glm-4.7", "model_identity_source": "runtime.model_request", "stop_reason": "stop", "tool_calls": 0, "tool_requests": 0, "cleanup_confirmed": true, "review_gate": "@auto"}},
+    "mmx": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "text": "@auto:p1-defect", "model": "MiniMax-M2", "model_identity_source": "response.model", "stop_reason": "end_turn", "complete": true, "truncated": false, "input_tokens": 12, "output_tokens": 3}}
+  },
+  "secondary-fail": {
+    "zcode": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "signal": null, "complete": true, "truncated": false, "text": "@auto:pass", "provider": "fixture-zcode", "model": "glm-4.7", "model_identity_source": "runtime.model_request", "stop_reason": "stop", "tool_calls": 0, "tool_requests": 0, "cleanup_confirmed": true, "review_gate": "@auto"}},
+    "mmx": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "text": "@auto:p1-defect", "model": "MiniMax-M2", "model_identity_source": "response.model", "stop_reason": "end_turn", "complete": true, "truncated": false, "input_tokens": 12, "output_tokens": 3}}
+  },
+  "same-family-pass": {
+    "zcode": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "signal": null, "complete": true, "truncated": false, "text": "@auto:pass", "provider": "fixture-zcode", "model": "glm-4.7", "model_identity_source": "runtime.model_request", "stop_reason": "stop", "tool_calls": 0, "tool_requests": 0, "cleanup_confirmed": true, "review_gate": "@auto"}},
+    "mmx": {"behavior": "normal", "exit": 0, "receipt": {"status": "ok", "cli_invoked": true, "exit_code": 0, "text": "@auto:pass", "model": "glm-4.6", "model_identity_source": "response.model", "stop_reason": "end_turn", "complete": true, "truncated": false, "input_tokens": 12, "output_tokens": 3}}
   }
 }

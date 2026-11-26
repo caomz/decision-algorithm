@@ -43,6 +43,15 @@ mmx/
 └── evals/evals.json                  # 评测用例
 ```
 
+## V2.1 候选行为
+
+- ZCode 主校验优先并立即交付，MMX 后续复核；有效主侧 P1 阻断同版本 MMX。完整双模型门禁不变，详见[调度合同](../zcode-mmx-review/zcode-mmx-review.md)。
+- MMX 批内并发 1、自动重试 0；请求/wrapper/supervisor 保持 600/630/650 秒，输出预算保持 524288。
+- 逻辑分片实验目标 12 KiB，batch 默认单片上限 16 KiB，可用 `--shard-max-bytes 8192..16384` 调整。按完整断言/模块拆分；超限先拒绝，不静默截断。直接 chat 的既有大输入合同不变。
+- `--expected-cli-version 1.0.29` 可固定本次已安装 CLI，版本不符先拒绝并记录可核验元数据，不自动升级。
+- `mmx-job.js` 仅显式 fixture 实验，提供幂等提交、查询和跨会话单槽；默认禁用真实持久任务。`UNKNOWN` 不自动重发，宿主等待到期不取消。
+- guard 初始化、真实 CLI 传输行为、真实供应方和原生生命周期分别验收，见[超时实验](../../docs/zmx-stability-v2/03-v21-timeout-experiment.md)与[持久任务](../../docs/zmx-stability-v2/04-durable-tasks.md)。历史 Windows/Mac 测试不代替本提交验收。
+
 ## 合并取舍
 
 | 维度 | 采用 | 未采用 |

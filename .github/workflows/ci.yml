@@ -65,6 +65,10 @@ jobs:
           node --check skills/zcode/scripts/zcode-batch.js
           node --check skills/mmx/scripts/mmx-chat.js
           node --check skills/mmx/scripts/mmx-batch.js
+          node --check skills/mmx/scripts/mmx-job.js
+          node --check skills/mmx/scripts/mmx-job-fixture.js
+          node --check skills/mmx/scripts/mmx-provider-slot.js
+          node --check skills/mmx/scripts/mmx-timeout-experiment.js
           node --check skills/zcode-mmx-review/scripts/review-run.js
           if [[ -f skills/mmx/scripts/fetch-timeout-guard.js ]]; then node --check skills/mmx/scripts/fetch-timeout-guard.js; fi
           echo "NATIVE_ACCEPTANCE=NOT_EVALUATED: verified native network isolation not yet available"

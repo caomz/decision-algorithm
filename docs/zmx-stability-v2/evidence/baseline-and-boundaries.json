@@ -1,0 +1,31 @@
+{
+  "baseline_sha": "a14254fe14f8557edf95190d55f7dcecfe03c725",
+  "baseline_ci": {
+    "id": 45725729964,
+    "conclusion": "success",
+    "url": "https://github.com/caomz/decision-algorithm/actions/runs/45725729964",
+    "node": "22.23.5",
+    "suites": {
+      "zcode": 94,
+      "mmx": 88,
+      "cross_review": 217
+    }
+  },
+  "local_baseline": {
+    "node": "24.22.3",
+    "tests": 399,
+    "pass": 399,
+    "fail": 0,
+    "skipped": 0,
+    "log_sha256": "595dbd3459054f2e655c943cb1b3fcc381a3f98d9f1d31d16c28f6694419c01f",
+    "isolation": "Linux user+network namespace, loopback only, kernel unreachable external probe, allowlisted environment and fresh home"
+  },
+  "current_limits": {
+    "real_provider": "NOT_EVALUATED",
+    "actual_mmx_cli_transport": "NOT_EVALUATED",
+    "actual_mmx_cli_internal_retry": "NOT_EVALUATED",
+    "native_macos_windows_lifecycle": "NOT_EVALUATED",
+    "power_loss_reboot_lifecycle": "NOT_EVALUATED",
+    "persistent_default_enabled": false
+  }
+}

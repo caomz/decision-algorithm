@@ -1,0 +1,270 @@
+{
+  "source": "V2.1 integration checkout",
+  "real_provider": "NOT_EVALUATED",
+  "cases": [
+    {
+      "name": "primary_pass",
+      "scenario": "both-pass",
+      "backend": "fixture",
+      "strategy": "primary-first",
+      "exit_code": 0,
+      "material_version": "abd7c3f8536f0121e7db7a648b408bca646f074f979997a0ba625a94bcce0f61",
+      "PRIMARY_REVIEW_GATE": "PASS",
+      "SECONDARY_REVIEW_GATE": "PASS",
+      "REVIEW_GATE": "PASS",
+      "round_status": "COMPLETED",
+      "mmx_execution": {
+        "state": "completed",
+        "exit_code": 0,
+        "signal": null,
+        "started_at": "2026-11-26T03:03:33.159Z",
+        "ended_at": "2026-11-26T03:03:33.199Z",
+        "stdout_sha256": "ad5a0e2d2b7bed1de3ad1fa0b57852a8d5a7925d91694fec3b17eab9a7addc63",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "observed_input": "391a151055fd19fe185416e77d6d0e5bbef9df467d53e9e54dad9a4a13334463",
+        "argv": [
+          "--prompt-file",
+          "/workspace/scratch/b9938d7c4a4d/v21-gate-examples/primary_pass/prompt.txt",
+          "--timeout",
+          "600",
+          "--wrap-timeout",
+          "630",
+          "--max-tokens",
+          "524288"
+        ],
+        "env_keys": [
+          "LANG",
+          "PATH",
+          "REVIEW_RUN_DIR",
+          "REVIEW_SCENARIO",
+          "REVIEW_SIDE",
+          "TEMP",
+          "TMP",
+          "TMPDIR"
+        ],
+        "deadline_ms": 30000,
+        "material_version": "abd7c3f8536f0121e7db7a648b408bca646f074f979997a0ba625a94bcce0f61"
+      },
+      "primary_event": {
+        "event": "PRIMARY_REVIEW_READY",
+        "file": "/workspace/scratch/b9938d7c4a4d/v21-gate-examples/primary_pass/primary-result.json",
+        "material_version": "abd7c3f8536f0121e7db7a648b408bca646f074f979997a0ba625a94bcce0f61",
+        "PRIMARY_REVIEW_GATE": "PASS",
+        "SECONDARY_REVIEW_GATE": "NOT_EVALUATED",
+        "REVIEW_GATE": "NOT_EVALUATED"
+      },
+      "verify_exit_code": 0,
+      "verify": {
+        "integrity": "ok",
+        "replay": "match",
+        "problems": [],
+        "replayed": {
+          "round_status": "COMPLETED",
+          "review_gate": "PASS",
+          "PRIMARY_REVIEW_GATE": "PASS",
+          "SECONDARY_REVIEW_GATE": "PASS",
+          "REVIEW_GATE": "PASS",
+          "cancelled": false
+        },
+        "exit_code": 0,
+        "note": "local self-consistency check only: it does not prove what the upstream model received and cannot detect tampering"
+      }
+    },
+    {
+      "name": "primary_block",
+      "scenario": "zcode-fail",
+      "backend": "fixture",
+      "strategy": "primary-first",
+      "exit_code": 1,
+      "material_version": "abd7c3f8536f0121e7db7a648b408bca646f074f979997a0ba625a94bcce0f61",
+      "PRIMARY_REVIEW_GATE": "FAIL",
+      "SECONDARY_REVIEW_GATE": "NOT_EVALUATED",
+      "REVIEW_GATE": "FAIL",
+      "round_status": "NOT_EVALUATED",
+      "mmx_execution": {
+        "state": "not_started",
+        "exit_code": null,
+        "signal": null,
+        "started_at": "2026-11-26T03:03:33.396Z",
+        "ended_at": "2026-11-26T03:03:33.396Z",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "observed_input": "unobserved",
+        "argv": [
+          "--prompt-file",
+          "/workspace/scratch/b9938d7c4a4d/v21-gate-examples/primary_block/prompt.txt",
+          "--timeout",
+          "600",
+          "--wrap-timeout",
+          "630",
+          "--max-tokens",
+          "524288"
+        ],
+        "env_keys": [],
+        "deadline_ms": 30000,
+        "material_version": "abd7c3f8536f0121e7db7a648b408bca646f074f979997a0ba625a94bcce0f61",
+        "skip_reason": "primary_confirmed_defect"
+      },
+      "primary_event": {
+        "event": "PRIMARY_REVIEW_READY",
+        "file": "/workspace/scratch/b9938d7c4a4d/v21-gate-examples/primary_block/primary-result.json",
+        "material_version": "abd7c3f8536f0121e7db7a648b408bca646f074f979997a0ba625a94bcce0f61",
+        "PRIMARY_REVIEW_GATE": "FAIL",
+        "SECONDARY_REVIEW_GATE": "NOT_EVALUATED",
+        "REVIEW_GATE": "FAIL"
+      },
+      "verify_exit_code": 0,
+      "verify": {
+        "integrity": "ok",
+        "replay": "match",
+        "problems": [],
+        "replayed": {
+          "round_status": "NOT_EVALUATED",
+          "review_gate": "FAIL",
+          "PRIMARY_REVIEW_GATE": "FAIL",
+          "SECONDARY_REVIEW_GATE": "NOT_EVALUATED",
+          "REVIEW_GATE": "FAIL",
+          "cancelled": false
+        },
+        "exit_code": 0,
+        "note": "local self-consistency check only: it does not prove what the upstream model received and cannot detect tampering"
+      }
+    },
+    {
+      "name": "secondary_block",
+      "scenario": "secondary-fail",
+      "backend": "fixture",
+      "strategy": "primary-first",
+      "exit_code": 1,
+      "material_version": "abd7c3f8536f0121e7db7a648b408bca646f074f979997a0ba625a94bcce0f61",
+      "PRIMARY_REVIEW_GATE": "PASS",
+      "SECONDARY_REVIEW_GATE": "FAIL",
+      "REVIEW_GATE": "FAIL",
+      "round_status": "COMPLETED",
+      "mmx_execution": {
+        "state": "completed",
+        "exit_code": 0,
+        "signal": null,
+        "started_at": "2026-11-26T03:03:33.568Z",
+        "ended_at": "2026-11-26T03:03:33.604Z",
+        "stdout_sha256": "bb74e2127288eddf7ac1c0b8c0afb0474c0efe6238f16ce921fab31f5cfdf144",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "observed_input": "d56205494ea4be100140a250d44273d678a643c81d70fff00c3ce8f303262f3e",
+        "argv": [
+          "--prompt-file",
+          "/workspace/scratch/b9938d7c4a4d/v21-gate-examples/secondary_block/prompt.txt",
+          "--timeout",
+          "600",
+          "--wrap-timeout",
+          "630",
+          "--max-tokens",
+          "524288"
+        ],
+        "env_keys": [
+          "LANG",
+          "PATH",
+          "REVIEW_RUN_DIR",
+          "REVIEW_SCENARIO",
+          "REVIEW_SIDE",
+          "TEMP",
+          "TMP",
+          "TMPDIR"
+        ],
+        "deadline_ms": 30000,
+        "material_version": "abd7c3f8536f0121e7db7a648b408bca646f074f979997a0ba625a94bcce0f61"
+      },
+      "primary_event": {
+        "event": "PRIMARY_REVIEW_READY",
+        "file": "/workspace/scratch/b9938d7c4a4d/v21-gate-examples/secondary_block/primary-result.json",
+        "material_version": "abd7c3f8536f0121e7db7a648b408bca646f074f979997a0ba625a94bcce0f61",
+        "PRIMARY_REVIEW_GATE": "PASS",
+        "SECONDARY_REVIEW_GATE": "NOT_EVALUATED",
+        "REVIEW_GATE": "NOT_EVALUATED"
+      },
+      "verify_exit_code": 0,
+      "verify": {
+        "integrity": "ok",
+        "replay": "match",
+        "problems": [],
+        "replayed": {
+          "round_status": "COMPLETED",
+          "review_gate": "FAIL",
+          "PRIMARY_REVIEW_GATE": "PASS",
+          "SECONDARY_REVIEW_GATE": "FAIL",
+          "REVIEW_GATE": "FAIL",
+          "cancelled": false
+        },
+        "exit_code": 0,
+        "note": "local self-consistency check only: it does not prove what the upstream model received and cannot detect tampering"
+      }
+    },
+    {
+      "name": "parallel_pass",
+      "scenario": "both-pass",
+      "backend": "fixture",
+      "strategy": "dual-parallel",
+      "exit_code": 0,
+      "material_version": "abd7c3f8536f0121e7db7a648b408bca646f074f979997a0ba625a94bcce0f61",
+      "PRIMARY_REVIEW_GATE": "PASS",
+      "SECONDARY_REVIEW_GATE": "PASS",
+      "REVIEW_GATE": "PASS",
+      "round_status": "COMPLETED",
+      "mmx_execution": {
+        "state": "completed",
+        "exit_code": 0,
+        "signal": null,
+        "started_at": "2026-11-26T03:03:33.720Z",
+        "ended_at": "2026-11-26T03:03:33.753Z",
+        "stdout_sha256": "ad5a0e2d2b7bed1de3ad1fa0b57852a8d5a7925d91694fec3b17eab9a7addc63",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "observed_input": "de9a01b3e65c85ed97a4bca11b527b0abfd12ba3b32b7ead6176d2ba994a975f",
+        "argv": [
+          "--prompt-file",
+          "/workspace/scratch/b9938d7c4a4d/v21-gate-examples/parallel_pass/prompt.txt",
+          "--timeout",
+          "600",
+          "--wrap-timeout",
+          "630",
+          "--max-tokens",
+          "524288"
+        ],
+        "env_keys": [
+          "LANG",
+          "PATH",
+          "REVIEW_RUN_DIR",
+          "REVIEW_SCENARIO",
+          "REVIEW_SIDE",
+          "TEMP",
+          "TMP",
+          "TMPDIR"
+        ],
+        "deadline_ms": 30000,
+        "material_version": "abd7c3f8536f0121e7db7a648b408bca646f074f979997a0ba625a94bcce0f61"
+      },
+      "primary_event": {
+        "event": "PRIMARY_REVIEW_READY",
+        "file": "/workspace/scratch/b9938d7c4a4d/v21-gate-examples/parallel_pass/primary-result.json",
+        "material_version": "abd7c3f8536f0121e7db7a648b408bca646f074f979997a0ba625a94bcce0f61",
+        "PRIMARY_REVIEW_GATE": "PASS",
+        "SECONDARY_REVIEW_GATE": "NOT_EVALUATED",
+        "REVIEW_GATE": "NOT_EVALUATED"
+      },
+      "verify_exit_code": 0,
+      "verify": {
+        "integrity": "ok",
+        "replay": "match",
+        "problems": [],
+        "replayed": {
+          "round_status": "COMPLETED",
+          "review_gate": "PASS",
+          "PRIMARY_REVIEW_GATE": "PASS",
+          "SECONDARY_REVIEW_GATE": "PASS",
+          "REVIEW_GATE": "PASS",
+          "cancelled": false
+        },
+        "exit_code": 0,
+        "note": "local self-consistency check only: it does not prove what the upstream model received and cannot detect tampering"
+      }
+    }
+  ]
+}

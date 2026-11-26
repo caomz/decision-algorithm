@@ -195,6 +195,7 @@ test("success preserves the public JSON schema and skips auth status", () => {
     model_identity_source: "response.model", stop_reason: "end_turn", complete: true,
     input_tokens: 12, output_tokens: 3, truncated: false,
     fetch_timeout_guard: "custom_launcher", base_url_env: "unset",
+    cli_identity: { source: "unverified_launcher", package: null, version: null, entry_sha256: null }, provider_internal_retry: "NOT_EVALUATED",
     queue_wait_ms: 0, execution_ms: jsonResult(run).execution_ms, cleanup_ms: 0,
     timeout_origin: "none", diagnosis_confidence: "observed", observed_exit_code: 0, observed_signal: null,
     local_process_exit_observed: true, local_tree_cleanup: process.platform === "win32" ? "unknown" : "posix_group_absent",
@@ -976,4 +977,27 @@ test("timeout telemetry distinguishes the local deadline and observed exit", () 
   assert.equal(network.timeout_origin, "unknown");
   assert.equal(network.diagnosis_confidence, "unknown");
   assert.equal(network.observed_exit_code, 6);
+});
+
+
+test("V2.1: fixed CLI version records local identity and refuses a mismatch before invocation", () => {
+  const { pkgRoot, pkgBin, entry } = buildFakePackage();
+  try {
+    const meta = path.join(pkgRoot, "package.json");
+    fs.writeFileSync(meta, JSON.stringify({ ...JSON.parse(fs.readFileSync(meta)), version: "1.0.29" }));
+    writeInputs("pinned synthetic CLI");
+    const env = { PATH: `${pkgBin}${path.delimiter}${process.env.PATH || ""}` };
+    const ok = jsonResult(runChat(["--expected-cli-version", "1.0.29"], env));
+    assert.equal(ok.status, "ok");
+    assert.equal(ok.cli_identity.version, "1.0.29");
+    assert.equal(ok.cli_identity.entry_sha256, createHash("sha256").update(fs.readFileSync(entry)).digest("hex"));
+    assert.equal(ok.provider_internal_retry, "NOT_EVALUATED");
+    const mismatch = jsonResult(runChat(["--expected-cli-version", "1.0.28"], env));
+    assert.equal(mismatch.status, "cli_version_mismatch");
+    assert.equal(mismatch.cli_invoked, false);
+    assert.equal(fs.readFileSync(invocationLog, "utf8"), "");
+    const custom = jsonResult(runChat(["--expected-cli-version", "1.0.29"]));
+    assert.equal(custom.status, "cli_version_mismatch");
+    assert.equal(custom.cli_invoked, false);
+  } finally { removeFakePackage(pkgRoot, pkgBin, entry); }
 });

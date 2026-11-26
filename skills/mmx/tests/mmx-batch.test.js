@@ -443,3 +443,44 @@ test("Phase 2: abrupt batch crash leaves completed shard and unknown intent",
     await new Promise(resolve=>setTimeout(resolve,2700));
   } finally { if(child.exitCode===null&&child.signalCode===null) child.kill("SIGKILL"); }
 });
+
+
+test("V2.1: default shard bound uses UTF-8 bytes and refuses before any wrapper", () => {
+  const file = shardFile("large-logical.txt", "中".repeat(5462));
+  fs.writeFileSync(argsDump, "");
+  const result = receiptOf(runBatch(["--prompt-file", file]));
+  assert.equal(result.status, "usage_error");
+  assert.match(result.error, /16384 bytes/);
+  assert.equal(fs.readFileSync(argsDump, "utf8"), "");
+  for (const value of ["8191", "16385", "1e4", "NaN"]) {
+    assert.equal(receiptOf(runBatch(["--prompt-file", file, "--shard-max-bytes", value])).status, "usage_error");
+  }
+});
+
+test("V2.1: byte bound, unchanged token budget and no retries recorded with immutable snapshot", () => {
+  const file = shardFile("bounded-logical.txt", "x".repeat(8192));
+  const result = receiptOf(runBatch(["--prompt-file", file, "--shard-max-bytes", "8192", "--expected-cli-version", "1.0.29"]));
+  assert.equal(result.status, "ok");
+  assert.equal(result.batch.concurrency, 1);
+  assert.equal(result.batch.automatic_retries, 0);
+  assert.equal(result.batch.effective_max_tokens, 524288);
+  assert.equal(result.batch.supervisor_timeout_ms, 650000);
+  assert.deepEqual(result.batch.logical_sharding.shard_bytes, [8192]);
+  const plan = JSON.parse(fs.readFileSync(result.receipt_file + ".shards/plan.json"));
+  assert.equal(plan.shards[0].material_bytes, 8192);
+  assert.ok(plan.argv.includes("--expected-cli-version"));
+  assert.ok(plan.argv.includes("1.0.29"));
+});
+
+test("V2.1: collected logical bytes, rather than later edited source, are snapshotted", () => {
+  const { collectShardFiles } = require(path.join(skillRoot, "scripts", "mmx-batch.js"));
+  const { createBatch } = require(path.join(skillRoot, "scripts", "batch-safety.js"));
+  const file = shardFile("sealed-logical.txt", "bounded original");
+  const shards = collectShardFiles({ promptFiles: [file], promptsDir: null, shardMaxBytes: 8192 });
+  fs.writeFileSync(file, "x".repeat(65536));
+  const receiptFile = path.join(root, "sealed-logical-receipt.json");
+  const ctl = createBatch({ side: "mmx", args: { receiptFile, concurrency: 1 }, shards, fixedArgs: [], configFiles: [], supervisorSeconds: 650, parseReceipt: JSON.parse });
+  const plan = JSON.parse(fs.readFileSync(receiptFile + ".shards/plan.json"));
+  assert.equal(fs.readFileSync(path.join(receiptFile + ".shards", plan.shards[0].snapshot), "utf8"), "bounded original");
+  ctl.finalize({ status: "not_started", gate: "NOT_EVALUATED", batch: {} });
+});

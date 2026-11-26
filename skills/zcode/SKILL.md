@@ -17,7 +17,7 @@ version: 1.5.1
 
 调用前核对本次材料的外发授权。将 prompt 写入私有 UTF-8 文件，不把正文拼接成 shell 命令：
 
-宿主可能断开终端或需要跨工具调用等待时，优先使用持久后台入口：
+ZMX V2.1 候选默认使用持续会话中的同步 wrapper，并在主侧完成后立即交付。原生生命周期与固定真实传输栈验证完成前，不默认启用持久任务。以下是已有的显式后台入口合同（不是本候选的默认启用）：
 
 ```text
 node <ZCODE_SKILL_DIR>/scripts/zcode-run.js start <NEW_JOB_DIR> --prompt-file <file> [--mode review --evidence-ids-file <ids.json>]
@@ -38,7 +38,7 @@ Review/Challenge 为材料分配稳定 ID（例如 `E1`、`E2`），在材料中
 
 ## 分片批量
 
-多分片评审不要逐片串行调用：一次工具调用送整批，`zcode-batch.js` 经有界并发池并行执行每片 `zcode-chat.js`，合并回执并聚合双 gate：
+多分片评审一次工具调用送整批，`zcode-batch.js` 默认并发 1，经有界队列执行每片 `zcode-chat.js`，合并回执并聚合双 gate：
 
 ```text
 node <ZCODE_SKILL_DIR>/scripts/zcode-batch.js --prompt-file <f1> [--prompt-file <f2> ...] | --prompts-dir <dir> [--concurrency 1] [--mode chat|review|challenge --evidence-ids-file <ids.json>] [--timeout-seconds 1200] [--cli-path <exe>] [--receipt-file <path>]
@@ -49,11 +49,11 @@ node <ZCODE_SKILL_DIR>/scripts/zcode-batch.js --prompt-file <f1> [--prompt-file 
 - `status=ok` 时退出 0，即使内容 gate 为 `FAIL`（P1 发现是有效审核结果，与单片一致）；传输或批处理失败退出 1。
 - **重试边界**：额度、超时、网络失败、未知终态和其他失败均不自动重发；内容 FAIL 是有效评审结果，不是传输失败。
 - **监督时限**：单片默认 请求时限 + 45 秒；批次默认按片数与并发计算、上限 86400 秒。可显式使用 `--supervisor-timeout-seconds` / `--batch-timeout-seconds`（1–86400 秒）；另有 8 秒监督清理预算，超时不自动重发。
-- 单片或易断线场景仍用上面的 `zcode-run.js` 持久 job；批量入口面向持续会话的一次宿主工具调用，不宣称自身具备跨终端持久恢复能力。
+- 已有 `zcode-run.js` 持久 job 保留为显式入口，本候选未完成上述验收前不默认启用；批量入口面向持续会话的一次宿主工具调用，不宣称自身具备跨终端持久恢复能力。
 
 ## 执行与结果
 
-默认运行时限 1200 秒（与 MMX `local.json` 1200/1260 对齐）；`--timeout-seconds` 可在本次授权内调整，更大的评审事实包建议显式放宽。宿主前台同步调用仍受宿主工具时限约束，评审规模请求走持久后台 job 或 batch 入口。`--output-dir` 指向一个尚不存在的目录，用于保存输入、完整原始运行流、stderr、启动指纹与 `receipt.json`；省略时在系统临时目录创建并保留私有目录。
+独立 wrapper 默认运行时限仍为 1200 秒；ZMX 配对入口显式传 600 秒，MMX 的请求/wrapper/supervisor 为 600/630/650 秒。`--timeout-seconds` 可在本次授权内调整，先排查传输原因并按逻辑分片，不以延长超时掩盖问题。宿主前台同步调用仍受宿主工具时限约束，评审规模请求走持久后台 job 或 batch 入口。`--output-dir` 指向一个尚不存在的目录，用于保存输入、完整原始运行流、stderr、启动指纹与 `receipt.json`；省略时在系统临时目录创建并保留私有目录。
 
 每次请求在启动和首个模型请求时原子更新 `progress.json`，记录 wrapper/CLI PID、阶段及观察到的模型；只有最终有效回执才可作为完成依据。监督器另给 wrapper 预检与清理 45 秒余量，超出后终止本任务进程组并保留真实退出记录。
 
