@@ -200,6 +200,37 @@ decision-algorithm/
 
 各 skill 目录内的 `dev/`、`docs/` 为开发期工件，不影响运行。
 
+## 🧰 各 Skill 命令速查
+
+各 skill 自带的命令行脚本，均可在仓库根目录直接复制运行（前置依赖在行内注明）。同一脚本的其它子命令/参数见各脚本 `--help`。
+
+### decision-algorithm（EKB 决策算法）
+
+| 命令 | 用途 |
+|------|------|
+| `python3 skills/decision-algorithm/tools/decision_calculator.py --full -p 0.3 -g 100000 -l 20000 --capital 100000` | 期望值 + 凯利仓位 + 完整分析（`--ev`、`--kelly` 可单独计算） |
+| `python3 skills/decision-algorithm/tools/skill_writer.py --action list --base-dir skills` | 列出仓库内全部 skill |
+| `python3 skills/decision-algorithm/tools/skill_writer.py --action validate --skill skills/decision-algorithm` | 校验某个 SKILL.md 的结构完整性 |
+| `python3 skills/decision-algorithm/tools/version_manager.py --action list --skill-dir skills/decision-algorithm` | 查看 skill 历史版本（只读；`backup` / `rollback` / `cleanup` 会写文件） |
+
+### modern-thinking-tools（现代思维工具）
+
+| 命令 | 用途 |
+|------|------|
+| `python3 skills/modern-thinking-tools/scripts/build_tool_catalog.py --check` | 校验 100 工具目录是否最新（`--write` 重新生成；前置：本地课程原文 `knowledge/raw/05-素材库/万维钢·现代思维工具100讲.md`，不入库） |
+| `python3 skills/modern-thinking-tools/scripts/install_skill_links.py --check` | 检查本机 modern-thinking-tools 链接漂移，不改文件（输出随本机平台目录而异，有漂移时以非 0 退出；`--apply` 补建缺失链接，不覆盖已有文件） |
+| `python3 skills/modern-thinking-tools/scripts/render_eval_review.py` | 把 `evals/evals.json` 渲染成本地静态评审页（默认输出 `tmp/modern-thinking-tools/eval-review.html`，不入库） |
+| `python3 skills/modern-thinking-tools/scripts/retrieve_evidence.py --dry-run --problem "要不要换工作" --query "职业转换 基础概率" --query "行业供需" --query "可比案例" --query "替代方案"` | 离线演练证据检索（discovery 阶段须恰好 4 条不同 query；真实检索需 GetNote 凭证、课程原文与网络） |
+| `python3 skills/modern-thinking-tools/scripts/training_record.py summary --markdown` | 查看训练台账摘要（只读，台账默认在 `~/.local/share/modern-thinking-tools/`；`start` / `record` / `set-recording` 会写台账，且数据库父目录须为 0700） |
+
+### lead-acquisition-coach（获客教练）
+
+| 命令 | 用途 |
+|------|------|
+| `python3 skills/lead-acquisition-coach/scripts/read_source.py --index` | 列出内置课程原文的 14 个章节与行号（另有 `--verify` / `--section N` / `--search` / `--lines`） |
+| `python3 skills/lead-acquisition-coach/scripts/read_source.py --verify` | 核对课程原文的 SHA-256 / 字节数 / 行数与清单一致 |
+| `python3 skills/lead-acquisition-coach/scripts/validate_package.py` | 校验 skill 包结构、原文哈希、证据行与相对文件链接 |
+
 ## 🧪 验证
 
 ```bash
@@ -219,6 +250,29 @@ node --test "skills/get-biji/tests/**/*.test.cjs"
 node --test "skills/zcode/tests/**/*.test.js"
 node --test "skills/mmx/tests/**/*.test.js"
 node --test "skills/zcode-mmx-review/tests/**/*.test.js"
+
+# 决策算法：SKILL.md 校验 + 版本列表（只读）
+python3 skills/decision-algorithm/tools/skill_writer.py --action validate --skill skills/decision-algorithm
+python3 skills/decision-algorithm/tools/version_manager.py --action list --skill-dir skills/decision-algorithm
+
+# 现代思维工具：离线冒烟（不触网；render 输出写入不入库的 tmp/）
+python3 skills/modern-thinking-tools/scripts/render_eval_review.py
+python3 skills/modern-thinking-tools/scripts/retrieve_evidence.py --dry-run --problem "要不要换工作" --query "职业转换 基础概率" --query "行业供需" --query "可比案例" --query "替代方案"
+
+# 现代思维工具：状态依赖检查——install_skill_links 在链接漂移/缺失时非 0 退出属预期；
+# build_tool_catalog 需本地课程原文（knowledge/raw/05-素材库/万维钢·现代思维工具100讲.md，不入库），缺失时报错
+python3 skills/modern-thinking-tools/scripts/install_skill_links.py --check
+python3 skills/modern-thinking-tools/scripts/build_tool_catalog.py --check
+
+# 现代思维工具：训练台账冒烟（临时私有目录，不碰真实台账）
+SMOKE_DB="$(mktemp -d)/training.sqlite3"
+python3 skills/modern-thinking-tools/scripts/training_record.py --db "$SMOKE_DB" start --tool-id T001
+python3 skills/modern-thinking-tools/scripts/training_record.py --db "$SMOKE_DB" summary --markdown
+rm -rf "$(dirname "$SMOKE_DB")"
+
+# 获客教练：包结构校验 + 原文定位器（内置原文，不触网）
+python3 skills/lead-acquisition-coach/scripts/validate_package.py
+python3 skills/lead-acquisition-coach/scripts/read_source.py --index
 ```
 
 需要 pytest 时用仓库内 venv，避免污染系统 Python：
