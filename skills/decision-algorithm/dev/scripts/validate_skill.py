@@ -16,8 +16,41 @@ from __future__ import annotations
 
 import argparse
 import json
+import unicodedata
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
+
+# 语义片段的最小长度：短于此长度的片段（多为虚词或单字）不足以做匹配
+MIN_KEYWORD_LENGTH = 2
+
+
+def semantic_segments(text: str) -> list[str]:
+    """按标点/符号把文本切成语义片段，片段内去掉所有空白。
+
+    标点与符号是硬边界 —— 短语匹配时不跨标点；
+    空白只是被移除 —— 换行不会把一个短语拆成两段。
+    """
+    segments: list[str] = []
+    buffer: list[str] = []
+    for char in text:
+        if unicodedata.category(char)[0] in ("P", "S"):
+            segments.append("".join(buffer))
+            buffer = []
+        else:
+            buffer.append(char)
+    segments.append("".join(buffer))
+
+    cleaned = []
+    for segment in segments:
+        compact = "".join(segment.split())
+        if compact:
+            cleaned.append(compact)
+    return cleaned
+
+
+def phrase_in_segments(phrase: str, segments: Sequence[str]) -> bool:
+    """短语是否完整落在某个语义片段内（不跨标点匹配）。"""
+    return any(phrase in segment for segment in segments)
 
 
 class ValidationResult:
@@ -44,6 +77,23 @@ class SkillValidator:
         self.knowledge_path = knowledge_path
         self.chapters_dir = chapters_dir
         self.results: list[ValidationResult] = []
+        # 惰性缓存：SKILL.md 只读一次，course_rules.json 只读一次、只解析一次
+        self._cached_skill_content: Optional[str] = None
+        self._cached_knowledge: Optional[dict] = None
+
+    def _skill_content(self) -> str:
+        """SKILL.md 全文（惰性缓存，整个校验流程只读一次文件）。"""
+        if self._cached_skill_content is None:
+            self._cached_skill_content = self.skill_path.read_text(encoding="utf-8")
+        return self._cached_skill_content
+
+    def _knowledge(self) -> dict:
+        """course_rules.json 内容（惰性缓存：只读一次、只解析一次）。"""
+        if self._cached_knowledge is None:
+            self._cached_knowledge = json.loads(
+                self.knowledge_path.read_text(encoding="utf-8")
+            )
+        return self._cached_knowledge
 
     def validate(self) -> list[ValidationResult]:
         """运行所有验证"""
@@ -70,7 +120,7 @@ class SkillValidator:
             ))
 
     def _validate_frontmatter(self):
-        content = self.skill_path.read_text(encoding="utf-8")
+        content = self._skill_content()
         if not content.startswith("---"):
             self.results.append(ValidationResult(
                 "Frontmatter", False, "缺少 YAML frontmatter"
@@ -100,7 +150,7 @@ class SkillValidator:
             ))
 
     def _validate_part_a_exists(self):
-        content = self.skill_path.read_text(encoding="utf-8")
+        content = self._skill_content()
         if "PART A" in content or "Part A" in content or "part a" in content.lower():
             self.results.append(ValidationResult(
                 "Part A 存在", True, "包含 Part A 决策工作流"
@@ -111,7 +161,7 @@ class SkillValidator:
             ))
 
     def _validate_part_b_exists(self):
-        content = self.skill_path.read_text(encoding="utf-8")
+        content = self._skill_content()
         if "PART B" in content or "Part B" in content or "part b" in content.lower():
             self.results.append(ValidationResult(
                 "Part B 存在", True, "包含 Part B 决策顾问人格"
@@ -123,7 +173,7 @@ class SkillValidator:
 
     def _validate_formulas(self):
         """验证核心公式是否正确"""
-        content = self.skill_path.read_text(encoding="utf-8")
+        content = self._skill_content()
 
         # 验证期望值公式
         # 检查是否包含期望值的核心要素
@@ -168,35 +218,46 @@ class SkillValidator:
 
     def _validate_core_principles(self):
         """验证核心原则是否被包含"""
-        content = self.skill_path.read_text(encoding="utf-8")
-        knowledge = json.loads(self.knowledge_path.read_text(encoding="utf-8"))
+        content = self._skill_content()
+        content_segments = semantic_segments(content)
+        knowledge = self._knowledge()
 
         principles = knowledge.get("core_principles", [])
         found = []
         missing = []
+        undetermined = []
 
         for principle in principles:
-            # 提取关键词进行检查
-            keywords = self._extract_keywords(principle)
-            if all(kw in content for kw in keywords):
+            covered = self._principle_covered(principle, content_segments)
+            if covered is True:
                 found.append(principle)
-            else:
+            elif covered is False:
                 missing.append(principle)
+            else:
+                # 抽不出可用的语义片段：无法自动判定，显式列出而不是静默当成通过
+                undetermined.append(principle)
 
-        if not missing:
+        if not missing and not undetermined:
             self.results.append(ValidationResult(
                 "核心原则", True, f"全部 {len(found)} 条核心原则都已包含"
             ))
-        else:
-            self.results.append(ValidationResult(
-                "核心原则", False,
-                f"缺少 {len(missing)} 条核心原则: {', '.join(missing)}"
-            ))
+            return
+
+        details = []
+        if missing:
+            details.append(f"缺少 {len(missing)} 条核心原则: {', '.join(missing)}")
+        if undetermined:
+            details.append(
+                f"{len(undetermined)} 条核心原则无法自动判定: {', '.join(undetermined)}"
+            )
+        self.results.append(ValidationResult(
+            "核心原则", False, "; ".join(details)
+        ))
 
     def _validate_algorithm_coverage(self):
         """验证课程核心算法的覆盖率"""
-        content = self.skill_path.read_text(encoding="utf-8")
-        knowledge = json.loads(self.knowledge_path.read_text(encoding="utf-8"))
+        content = self._skill_content()
+        knowledge = self._knowledge()
 
         algorithms = knowledge.get("algorithms", [])
         total = len(algorithms)
@@ -231,7 +292,7 @@ class SkillValidator:
 
     def _validate_no_contradictions(self):
         """验证没有与课程内容直接矛盾的内容"""
-        content = self.skill_path.read_text(encoding="utf-8")
+        content = self._skill_content()
 
         contradictions = []
 
@@ -279,7 +340,7 @@ class SkillValidator:
 
     def _validate_output_template(self):
         """验证是否包含结构化的输出模板"""
-        content = self.skill_path.read_text(encoding="utf-8")
+        content = self._skill_content()
 
         template_elements = [
             ("决策类型" in content, "输出模板包含决策类型"),
@@ -309,7 +370,7 @@ class SkillValidator:
 
     def _validate_layer_structure(self):
         """验证 Part B 的 Layer 结构是否完整"""
-        content = self.skill_path.read_text(encoding="utf-8")
+        content = self._skill_content()
 
         required_layers = [
             ("Layer 0", "硬规则"),
@@ -341,31 +402,28 @@ class SkillValidator:
             ))
 
     def _extract_keywords(self, text: str) -> list[str]:
-        """从中文文本中提取关键词（简化版）"""
-        # 移除标点，保留中文字符和关键英文词
-        # 提取核心词组
+        """从原则文本中提取可用于匹配的语义片段。
+
+        规则：按标点/符号切成语义片段，片段内去掉空白；
+        过短的片段（多为虚词）丢弃；不使用任何硬编码词表，
+        也不做「取前 N 个字符」这种会跨标点的截断。
+        """
         keywords = []
-        # 对于"只做正期望值的事"，提取关键部分
-        if "正期望值" in text:
-            keywords.append("正期望值")
-        if "输不起" in text:
-            keywords.append("输不起")
-        if "先干为敬" in text:
-            keywords.append("先干为敬")
-        if "不考验人性" in text:
-            keywords.append("不考验人性")
-        if "能力圈" in text:
-            keywords.append("能力圈")
-        if "留在牌桌上" in text:
-            keywords.append("留在牌桌上")
-        if "不是每场战斗" in text:
-            keywords.append("不是每场战斗")
-
-        # 如果没有提取到，使用原文本
-        if not keywords:
-            keywords = [text[:10]]  # 取前10个字符作为近似
-
+        for segment in semantic_segments(text):
+            if len(segment) >= MIN_KEYWORD_LENGTH:
+                keywords.append(segment)
         return keywords
+
+    def _principle_covered(self, principle: str, content_segments: Sequence[str]) -> Optional[bool]:
+        """判断一条原则是否已被 SKILL.md 覆盖。
+
+        返回 True 表示已覆盖，False 表示未覆盖，None 表示无法自动判定
+        （原则文本里抽不出可用的语义片段）。
+        """
+        keywords = self._extract_keywords(principle)
+        if not keywords:
+            return None
+        return all(phrase_in_segments(kw, content_segments) for kw in keywords)
 
     def generate_report(self) -> str:
         """生成验证报告"""
