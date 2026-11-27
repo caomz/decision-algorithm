@@ -27,7 +27,7 @@ NEVER：image / video / music / speech / vision / search / quota / config / file
 node <MMX_SKILL_DIR>/scripts/mmx-chat.js --prompt-file <file> [--system-file <file>] [--model <id>] [--max-tokens <n>] [--timeout <sec>] [--wrap-timeout <sec>] [--expected-cli-version <version>]
 ```
 
-prompt 和 system 只经文件传递。按当前平台使用[调用与验证参考](references/verification.md)。默认配置取自[本机运行配置](profiles/local.json)：输出预算 524288，请求超时 600 秒，wrapper 超时 630 秒（`--wrap-timeout` 必须大于 `--timeout`）。优先级：命令行 flag > 环境变量（`MMX_CHAT_REQ_TIMEOUT` / `MMX_CHAT_WRAP_TIMEOUT`）> profile > 硬编码兜底。默认模型由 MMX CLI 选择，用户指定的模型覆盖对应值。批量 supervisor 默认 650 秒；请求、wrapper 与 supervisor 是包含关系，不相加。宿主通过持续会话接收结果；宿主等待到期只结束等待，不据此重发。`--expected-cli-version 1.0.29` 可在本次调用固定已安装版本，版本不符先拒绝，记录本地版本及入口哈希；此 flag 不安装或升级 CLI。快速小请求可显式传 `--timeout 60 --wrap-timeout 80`。
+prompt 和 system 只经文件传递。按当前平台使用[调用与验证参考](references/verification.md)。默认配置取自[本机运行配置](profiles/local.json)：输出预算 524288，请求超时 600 秒，wrapper 超时 630 秒（`--wrap-timeout` 必须大于 `--timeout`）。优先级：命令行 flag > 环境变量（`MMX_CHAT_REQ_TIMEOUT` / `MMX_CHAT_WRAP_TIMEOUT`）> profile > 硬编码兜底。默认模型由 MMX CLI 选择，用户指定的模型覆盖对应值。批量 supervisor 默认 650 秒；请求、wrapper 与 supervisor 是包含关系，不相加。宿主通过持续会话接收结果；宿主等待到期只结束等待，不据此重发。`--expected-cli-version 1.0.29` 可在本次调用固定已安装版本，版本不符先拒绝，记录本地版本及入口哈希；此 flag 不安装或升级 CLI。快速小请求可显式传 `--timeout 60 --wrap-timeout 80`。正式验收入口为 `scripts/acceptance-profile.js --config <组合文件> --dry-run|-- <入口.js>`：只有组合文件被明确批准为精确的获准组合（Node 版本、CLI 包与版本、入口完整 SHA-256、undici 版本）且逐项匹配时才放行；随仓库分发的 `acceptance-profile.example.json` 未批准且为空，缺省一律拒绝。日常调用不经此入口。
 
 调用壳层失败分支（实测两条 dev 各踩一次）：Windows 下 NEVER 经 `cmd /c` 调用或重定向——宿主沙箱普遍拦截。文本 wrapper 与非文本 CLI 一律按 [调用与验证参考](references/verification.md) 对应平台章节走 PowerShell，重定向前先设 `[Console]::OutputEncoding=[Text.Encoding]::UTF8`。宿主前台等待不足时保留原任务句柄并做有界查询；未通过原生生命周期及真实传输栈验收前，不默认切换为新的持久任务入口。NEVER 裸等固定时长或换壳反复重试。
 
@@ -41,7 +41,7 @@ node <MMX_SKILL_DIR>/scripts/mmx-batch.js --prompt-file <f1> [--prompt-file <f2>
 
 - **材料大小**：batch 默认单片上限 16384 字节，`--shard-max-bytes` 可设 8192–16384。超限在启动 wrapper 前拒绝；不自动按字节切开逻辑单元，保留原输出预算。
 - 每片仍是一次完整 `mmx-chat.js` 调用（单发语义不变，wrapper 契约原样继承）。批级回执含每片完整回执、`batch` 统计与**传输层 gate**：全片 `status=ok` 且 `complete` 且未截断 → `PASS`；任一片截断/超时/失败 → `NOT_EVALUATED`（与 zcode-mmx-review 的 COMPLETED 语义对齐）。findings 级 P1/P2 判定仍由宿主完成，批级 gate 不冒充内容判定。
-- **重试边界**：预算不足、截断、额度、超时、网络失败或终态未知时均不自动重发。本阶段不提供自动付费重试入口；如需再请求须另行授权并先检查原任务证据。
+- **重试边界**：预算不足、截断、额度、超时、网络失败或终态未知时均不自动重发。本阶段不提供自动付费重试入口；同材料的再次评审取决于当前会话授权，且必须先核对原任务证据；UNKNOWN 只查询，不重发。
 - **监督时限**：单片默认 有效 wrapper 时限 + 20 秒；批次默认按片数与并发计算、上限 86400 秒。可显式使用 `--supervisor-timeout-seconds` / `--batch-timeout-seconds`（1–86400 秒）；另有 8 秒监督清理预算，超时不自动重发。
 - **NEVER 裸调 `mmx text chat` 送评审**：CLI 自身默认 `--max-tokens 4096`，服务端思考轻易超限（2026-11-18 实证：6 断言评审即截断）；一切评审调用必须经 `mmx-chat.js` / `mmx-batch.js`。
 
@@ -120,7 +120,7 @@ stdout 恒为单个 JSON，字段与 `mmx-chat.js` 对齐，多出 `effort` 与 
 
 ## 已知限制（如实告知，不掩饰）
 
-- **300 秒响应头上限**（2026-11-19 macOS 实测）：Node 内置 fetch 等响应头最多 300 秒，非流式回复生成完才发响应头。wrapper 预加载防护（`fetch_timeout_guard=preloaded`）只能证明初始化，真实调用是否仍使用该 dispatcher 需按版本和代理配置验证；代理（非空的代理环境变量，或 mmx 配置中以 `http` 开头的 `proxy`，回执记 `proxy_limited`）或自定义启动入口下上限仍在，超时表现为 `api_error`、退出码 6，回执附 `hint`。Windows 尚未实测。
+- **300 秒响应头上限**（2026-11-19 macOS 实测）：Node 内置 fetch 等响应头最多 300 秒，非流式回复生成完才发响应头。wrapper 预加载防护（`fetch_timeout_guard=preloaded`）只能证明初始化，真实调用是否仍使用该 dispatcher 需按版本和代理配置验证；代理（非空的代理环境变量，或 mmx 配置中以 `http` 开头的 `proxy`，回执记 `proxy_limited`）或自定义启动入口下上限仍在，超时表现为 `api_error`、退出码 6，回执附 `hint`。Windows 尚未实测。另有 Node 层机制：部分版本在存在代理环境变量时自动启用 EnvHttpProxyAgent，且其安装发生在 preload 之后、会覆盖 guard；`NODE_USE_ENV_PROXY=1` 即显式启用。回执 `fetch_guard_detail` 记录 Node 版本与代理来源；"初始化成功"与"请求确实经过该 dispatcher"须用本地受控服务和 `MMX_CHAT_GUARD_TRACE` 计数区分。
 
 - **裸 CLI 截断陷阱**（2026-11-18 实证）：绕过 wrapper 直接 `mmx text chat` 时 CLI 默认 `--max-tokens 4096`，服务端默认思考计入输出预算，6 断言级评审即可吃光预算出现截断或纯思考回执。所有评审调用必须经 `mmx-chat.js` / `mmx-batch.js`；分片预算不足由 `mmx-batch.js` 报告，不自动重发。
 
@@ -136,7 +136,7 @@ stdout 恒为单个 JSON，字段与 `mmx-chat.js` 对齐，多出 `effort` 与 
 图片、视频、语音、网页搜索、工具调用及凭证管理走 [MMX CLI 参考](references/cli-reference.md)，H3 视频见 `references/h3-video/SKILL.md`。壳层纪律与文本 wrapper 相同（见「调用」）：Windows NEVER `cmd /c`，PowerShell 配方见 [调用与验证参考](references/verification.md)。
 
 ### V2 Phase 2 安全边界
-每批默认并发 1，所有分片先保存输入快照和请求意图，逐片保留独立回执。`--receipt-file` 必须是新路径；未指定时建立私有临时证据目录。MMX 批次有效请求和 wrapper 时限均不得超过 3600 秒。批量 `gate` 保持原协议含义，不能代替两方独立统一评审。仅本地退出/管道关闭不能证明远端停止或未计费；未知分片禁止重放。供应方 CLI/SDK 内部重试尚未完成真实固定版本传输栈验证，本候选不得据此进入付费使用。
+每批默认并发 1，所有分片先保存输入快照和请求意图，逐片保留独立回执。`--receipt-file` 必须是新路径；未指定时建立私有临时证据目录。MMX 批次有效请求和 wrapper 时限均不得超过 3600 秒。批量 `gate` 保持原协议含义，不能代替两方独立统一评审。仅本地退出/管道关闭不能证明远端停止或未计费；未知分片禁止重放。供应方 CLI/SDK 内部重试尚未完成真实固定版本传输栈验证；`mmx-job.js` 持久入口与统一入口 real backend 在该验收完成前不得用于付费调用，已验收的单发与批量入口不受影响。
 
 
 ### V2.1 持久任务实验

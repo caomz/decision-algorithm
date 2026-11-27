@@ -53,7 +53,7 @@ node <ZCODE_SKILL_DIR>/scripts/zcode-batch.js --prompt-file <f1> [--prompt-file 
 
 ## 执行与结果
 
-独立 wrapper 默认运行时限仍为 1200 秒；ZMX 配对入口显式传 600 秒，MMX 的请求/wrapper/supervisor 为 600/630/650 秒。`--timeout-seconds` 可在本次授权内调整，先排查传输原因并按逻辑分片，不以延长超时掩盖问题。宿主前台同步调用仍受宿主工具时限约束，评审规模请求走持久后台 job 或 batch 入口。`--output-dir` 指向一个尚不存在的目录，用于保存输入、完整原始运行流、stderr、启动指纹与 `receipt.json`；省略时在系统临时目录创建并保留私有目录。
+独立 wrapper 默认运行时限仍为 1200 秒；ZMX 配对入口显式传 600 秒，MMX 的请求/wrapper/supervisor 为 600/630/650 秒。`--timeout-seconds` 可在本次授权内调整，先排查传输原因并按逻辑分片，不以延长超时掩盖问题。宿主前台同步调用仍受宿主工具时限约束；评审规模请求优先按逻辑分片走 batch 入口，持久后台 job 在原生生命周期验收完成前不作为默认建议。`--output-dir` 指向一个尚不存在的目录，用于保存输入、完整原始运行流、stderr、启动指纹与 `receipt.json`；省略时在系统临时目录创建并保留私有目录。
 
 每次请求在启动和首个模型请求时原子更新 `progress.json`，记录 wrapper/CLI PID、阶段及观察到的模型；只有最终有效回执才可作为完成依据。监督器另给 wrapper 预检与清理 45 秒余量，超出后终止本任务进程组并保留真实退出记录。
 
@@ -66,4 +66,4 @@ node <ZCODE_SKILL_DIR>/scripts/zcode-batch.js --prompt-file <f1> [--prompt-file 
 当前适配 ZCode `0.17.1`（本机 `zcode --version` 输出两行，取其中的 `zcode-runtime` 版本）。真实验收结论以对应完整回执为准。其他版本先按参考文档重新验收，不降级权限继续调用。独立安装清单存在时调用前核对文件哈希；清单按 LF 归一化内容计算，Mac 与 Windows 共用同一份。安装到新会话后，Codex 使用 `$zcode`，Claude 使用 `/zcode`。
 
 ### V2 Phase 2 安全边界
-每批默认并发 1，所有分片先保存输入快照和请求意图，逐片保留独立回执。`--receipt-file` 必须是新路径；未指定时建立私有临时证据目录。MMX 批次有效请求和 wrapper 时限均不得超过 3600 秒。批量 `gate` 保持原协议含义，不能代替两方独立统一评审。仅本地退出/管道关闭不能证明远端停止或未计费；未知分片禁止重放。供应方 CLI/SDK 内部重试尚未完成真实固定版本传输栈验证，本候选不得据此进入付费使用。
+每批默认并发 1，所有分片先保存输入快照和请求意图，逐片保留独立回执。`--receipt-file` 必须是新路径；未指定时建立私有临时证据目录。单分片监督上限沿用请求时限 + 45 秒，批次上限 86400 秒。批级回执分别报告 `transport_gate`、`lifecycle_gate` 与内容 `gate`，任何一方都不能代替两方独立统一评审。仅本地退出/管道关闭不能证明远端停止或未计费；未知分片禁止重放。供应方 CLI/SDK 内部重试尚未完成真实固定版本传输栈验证；zcode 的持久后台入口（`zcode-run.js`）、MMX 的 `mmx-job.js` 与统一入口 real backend 在该验收完成前不得用于付费调用。

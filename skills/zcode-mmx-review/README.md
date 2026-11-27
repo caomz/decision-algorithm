@@ -108,6 +108,10 @@ cp /Users/mingtian/.agents/harness/docs/zcode-mmx-review.md \
    /Volumes/WorkSSD/Dev/decision-algorithm/skills/zcode-mmx-review/
 ```
 
+## 规则正本同步（OWNER_ACTION_REQUIRED）
+
+本目录的 `zcode-mmx-review.md` 与 `provider-agent-review.md` 是记录副本；macOS 生效正本在 `~/.agents/harness/docs/`，合并分支不会更新正本。同步清单、哈希与核对步骤见 [`docs/zmx-stability-v2/07-owner-sync.md`](../../docs/zmx-stability-v2/07-owner-sync.md)；保留正本本地定制，不得盲目覆盖。
+
 ## 校验
 
 `zcode` skill 自带发布清单 `.zcode-release.json`，按 skill 要求「调用前核对文件哈希」。

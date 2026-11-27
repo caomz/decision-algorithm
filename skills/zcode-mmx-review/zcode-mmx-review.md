@@ -32,6 +32,10 @@
 
 配对统一入口显式给两侧 600 秒；独立 `zcode-chat.js` 的旧默认值仍是 1200 秒，不能用它推断配对运行参数。MMX 默认 600/630/650 秒不变。超时诊断先核对实际 CLI 版本、guard 初始化、代理、请求参数、wrapper 和 supervisor 的独立时钟，再用受控服务区分延迟响应头、响应体停滞和隐式重试。
 
+## 宿主调用与完整结果提交
+
+`review-run.js run` 对流式宿主经 stderr 的 `PRIMARY_REVIEW_READY` 立即交付主检查点；只在进程退出后读结果的宿主应以分离/后台方式启动并轮询运行目录，主检查点（`primary-result.json`）在协调器被杀后仍然完整。`result.json` 是最后写入的记录：它出现即表示 `record-manifest.json` 已就绪、完整档案已提交；只有 `result.json` 而无清单不是完整结果。封存输入（packet/material/IDs/prompt）与派发时摘要不一致时发布被拒绝并写 `integrity-error.json`，其中保留启动时材料版本的有效判定；宿主应报告完整性异常而不是内容 FAIL。
+
 ## 持久任务与断线查询
 
 本候选的 `mmx-job.js` 是显式 fixture 实验入口，默认拒绝真实启动。复用 Phase 3 的持久记录、永久 `worker.lock`、输入快照和完成摘要，再增加幂等提交、同一宿主/用户的并发槽和只读等待。具体命令与状态见[持久任务合同](../../docs/zmx-stability-v2/04-durable-tasks.md)。

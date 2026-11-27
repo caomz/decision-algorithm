@@ -1703,10 +1703,34 @@ if (require.main === module) {
     });
 }
 
+// ---------------------------------------------------------------------------
+// F-lite: transport-and-recovery handoff to the durable fixture entry. The
+// durable secondary carries no content vote (the pinned fixture protocol is
+// not review-v1), so the composed gates keep any valid primary verdict and
+// never turn a transport PASS into a review PASS.
+// ---------------------------------------------------------------------------
+function durableHandoffKey(parts) {
+  if (!Array.isArray(parts) || !parts.length || parts.some(part => typeof part !== "string" || !part)) {
+    fail("durable handoff key needs an array of nonempty strings");
+  }
+  return hash(parts.join("\u0000"));
+}
+function composeDurableSecondary(primaryResult, jobStatus) {
+  const primaryGate = primaryResult && typeof primaryResult === "object" ? primaryResult.PRIMARY_REVIEW_GATE : "NOT_EVALUATED";
+  return {
+    PRIMARY_REVIEW_GATE: primaryGate,
+    SECONDARY_REVIEW_GATE: "NOT_EVALUATED",
+    SECONDARY_NOT_EVALUATED_REASON: "durable_content_vote_not_wired",
+    REVIEW_GATE: primaryGate === "FAIL" ? "FAIL" : "NOT_EVALUATED",
+    secondary_transport: jobStatus?.status ?? "unknown",
+    note: "the durable fixture handoff proves idempotent transport and read-only recovery only",
+  };
+}
+
 module.exports = {
   ENTRY_VERSION, LIMITS, USAGE, SKILLS, STRATEGIES, materialBinding,
   packetFrom, materialFrom, evidenceIdsFrom, buildRunPacket, assembleInputs,
   materialWarnings, tailUtf8, parsePatch, diffstatText, verifyChanges, coverageDeclared,
   family, evaluateSide, tally, runFixtureRound, verifyRun, doctorOffline, argsFrom, ADJUDICATION_FILES,
-  writeRunInputs, writeRunRecords,
+  writeRunInputs, writeRunRecords, durableHandoffKey, composeDurableSecondary,
 };
