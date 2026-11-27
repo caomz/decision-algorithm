@@ -16,7 +16,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { createBatch, limitSeconds, sourceBytes } = require("./batch-safety.js");
+const { createBatch, limitSeconds, sourceBytes, resolveWrapper } = require("./batch-safety.js");
 
 const VERSION = "1.0.0";
 const DEFAULT_PROFILE = path.join(__dirname, "..", "profiles", "local.json");
@@ -257,13 +257,17 @@ async function main() {
   if (!positiveInteger(wrap) || !positiveInteger(req) || wrap <= req || wrap > 3600) usageError("invalid effective request/wrapper deadline (batch max 3600 seconds)");
   fixedArgs.push("--timeout", String(req), "--wrap-timeout", String(wrap));
   const supervisorSeconds = args.supervisorTimeout ?? wrap + 20;
+  // Resolve the per-shard wrapper before any evidence directory is reserved.
+  let wrapper;
+  try { wrapper = resolveWrapper(process.env, "mmx", DEFAULT_WRAPPER); }
+  catch (error) { fail({ status: "usage_error", gate: GATE_NOT_EVALUATED, error: error.message }); return; }
   try { controller = createBatch({ side: "mmx", args, shards, fixedArgs,
     configFiles: [{ flag: "--profile-file", bytes: profileBytes, name: "profile.json" }],
     supervisorSeconds, parseReceipt: JSON.parse }); }
   catch { fail({ status: "archive_error", gate: GATE_NOT_EVALUATED, error: "could not reserve or snapshot batch evidence" }); return; }
   await new Promise(resolve => setImmediate(resolve));
   if (cancelled) controller.stop("cancelled");
-  const results = await controller.run(process.env.MMX_BATCH_WRAPPER || DEFAULT_WRAPPER);
+  const results = await controller.run(wrapper);
 
   let okCount = 0;
   let transportOkCount = 0;

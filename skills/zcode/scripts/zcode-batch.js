@@ -16,7 +16,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { createBatch, limitSeconds, sourceBytes } = require("./batch-safety.js");
+const { createBatch, limitSeconds, sourceBytes, resolveWrapper } = require("./batch-safety.js");
 const { validateReview, strictJson } = require("./review.js");
 
 const VERSION = "1.0.0";
@@ -279,13 +279,17 @@ async function main() {
 
   const started = Date.now();
   const supervisorSeconds = args.supervisorTimeout ?? timeout + 45;
+  // Resolve the per-shard wrapper before any evidence directory is reserved.
+  let wrapper;
+  try { wrapper = resolveWrapper(process.env, "zcode", DEFAULT_WRAPPER); }
+  catch (error) { fail({ status: "usage_error", gate: "NOT_EVALUATED", transport_gate: "NOT_EVALUATED", error: error.message }); return; }
   try { controller = createBatch({ side: "zcode", args, shards, fixedArgs,
     configFiles: idsBytes === null ? [] : [{ flag: "--evidence-ids-file", bytes: idsBytes, name: "evidence.json" }],
     supervisorSeconds, parseReceipt: strictJson }); }
   catch { fail({ status: "archive_error", gate: "NOT_EVALUATED", transport_gate: "NOT_EVALUATED", error: "could not reserve or snapshot batch evidence" }); return; }
   await new Promise(resolve => setImmediate(resolve));
   if (cancelled) controller.stop("cancelled");
-  const results = await controller.run(process.env.ZCODE_BATCH_WRAPPER || DEFAULT_WRAPPER);
+  const results = await controller.run(wrapper);
 
   const envelope = { ...aggregate(results, shards, args, started), shards: results };
   controller.finalize(envelope);

@@ -6,7 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 const http = require("node:http");
 const { spawn } = require("node:child_process");
-const { cleanEnv } = require("./support/env.js");
+const { cleanEnv, fixtureEnv } = require("./support/env.js");
 
 test("T06 synthetic HTTP count: both batches dispatch once per failed shard", { timeout: 30000 }, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "zmx-http-count-"));
@@ -40,7 +40,7 @@ test("T06 synthetic HTTP count: both batches dispatch once per failed shard", { 
       const script=path.resolve(__dirname,"..","..",side,"scripts",side+"-batch.js");
       const child=spawn(process.execPath,[script,...files.flatMap(file=>["--prompt-file",file]),"--concurrency","1"],
         {stdio:["ignore","pipe","pipe"],env:cleanEnv({TMPDIR:root,TMP:root,TEMP:root,
-          [side.toUpperCase()+"_BATCH_WRAPPER"]:wrapper,FAKE_PORT:String(port)})});
+          ...fixtureEnv(side, wrapper),FAKE_PORT:String(port)})});
       let stdout="";child.stdout.on("data",b=>{stdout+=b;});child.stderr.resume();
       const code=await new Promise((resolve,reject)=>{child.once("error",reject);child.once("close",resolve);});
       assert.equal(code,1);

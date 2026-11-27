@@ -15,6 +15,18 @@ const { createHash } = require("node:crypto");
 const RUNNER = path.resolve(__dirname, "../scripts/review-run.js");
 const runner = require(RUNNER);
 const { cleanEnv } = require("./support/env.js");
+
+// Creating a file symbolic link needs extra privilege on some Windows hosts.
+// Symlink-dependent cases skip where the host cannot create one; a skip is
+// reported as a skip and never counts as a pass for that behaviour.
+const canSymlink = (() => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "zmx-symlink-probe-"));
+  const file = path.join(dir, "file"), link = path.join(dir, "link");
+  try { fs.writeFileSync(file, "x"); fs.symlinkSync(file, link, "file"); return fs.readlinkSync(link) === file; }
+  catch { return false; }
+  finally { try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} }
+})();
+const symlinkSkip = !canSymlink && "file symbolic links cannot be created on this host";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "zmx-review-run-"));
 const sha256 = bytes => createHash("sha256").update(bytes).digest("hex");
 
@@ -660,7 +672,7 @@ describe("verify", () => {
     assert.ok(report(outcome).problems.some(problem => problem.includes("model_family")));
   });
 
-  test("a symlinked record-manifest.json fails integrity", () => {
+  test("a symlinked record-manifest.json fails integrity", { skip: symlinkSkip }, () => {
     const dir = copyArchive(baseBoth, "verify-manifest-link");
     // 从零构造：真清单移作副本外的原件，目录内放指向它的符号链接（不删除任何文件）。
     const outside = path.join(root, "verify-manifest-outside.json");
@@ -1067,7 +1079,7 @@ describe("verify integrity locks (F2: M12b, M20, M32, M35)", () => {
     assert.ok(report(outcome).problems.some(problem => problem.includes("started_at missing")));
   });
 
-  test("a record-manifest symlink pointing inside the run directory is corrupt (M12b)", () => {
+  test("a record-manifest symlink pointing inside the run directory is corrupt (M12b)", { skip: symlinkSkip }, () => {
     const dir = copyArchive(base, "f2i-m12b");
     // 目录内符号链接：真清单改名收存，链接指回它。lstat 拒链接本身。
     fs.renameSync(path.join(dir, "record-manifest.json"), path.join(dir, "record-manifest.real.json"));
@@ -1103,7 +1115,7 @@ describe("run-level regression locks (F2: M27, M28, M33)", () => {
     assert.equal(record.round_status, "NOT_EVALUATED");
   });
 
-  test("a symlinked scenarios.json refuses to start with zero launches (M33)", () => {
+  test("a symlinked scenarios.json refuses to start with zero launches (M33)", { skip: symlinkSkip }, () => {
     // 在 X 风格的副本树里构造：scenarios.json 换成指向目录内副本的符号链接。
     const tree = path.join(root, "f2-m33-tree");
     fs.mkdirSync(tree, { recursive: true });

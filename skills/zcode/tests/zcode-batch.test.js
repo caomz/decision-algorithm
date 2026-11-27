@@ -10,7 +10,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { spawnSync, spawn } = require("node:child_process");
-const { cleanEnv } = require("./support/env.js");
+const { cleanEnv, fixtureEnv } = require("./support/env.js");
 
 const skillRoot = path.resolve(__dirname, "..");
 const batch = path.join(skillRoot, "scripts", "zcode-batch.js");
@@ -107,7 +107,7 @@ emit(ok());
 function runBatch(args, extraEnv = {}) {
   return spawnSync(process.execPath, [batch, ...args], {
     encoding: "utf8", windowsHide: true, shell: false, timeout: 20000,
-    env: cleanEnv({ TMPDIR: archiveTmp, TMP: archiveTmp, TEMP: archiveTmp, ZCODE_BATCH_WRAPPER: fakeWrapper, FAKE_STATE_DIR: stateDir,
+    env: cleanEnv({ TMPDIR: archiveTmp, TMP: archiveTmp, TEMP: archiveTmp, ...fixtureEnv("zcode", fakeWrapper), FAKE_STATE_DIR: stateDir,
                     FAKE_ARGS_DUMP: argsDump, FAKE_CONC_LOG: concLog, ZCODE_BATCH_RETRY_MS: "10", ...extraEnv }),
   });
 }
@@ -400,7 +400,7 @@ test("Phase 2: repeated cancellation preserves completed evidence and prevents q
   const output = path.join(root, "p2-cancel.json");
   const child = spawn(process.execPath, [batch, "--prompt-file", a, "--prompt-file", b, "--prompt-file", c,
     "--concurrency", "1", "--receipt-file", output], { stdio: ["ignore","pipe","pipe"],
-    env: cleanEnv({ ZCODE_BATCH_WRAPPER: fakeWrapper, FAKE_STATE_DIR: stateDir,
+    env: cleanEnv({ ...fixtureEnv("zcode", fakeWrapper), FAKE_STATE_DIR: stateDir,
       TMPDIR: archiveTmp, TMP: archiveTmp, TEMP: archiveTmp }) });
   let stdout = "";
   child.stdout.on("data", chunk => { stdout += chunk; });
@@ -453,7 +453,7 @@ test("Phase 2: abrupt batch crash leaves completed shard and unknown intent",
   const output = path.join(root,"p2-crash.json");
   const child = spawn(process.execPath,[batch,"--prompt-file",a,"--prompt-file",b,"--prompt-file",c,
     "--concurrency","1","--receipt-file",output], {stdio:["ignore","pipe","pipe"],
-    env:cleanEnv({ ZCODE_BATCH_WRAPPER:fakeWrapper, FAKE_STATE_DIR:stateDir,
+    env:cleanEnv({ ...fixtureEnv("zcode", fakeWrapper), FAKE_STATE_DIR:stateDir,
       TMPDIR:archiveTmp,TMP:archiveTmp,TEMP:archiveTmp })});
   child.stdout.resume(); child.stderr.resume();
   const terminal = new Promise(resolve=>child.once("close",(code,signal)=>resolve({code,signal})));

@@ -11,6 +11,35 @@ const CAP = 16 * 1024 * 1024;
 const CLEANUP_MS = 8000;
 const hash = b => createHash("sha256").update(b).digest("hex");
 const json = o => JSON.stringify(o, null, 2) + "\n";
+
+// Explicit offline fixture contract for the per-shard wrapper. An override is
+// honoured only when ZMX_OFFLINE_FIXTURE=1 is set together with an absolute
+// regular file inside the declared fixture root (after realpath) and its
+// SHA-256. In offline mode nothing is ever defaulted: a missing, empty,
+// relative, escaping or mismatched wrapper is refused before an archive is
+// reserved or a process starts. Outside offline mode an override is an
+// error, so a test can never reach the production wrapper by omission.
+function resolveWrapper(env, side, defaultWrapper) {
+  const key = side.toUpperCase() + "_BATCH_WRAPPER";
+  const override = env[key];
+  const refuse = why => { throw Object.assign(new Error(`offline fixture wrapper refused: ${why}`), { code: "ZMX_FIXTURE_CONTRACT" }); };
+  if (env.ZMX_OFFLINE_FIXTURE !== "1") {
+    if (override !== undefined) throw Object.assign(new Error(`${key} requires ZMX_OFFLINE_FIXTURE=1`), { code: "ZMX_FIXTURE_CONTRACT" });
+    return defaultWrapper;
+  }
+  if (typeof override !== "string" || !override) refuse("wrapper path missing");
+  if (!path.isAbsolute(override)) refuse("wrapper path must be absolute");
+  const root = env.ZMX_FIXTURE_ROOT, expected = env.ZMX_FIXTURE_SHA256;
+  if (typeof root !== "string" || !path.isAbsolute(root)) refuse("fixture root missing or not absolute");
+  if (typeof expected !== "string" || !/^[a-f0-9]{64}$/.test(expected)) refuse("wrapper digest missing");
+  let stat;
+  try { stat = fs.lstatSync(override); } catch { refuse("wrapper not found"); }
+  if (stat.isSymbolicLink() || !stat.isFile()) refuse("wrapper is not a regular file");
+  const real = fs.realpathSync(override);
+  if (!real.startsWith(fs.realpathSync(root) + path.sep)) refuse("wrapper escapes the fixture root");
+  if (hash(fs.readFileSync(real)) !== expected) refuse("wrapper digest mismatch");
+  return real;
+}
 function claimArchive(file, side) {
   // Even callers without --receipt-file get a private, crash-retained archive.
   // Never silently run an unarchived billed request.
@@ -306,4 +335,4 @@ function createBatch({ side, args, shards, fixedArgs, configFiles, supervisorSec
   }
   return { run, stop, finalize };
 }
-module.exports = { createBatch, limitSeconds, sourceBytes };
+module.exports = { createBatch, limitSeconds, sourceBytes, resolveWrapper };

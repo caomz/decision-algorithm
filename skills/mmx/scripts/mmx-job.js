@@ -214,7 +214,12 @@ function fixtureEnv(job, request) {
   for (const key of ["SystemRoot", "SYSTEMROOT", "WINDIR", "ComSpec", "COMSPEC"])
     if (process.env[key]) env[key] = process.env[key];
   if (request) {
+    // The batch honours a wrapper override only through the explicit offline
+    // fixture contract: pinned script, declared root and exact digest.
     env.MMX_BATCH_WRAPPER = FIXTURE;
+    env.ZMX_OFFLINE_FIXTURE = "1";
+    env.ZMX_FIXTURE_ROOT = path.dirname(FIXTURE);
+    env.ZMX_FIXTURE_SHA256 = fingerprint(FIXTURE).sha256;
     env.MMX_DURABLE_FIXTURE_DELAY_MS = String(request.fixture_delay_ms);
   }
   return env;
