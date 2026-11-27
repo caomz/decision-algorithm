@@ -201,8 +201,10 @@ function aggregate(results, shards, args, started) {
   let reviewPass = 0;
   let reviewFail = 0;
   let reviewNotEvaluated = 0;
+  let lifecycleOkCount = 0;
   for (const result of results) {
     if (!result) continue; // A cancelled batch may leave unscheduled shards empty.
+    if (result.lifecycle_validation === "PASS") lifecycleOkCount++;
     if (result.status === "ok") {
       okCount++;
       if (result.transport_validation === "PASS") {
@@ -221,17 +223,20 @@ function aggregate(results, shards, args, started) {
   let gate;
   if (args.mode === "chat") gate = "NOT_EVALUATED";
   else if (reviewFail > 0) gate = "FAIL"; // A confirmed finding outranks transport noise.
-  else if (reviewPass === shards.length) gate = "PASS";
+  // A complete content PASS also needs every shard's local cleanup confirmed.
+  else if (reviewPass === shards.length && lifecycleOkCount === shards.length) gate = "PASS";
   else gate = "NOT_EVALUATED";
   const batchStatus = transportOkCount === shards.length ? "ok" : (transportOkCount > 0 ? "partial" : "failed");
   return {
     status: batchStatus,
     gate,
     transport_gate: transportGate,
+    lifecycle_gate: lifecycleOkCount === shards.length ? "PASS" : "NOT_EVALUATED",
     batch: {
       shards: shards.length, ok: okCount, transport_ok: transportOkCount,
       truncated_or_incomplete: truncatedCount, retried: retriedCount,
       review_pass: reviewPass, review_fail: reviewFail, review_not_evaluated: reviewNotEvaluated,
+      lifecycle_ok: lifecycleOkCount,
       mode: args.mode,
       concurrency: args.concurrency ?? DEFAULT_CONCURRENCY,
       wall_seconds: Number(((Date.now() - started) / 1000).toFixed(1)),

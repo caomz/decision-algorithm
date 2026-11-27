@@ -273,6 +273,7 @@ async function main() {
   let transportOkCount = 0;
   let truncatedCount = 0;
   let retriedCount = 0;
+  let lifecycleOkCount = 0;
   for (const result of results) {
     if (!result) continue; // A cancelled batch may leave unscheduled shards empty.
     if (result.status === "ok") {
@@ -280,9 +281,15 @@ async function main() {
       if (result.transport_validation === GATE_PASS) transportOkCount++;
       else truncatedCount++;
     }
+    if (result.lifecycle_validation === GATE_PASS) lifecycleOkCount++;
     if (result.retried) retriedCount++;
   }
-  const gate = transportOkCount === shards.length ? GATE_PASS : GATE_NOT_EVALUATED;
+  const transportGate = transportOkCount === shards.length ? GATE_PASS : GATE_NOT_EVALUATED;
+  const lifecycleGate = lifecycleOkCount === shards.length ? GATE_PASS : GATE_NOT_EVALUATED;
+  // A batch gate PASS is a safe completion: every shard delivered on
+  // transport and every shard's local cleanup confirmed. Both are reported
+  // separately so neither can stand in for the other.
+  const gate = transportOkCount === shards.length && lifecycleOkCount === shards.length ? GATE_PASS : GATE_NOT_EVALUATED;
   // Batch status follows transport-level usability, not raw API success: a
   // truncated reply is not a delivered shard even though status was "ok".
   const batchStatus = transportOkCount === shards.length ? "ok" : (transportOkCount > 0 ? "partial" : "failed");
@@ -290,10 +297,11 @@ async function main() {
   const envelope = {
     status: batchStatus,
     gate,
-    transport_gate: gate,
+    transport_gate: transportGate,
+    lifecycle_gate: lifecycleGate,
     review_gate: GATE_NOT_EVALUATED,
     batch: {
-      shards: shards.length, ok: okCount, transport_ok: transportOkCount,
+      shards: shards.length, ok: okCount, transport_ok: transportOkCount, lifecycle_ok: lifecycleOkCount,
       truncated_or_incomplete: truncatedCount, retried: retriedCount,
       concurrency, wall_seconds: Number(((Date.now() - started) / 1000).toFixed(1)),
       effective_max_tokens: effectiveBudget, retry_max_tokens: retryBudget,
