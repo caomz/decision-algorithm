@@ -167,8 +167,12 @@ test("material, receipt and execution tampering return UNKNOWN without repair", 
 
 test("rehashing a swapped result cannot mix material versions", async () => {
   const c = setup(); const job = start(path.join(c.dir, "job"), c.options).job_dir; await finished(job);
-  await until(() => fs.existsSync(path.join(job, "slot-release.json")));
-  fs.unlinkSync(path.join(job, "slot-release.json"));
+  // Windows has no proven group-disappearance check, so a finished job there
+  // keeps its slot and never writes a release record.
+  if (process.platform !== "win32") {
+    await until(() => fs.existsSync(path.join(job, "slot-release.json")));
+    fs.unlinkSync(path.join(job, "slot-release.json"));
+  }
   const receipt = read(job, "receipt.json"); receipt.shards[0].material_sha256 = "f".repeat(64);
   fs.writeFileSync(path.join(job, "receipt.json"), JSON.stringify(receipt));
   const execution = read(job, "execution.json"); execution.outputs["receipt.json"] = fp(path.join(job, "receipt.json"));

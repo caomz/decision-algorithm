@@ -49,10 +49,15 @@ function syncCreatedPath(dir, firstCreated) {
 function syncFile(file) {
   const before = fs.lstatSync(file);
   if (!before.isFile() || before.isSymbolicLink()) throw new Error("durability output must be regular");
-  const fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+  // FlushFileBuffers on Windows needs a handle with write access; a read-only
+  // descriptor fails with EPERM. Open the existing file read/write without
+  // O_CREAT or O_TRUNC so nothing is created, truncated or rewritten, and keep
+  // the identity checks: the synced bytes belong to the record just written.
+  const fd = fs.openSync(file, fs.constants.O_RDWR | (fs.constants.O_NOFOLLOW || 0));
   try {
     const opened = fs.fstatSync(fd);
     if (opened.dev !== before.dev || opened.ino !== before.ino) throw new Error("durability output changed");
+    if (opened.size !== before.size) throw new Error("durability output changed");
     fs.fsyncSync(fd);
   } finally { fs.closeSync(fd); }
 }
