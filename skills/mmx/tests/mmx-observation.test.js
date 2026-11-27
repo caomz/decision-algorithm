@@ -130,7 +130,7 @@ test("phase D: a matching approved combination is reported in dry-run without la
   fs.mkdirSync(path.join(base, "node_modules", "undici"), { recursive: true });
   fs.writeFileSync(path.join(pkg, "package.json"), JSON.stringify({ name: "mmx-cli", version: "9.9.9", bin: { mmx: "dist/mmx.mjs" } }));
   const entry = path.join(pkg, "dist", "mmx.mjs");
-  fs.writeFileSync(entry, "// synthetic entry; never executed\n");
+  fs.writeFileSync(entry, "// synthetic entry; never executed\n", { mode: 0o755 }); // POSIX PATH lookup needs X_OK
   fs.writeFileSync(path.join(base, "node_modules", "undici", "package.json"), JSON.stringify({ name: "undici", version: "1.2.3", main: "index.js" }));
   fs.writeFileSync(path.join(base, "node_modules", "undici", "index.js"), "");
   if (process.platform === "win32") {
