@@ -12,7 +12,7 @@ const path = require("path");
 const { spawn, spawnSync } = require("child_process");
 const { TextDecoder } = require("util");
 
-const VERSION = "2.8.0";
+const VERSION = "2.8.1";
 const FETCH_GUARD = path.join(__dirname, "fetch-timeout-guard.js");
 const PROXY_VARIABLES = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"];
 const FETCH_LIMIT_MS = 300000;
@@ -395,7 +395,7 @@ function auditedPackageRoots(env = process.env, platform = process.platform) {
   push(path.join(home, ".npm-global", "lib", "node_modules"));
   push(path.join(home, ".node_modules"));
   if (platform === "win32") {
-    push(path.join(env.APPDATA || path.join(home, "AppData", "Roaming"), "npm", "node_modules"));
+    push(path.join(env[envKey(env, "APPDATA", platform)] || path.join(home, "AppData", "Roaming"), "npm", "node_modules"));
   } else {
     push("/usr/local/lib/node_modules");
     push("/opt/homebrew/lib/node_modules");
@@ -464,20 +464,85 @@ function npmBinCandidates(pkgRoot) {
   return candidates;
 }
 
-// A launcher on PATH may only be bypassed when it is a thin wrapper for the
-// audited entry. The check is textual on purpose: a script that never mentions
-// the audited package is some other program and must not be replaced.
-function launcherTargetsAudited(launcherPath, pkg) {
+// Every literal path that points at the audited entry: the entry itself, the
+// path the package declares, and the npm bin shims that resolve to it.
+function auditedTargets(pkg, platform = process.platform) {
+  const targets = [];
+  const add = value => { if (value && !targets.includes(value)) targets.push(value); };
+  add(pkg.entry);
+  add(pkg.declared_entry);
+  for (const candidate of npmBinCandidates(pkg.root)) {
+    try { if (fs.realpathSync(candidate) === pkg.entry) add(candidate); }
+    catch { /* a shim that does not exist cannot be the target */ }
+    try { if (npmShimEntry(candidate) === pkg.entry) add(candidate); }
+    catch { /* not a Windows npm shim */ }
+  }
+  return targets;
+}
+
+// Windows paths are case-insensitive; POSIX paths are not.
+function isTarget(candidate, targets, platform = process.platform) {
+  if (targets.includes(candidate)) return true;
+  if (platform !== "win32") return false;
+  const lower = candidate.toLowerCase();
+  return targets.some(target => target.toLowerCase() === lower);
+}
+
+// `env` options that consume the following word.
+const ENV_VALUE_OPTIONS = new Set(["-u", "--unset", "-i", "--ignore", "-C", "--chdir", "-S", "--split-string"]);
+// Interpreters that may stand in front of the audited entry.
+const LAUNCHER_INTERPRETERS = new Set(["node", "nodejs", "bun", "deno"]);
+
+// The tokens of one shell line after the usual prefixes, with assignments and
+// expansions dropped. The first token is the program the line runs.
+function launcherTokens(line) {
+  let tokens = line.trim().split(/\s+/);
+  if (tokens[0] === "exec" || tokens[0] === "command") tokens = tokens.slice(1);
+  if (tokens[0] === "env") {
+    tokens = tokens.slice(1);
+    while (tokens.length) {
+      const token = tokens[0];
+      if (token.startsWith("-")) {
+        const option = tokens.shift();
+        if (ENV_VALUE_OPTIONS.has(option) && tokens.length) tokens.shift();
+        continue;
+      }
+      if (/^"?\$\{/.test(token) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) { tokens.shift(); continue; }
+      break;
+    }
+  }
+  while (tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[0])) tokens = tokens.slice(1);
+  return tokens.map(token => token.replace(/^["']|["']$/g, ""));
+}
+
+// A launcher on PATH may only be bypassed when it demonstrably runs the
+// audited entry. The check is on the command lines, not on a substring: the
+// last command has to be the audited entry (directly or behind an
+// interpreter), and no other command in the script may run a different
+// absolute program. A mention in a comment, in an argument or in an unrelated
+// branch proves nothing, and a script that runs something else is not a thin
+// wrapper for the audited entry.
+function launcherTargetsAudited(launcherPath, pkg, platform = process.platform) {
   try {
     const stat = fs.statSync(launcherPath);
     if (!stat.isFile() || stat.size > 65536) return false;
     const body = fs.readFileSync(launcherPath, "utf8");
-    if (pkg.entry && body.includes(pkg.entry)) return true;
-    if (pkg.declared_entry && body.includes(pkg.declared_entry)) return true;
-    return npmBinCandidates(pkg.root).some(candidate => {
-      try { return fs.realpathSync(candidate) === pkg.entry && body.includes(candidate); }
-      catch { return false; }
+    const targets = auditedTargets(pkg, platform);
+    if (!targets.length) return false;
+    const lines = body.split("\n").filter(line => {
+      const trimmed = line.trim();
+      return trimmed && !trimmed.startsWith("#");
     });
+    if (!lines.length) return false;
+    for (const line of lines.slice(0, -1)) {
+      const program = launcherTokens(line)[0];
+      if (program && program.startsWith("/") && !isTarget(program, targets, platform)) return false;
+    }
+    const tokens = launcherTokens(lines[lines.length - 1]);
+    if (!tokens.length) return false;
+    if (isTarget(tokens[0], targets, platform)) return true;
+    return LAUNCHER_INTERPRETERS.has(path.basename(tokens[0]).toLowerCase()) &&
+      isTarget(tokens[1] || "", targets, platform);
   } catch { return false; }
 }
 
@@ -561,14 +626,33 @@ function cliLaunch(mmx, env = process.env, platform = process.platform, guardFil
 // up in the known global npm roots instead of failing outright. Every
 // candidate is still verified against the reviewed SHA-256 before it runs, so
 // the request budget keeps its guarantee; only the lookup gets smarter.
+// Egress-relevant variables that a launcher may neutralise. When the parent
+// environment carries any of them, the bypass would run the audited entry
+// with a different environment than the launcher would have produced, so it
+// needs an explicit acknowledgement.
+function egressEnvironmentPresent(env, platform) {
+  if (PROXY_VARIABLES.some(name => env[envKey(env, name, platform)])) return true;
+  const base = env[envKey(env, "MINIMAX_BASE_URL", platform)];
+  if (typeof base !== "string" || base === "") return false;
+  // A base URL that only differs by the /v1 suffix normalises to the same
+  // origin the wrapper already uses, so it changes nothing.
+  return !/\/v1\/?$/.test(base);
+}
+
 function resolveLaunch(env = process.env, platform = process.platform, options = {}) {
   const pathEnv = env[envKey(env, "PATH", platform)] || "";
   const pathMmx = findMmx(platform, pathEnv);
   const resolution = { source: null, path_launcher: null, audited_entry: null, bypassed: false, roots: [] };
 
-  const explicit = explicitAuditedEntry(options.explicitEntry ?? env.MMX_CLI_ENTRY);
-  if (explicit) {
+  const explicitValue = options.explicitEntry ?? env.MMX_CLI_ENTRY;
+  if (typeof explicitValue === "string" && explicitValue !== "") {
     resolution.source = "explicit";
+    const explicit = explicitAuditedEntry(explicitValue);
+    if (!explicit) {
+      resolution.audited_entry = explicitValue;
+      return { ok: false, reason: "unverified_native_entry", resolution,
+        detail: "The entry given by --cli-entry / MMX_CLI_ENTRY does not exist or is not readable." };
+    }
     resolution.audited_entry = explicit.entry;
     const verdict = verifyAuditedEntry(explicit);
     if (!verdict.ok) {
@@ -580,18 +664,25 @@ function resolveLaunch(env = process.env, platform = process.platform, options =
 
   if (pathMmx && !pathMmx.unsafe && pathMmx.argsPrefix.length === 1) {
     const pkg = mmxPackageEntry(pathMmx.argsPrefix[0]);
-    const verdict = pkg ? verifyAuditedEntry(pkg) : { ok: false, entry: null, digest: null };
-    if (verdict.ok) {
-      resolution.source = "path";
-      resolution.audited_entry = verdict.entry;
-      return finishLaunch(pathMmx, env, verdict, resolution);
+    if (pkg) {
+      const verdict = verifyAuditedEntry(pkg);
+      if (verdict.ok) {
+        resolution.source = "path";
+        resolution.audited_entry = verdict.entry;
+        return finishLaunch(pathMmx, env, verdict, resolution);
+      }
+      // The PATH entry is the audited package but its content does not match
+      // the reviewed digest. That is an entry problem, not a launcher problem.
+      resolution.audited_entry = verdict.entry ?? pkg.entry;
+      return { ok: false, reason: "unverified_native_entry", resolution,
+        detail: "The mmx-cli package entry on PATH does not match the reviewed SHA-256." };
     }
   }
 
   resolution.path_launcher = pathMmx ? pathMmx.cmd : null;
   if (env.MMX_REQUIRE_PATH_LAUNCHER === "1") {
     return { ok: false, reason: "unverified_launcher", resolution,
-      detail: "MMX_REQUIRE_PATH_LAUNCHER=1 forbids running anything but the entry found on PATH." };
+      detail: "MMX_REQUIRE_PATH_LAUNCHER=1 forbids the audited-package fallback; only the entry found on PATH may run." };
   }
 
   for (const root of auditedPackageRoots(env, platform)) {
@@ -600,10 +691,12 @@ function resolveLaunch(env = process.env, platform = process.platform, options =
     if (!candidate) continue;
     const verdict = verifyAuditedEntry(candidate);
     if (!verdict.ok) continue;
-    // Only a launcher that demonstrably wraps this audited entry may be
+    // Only a launcher that demonstrably runs this audited entry may be
     // bypassed. Anything else on PATH stays untouched.
-    if (!launcherTargetsAudited(resolution.path_launcher, verdict)) {
-      continue;
+    if (!launcherTargetsAudited(resolution.path_launcher, verdict, platform)) continue;
+    if (egressEnvironmentPresent(env, platform) && env.MMX_ALLOW_LAUNCHER_BYPASS !== "1") {
+      return { ok: false, reason: "launcher_environment_differs", resolution,
+        detail: "The launcher may neutralise proxy or base-URL variables that the audited entry would inherit. Set MMX_ALLOW_LAUNCHER_BYPASS=1 to accept the difference, or run the launcher by putting its npm bin first on PATH." };
     }
     resolution.source = "audited_package_fallback";
     resolution.audited_entry = verdict.entry;
@@ -616,7 +709,7 @@ function resolveLaunch(env = process.env, platform = process.platform, options =
     reason: pathMmx ? "unverified_launcher" : "cli_missing",
     resolution,
     detail: pathMmx
-      ? "The first mmx on PATH is not the audited mmx-cli 1.0.29 package entry, and no audited install that this launcher wraps was found."
+      ? "The first mmx on PATH is not the audited mmx-cli 1.0.29 package entry, and no audited install that this launcher runs was found."
       : "No mmx executable was found on PATH.",
   };
 }
@@ -846,21 +939,25 @@ async function main() {
     return;
   }
   // --preflight resolves the native entry and reports it without touching the
-  // network or spending a request, so a host can check the runtime first.
-  const preflightOnly = argv.includes("--preflight");
+  // network or spending a request, so a host can check the runtime first. It
+  // is only recognised in a flag position; a value that looks like it stays a
+  // usage error.
   const options = new Map();
-  const flagArgs = argv.filter(arg => arg !== "--preflight");
-  for (let i = 0; i < flagArgs.length; i += 2) {
-    const flag = flagArgs[i] === "-m" ? "--model" : flagArgs[i];
+  let preflightOnly = false;
+  for (let i = 0; i < argv.length; i++) {
+    const token = argv[i];
+    if (token === "--preflight") { preflightOnly = true; continue; }
+    const flag = token === "-m" ? "--model" : token;
     if (!["--prompt-file", "--system-file", "--model", "--max-tokens", "--profile-file",
           "--timeout", "--wrap-timeout", "--observed-input-file", "--native-request-limit",
           "--cli-entry"].includes(flag)) {
       usageError("Unknown MMX wrapper option.");
     }
-    if (i + 1 >= flagArgs.length || !flagArgs[i + 1] || flagArgs[i + 1].startsWith("--") || options.has(flag)) {
-      usageError(`${flag} requires exactly one value.`);
-    }
-    options.set(flag, flagArgs[i + 1]);
+    if (i + 1 >= argv.length) usageError(`${flag} requires exactly one value.`);
+    const value = argv[++i];
+    if (!value || value.startsWith("--")) usageError(`${flag} requires exactly one value.`);
+    if (options.has(flag)) usageError(`${flag} requires exactly one value.`);
+    options.set(flag, value);
   }
   const promptFile = options.get("--prompt-file");
   if (!preflightOnly && !promptFile) usageError("--prompt-file is required");

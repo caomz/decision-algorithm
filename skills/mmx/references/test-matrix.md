@@ -4,6 +4,30 @@
 
 本文件是**事实记录**，不是契约。契约见 [verification.md](verification.md)。
 
+## 2026-11-27 v2.8.1 交叉审核后加固（macOS arm64，mmx-cli 1.0.29，Node v24.15.0；Windows 未运行）
+
+本轮改动（v2.8.0，提交 `dc309ef`）经 ZCode（GLM-5.3-Flash）与 MMX（MiniMax-M3.1-Flash）分片复核，两侧都命中同一批问题，已全部处置：
+
+| 发现 | 来源 | 处置 |
+|---|---|---|
+| 启动脚本判定用文本包含，可能替换用户实际指向的其它程序 | MMX P1 / ZCode P2 | 改为按命令行判定：最后一条命令必须执行已审计入口（或经 node/bun/deno 转发），脚本内其它命令不得执行别的绝对路径程序；新增「只提到路径的脚本不被替换」用例 |
+| 显式 `--cli-entry` 指向不存在的路径时静默回退到别的入口 | MMX P1 / ZCode P2 | 显式值一旦给出即 fail closed（`unverified_native_entry`），不再回退；新增用例 |
+| PATH 入口摘要不匹配被归类为 `unverified_launcher` | MMX P2 / ZCode P2 | 改为 `unverified_native_entry`，detail 区分摘要不符与非已审包 |
+| 旁路丢失启动脚本的环境清理，与「凭据隔离不变」的表述冲突 | MMX P1（文档片） | 改为准确表述：旁路后是 skill 自己的子进程环境；父环境存在代理变量或非 `/v1` 结尾的 `MINIMAX_BASE_URL` 时默认拒绝旁路（`launcher_environment_differs`），需 `MMX_ALLOW_LAUNCHER_BYPASS=1` |
+| `--preflight` 用 `argv.includes` 识别，值位置的 `--preflight` 被静默剔除 | ZCode P2 | 改为按 flag 位置识别；值位置出现即 `usage_error` |
+| `MMX_REQUIRE_PATH_LAUNCHER` 的语义与实际不一致 | MMX P2 | 语义改为「禁止回退旁路」，显式入口仍然优先；优先级表写入 SKILL.md |
+| Windows 路径大小写、`APPDATA` 未走 `envKey`、`.cmd` shim 不被识别 | ZCode P2 | 目标比较按平台归一大小写；`APPDATA` 走 `envKey`；`.cmd` shim 用 `npmShimEntry` 解析后计入目标 |
+| 旁路/preflight/显式入口的测试只依赖 wrapper 自报字段 | MMX P2（测试片）/ ZCode P2 | 启动脚本写 marker 文件并断言未被执行；preflight 断言调用日志为空且未申领预算；缺运行时断言 `reason=cli_missing`；显式入口断言 `fetch_timeout_guard=preloaded`；新增被篡改包的摘要拒绝用例 |
+
+| 路径 | 覆盖方式 | 结果 |
+|---|---|---|
+| `node --test "skills/mmx/tests/*.test.js"` | mock / 构造 | 147/147 通过（v2.8.0 为 143/143；新增 4 个用例：只提到路径的脚本、注入参数的脚本、出站环境闸门、显式入口不可解析/摘要不符） |
+| 旁路可观察性 | mock：启动脚本先 `touch` marker 再 exec | marker 不存在，旁路确实没有执行启动脚本 |
+| 本机 PATH 首项为自建启动脚本 | 真实：`~/.local/bin/mmx`（自建 bash 包装器，exec 指向 npm bin） | `--preflight` 返回 `preflight_ok`，`source=audited_package_fallback`、`bypassed=true`、`path_launcher=/Users/mingtian/.local/bin/mmx`、`entry_sha256=f70cc9e4…fc0522`、`fetch_timeout_guard=preloaded`、`cli_invoked=false` |
+| 真实 API 冒烟（走旁路路径） | 真实 ×2：分支版与受管安装正本各一次 | 均 `ok`、`MiniMax-M3.1-Flash`、`end_turn`、未截断；`native_request_budget.attempts=1`、`verified=true`、`output_limit_verified=true` |
+| 分片批量走同一入口 | 真实 ×3 片：`mmx-batch.js` 带 `--system-file` | 传输 gate `PASS`，3/3 片 `ok`；本机 PATH 未做任何调整即可解析入口（v2.8.0 之前同样环境会四片全部零请求失败） |
+| Windows：npm shim 预加载、PowerShell / Git Bash、超过 300 秒的真实请求 | — | **未运行**，待值班机实测 |
+
 ## 2026-11-26 v2.8.0 入口解析验证（macOS arm64，mmx-cli 1.0.29，Node v24.15.0；Windows 未运行）
 
 | 路径 | 覆盖方式 | 结果 |

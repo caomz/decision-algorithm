@@ -123,11 +123,15 @@ node scripts/mmx-chat.js --version
 | `audited_entry` | 实际会运行的已审计入口绝对路径 |
 | `roots` | 搜索过、但没有命中已审计包的 npm 根目录 |
 
-**旁路规则**：PATH 上第一个 `mmx` 如果是自建启动脚本（无法注入 Node guard），wrapper 会在已知全局 npm 根目录里找 `mmx-cli 1.0.29`，并**要求该脚本的文本确实指向这个已审计入口**（直接写入口路径，或写一个 realpath 指向同一入口的 npm bin 路径）才会改用它。文本里根本没提到这个包的脚本不会被替换——那是别的程序，替换它等于换了个程序在跑。
+**旁路规则**：PATH 上第一个 `mmx` 如果是自建启动脚本（无法注入 Node guard），wrapper 会在已知全局 npm 根目录里找 `mmx-cli 1.0.29`，并**要求该脚本的最后一条命令确实执行这个已审计入口**（直接执行入口，或经 node/bun/deno 转发），同时脚本里其它命令不得执行别的绝对路径程序，才改用它。注释里出现路径、参数里出现路径都不算数——只做文本包含判断会替换掉用户实际选择的程序。
 
-`MMX_NPM_GLOBAL_ROOT` 可以补充额外的 npm 根目录；`MMX_REQUIRE_PATH_LAUNCHER=1` 禁止任何旁路，PATH 上的脚本始终优先。
+**旁路改变了什么**：旁路后跑的是 skill 自己的子进程环境。启动脚本自己做的环境清理（例如摘除 `HTTP_PROXY` 等代理变量）与注入的默认参数不会被复现；wrapper 始终显式传 `--max-tokens` / `--timeout`，所以预算与超时以 wrapper 的为准。当父环境里存在代理变量或非 `/v1` 结尾的 `MINIMAX_BASE_URL` 时，这个差异会改变出站路由，wrapper 因此默认拒绝旁路（`launcher_environment_differs`），需要 `MMX_ALLOW_LAUNCHER_BYPASS=1` 显式承认。
 
-注意被旁路的是「谁被执行」，不是「信任谁」：被执行的入口仍然按已审 SHA-256 校验，guard、请求预算和凭据隔离逻辑一字未改。区别只在于自建启动脚本里那些额外动作（例如摘除代理变量、自行预加载 guard）不会被执行——wrapper 自身只对子进程去掉 `MINIMAX_BASE_URL` 末尾的 `/v1`。
+`MMX_NPM_GLOBAL_ROOT` 可以补充额外的 npm 根目录；`MMX_REQUIRE_PATH_LAUNCHER=1` 禁止回退旁路，PATH 上的脚本优先；`--cli-entry` / `MMX_CLI_ENTRY` 覆盖一切，值不可用即 fail closed，不回退。
+
+不变的是「谁被信任」：被执行的入口仍然必须匹配已审 SHA-256，guard 预加载、请求预算与凭据边界都不随旁路改变。
+
+**失败分类**：顶层状态统一是 `native_budget_unavailable`，用 `reason` 区分原因——`cli_missing`（PATH 上没有 mmx）、`unverified_launcher`（PATH 入口不是已审计包，也没有可旁路的已审计包）、`unverified_native_entry`（入口能解析但摘要对不上，或显式入口不可用）、`launcher_environment_differs`（旁路会改变出站环境）。
 
 | 层级 | macOS | Windows PowerShell 5.1 / 7 | Git Bash + Windows Node | Linux / WSL |
 |---|---|---|---|---|

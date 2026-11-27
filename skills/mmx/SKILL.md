@@ -1,7 +1,7 @@
 ---
 name: mmx
 description: Use MiniMax through the MMX CLI for text-only chat, review, challenge, or an explicitly authorized second opinion, and for the full MiniMax CLI surface (images, video, speech, transcription, web search). Applies to asks such as "/mmx", "用 MMX 问一下", "用 MiniMax 交叉验证", "生成图片/视频/语音", "MiniMax 搜索" and approved review workflows that name MMX. Cross-validation runs through the synchronous text wrapper; media and search go through the bundled CLI reference.
-version: 2.8.0
+version: 2.8.1
 ---
 
 # /mmx — MiniMax 文本复核
@@ -23,6 +23,8 @@ NEVER：image / video / music / speech / vision / search / quota / config / file
 3. `/mmx challenge <问题>` 主动检查边界条件、失败模式和未经验证的假设。
 4. 无参数时显示用法。仅在命令或模式后解析 `-m <model>`、`--max-tokens <n>`、`--timeout <sec>`、`--wrap-timeout <sec>`，正文中的同名文本按原样保留。模型和预算参数分别传给 wrapper，不交给 shell 拼接。除这四个 flag 外 NEVER 接受任何 flag——直接拒绝整个请求。
 
+**两层 flag 契约**：上面四个是**用户**在 `/mmx` 后能写的 flag。wrapper（`scripts/mmx-chat.js`、`scripts/mmx-batch.js`）另有宿主层 flag——`--prompt-file`、`--system-file`、`--profile-file`、`--observed-input-file`、`--native-request-limit`、`--cli-entry`、`--preflight`——由调用方直接传给 wrapper，不经 `/mmx` 解析。用户输入永远不会落到宿主层 flag 上。
+
 ```text
 node <MMX_SKILL_DIR>/scripts/mmx-chat.js --prompt-file <file> [--system-file <file>] [--model <id>] [--max-tokens <n>] [--timeout <sec>] [--wrap-timeout <sec>] [--cli-entry <path>]
 node <MMX_SKILL_DIR>/scripts/mmx-chat.js --preflight [--cli-entry <path>]
@@ -34,14 +36,34 @@ prompt 和 system 只经文件传递。按当前平台使用[调用与验证参�
 
 每次单片调用检查 PATH 中选定的 npm `mmx-cli 1.0.29`、包声明的入口、入口 SHA-256、原生 Node 和本地 guard。启动链无法核验时返回 `native_budget_unavailable`，供应商请求次数为零。
 
-**入口解析顺序（v2.8.0）**：
+**入口解析顺序（v2.8.x）**：
 
-1. `--cli-entry <path>` 或环境变量 `MMX_CLI_ENTRY` 指定的入口优先；只接受已审计的包入口，其它一律 `unverified_native_entry`。
-2. PATH 上第一个 `mmx` 本身就是已审计包入口时直接使用，回执 `launch_resolution.source = "path"`。
-3. PATH 上第一个 `mmx` 是**自建启动脚本**（无法注入 Node guard）时，在已知全局 npm 根目录里查找已审计的 `mmx-cli 1.0.29`，并且**只有当该启动脚本的文本确实指向这个已审计入口**（直接引用入口路径，或引用指向同一入口的 npm bin 路径）才会旁路它：直接运行已审计入口，回执 `launch_resolution.source = "audited_package_fallback"`、`bypassed = true`、`path_launcher` 记录被旁路的脚本路径。旁路不改变信任模型——被运行的入口仍按已审 SHA-256 校验。
+1. `--cli-entry <path>` 或环境变量 `MMX_CLI_ENTRY` 指定的入口优先；路径不存在、不可读或不是已审计包入口时，一律 `unverified_native_entry`，**不回退到别的入口**。
+2. PATH 上第一个 `mmx` 本身就是已审计包入口时直接使用，回执 `launch_resolution.source = "path"`。入口能解析成已审计包布局但摘要对不上时，判 `unverified_native_entry`。
+3. PATH 上第一个 `mmx` 是**自建启动脚本**（无法注入 Node guard）时，在已知全局 npm 根目录里查找已审计的 `mmx-cli 1.0.29`，并且**只有当该脚本的最后一条命令确实执行这个已审计入口**（直接执行入口，或经 node/bun/deno 转发；脚本里其它命令不得执行别的绝对路径程序）才会旁路它：直接运行已审计入口，回执 `launch_resolution.source = "audited_package_fallback"`、`bypassed = true`、`path_launcher` 记录被旁路的脚本路径。注释里出现路径、参数里出现路径，都不算数。
 4. 都不成立时保持 fail closed，`detail` 给出可操作的处理方式。
 
-`MMX_NPM_GLOBAL_ROOT` 指向额外的 npm 根（其下有 `mmx-cli` 或 `node_modules/mmx-cli`）；`MMX_REQUIRE_PATH_LAUNCHER=1` 禁止任何旁路，PATH 上的脚本始终优先。
+**优先级表**（同时命中时按此顺序）：
+
+| 输入 | 效果 |
+| --- | --- |
+| `--cli-entry` / `MMX_CLI_ENTRY` | 覆盖一切；值不可用即 fail closed，不回退 |
+| PATH 上的已审计包入口 | 次之 |
+| 已审计包的全局 npm 根回退（旁路启动脚本） | 再次；`MMX_REQUIRE_PATH_LAUNCHER=1` 禁止这一级 |
+| `MMX_ALLOW_LAUNCHER_BYPASS=1` | 承认旁路带来的环境差异，见下 |
+
+**旁路与原启动脚本的差异（须知）**：旁路后跑的是 skill 自己的子进程环境——启动脚本自己做的环境清理（例如摘除 `HTTP_PROXY` 等代理变量）和注入的默认参数**不会**被复现；wrapper 始终显式传 `--max-tokens` / `--timeout`，所以以 wrapper 的为准。当父环境里存在代理变量或非 `/v1` 结尾的 `MINIMAX_BASE_URL` 时，这个差异会改变出站路由，wrapper 因此默认拒绝旁路（`launcher_environment_differs`），需要显式 `MMX_ALLOW_LAUNCHER_BYPASS=1` 才放行。**被执行的入口仍然必须匹配已审 SHA-256**，guard、请求预算与凭据边界不变。
+
+**失败分类**（顶层状态都是 `native_budget_unavailable`，`reason` 区分原因）：
+
+| reason | 含义 | 下一步 |
+| --- | --- | --- |
+| `cli_missing` | PATH 上没有 mmx | 安装 `mmx-cli` 并确认 PATH |
+| `unverified_launcher` | PATH 上的入口既不是已审计包，也没有匹配的已审计包可旁路 | 把 npm bin 放到 PATH 最前，或用 `--cli-entry` |
+| `unverified_native_entry` | 入口能解析但摘要对不上，或显式入口不可用 | 重新安装 `mmx-cli 1.0.29` |
+| `launcher_environment_differs` | 旁路会改变出站环境 | `MMX_ALLOW_LAUNCHER_BYPASS=1`，或把 npm bin 放到 PATH 最前 |
+
+`MMX_NPM_GLOBAL_ROOT` 指向额外的 npm 根（其下有 `mmx-cli` 或 `node_modules/mmx-cli`）。
 
 **先查再花钱**：`node scripts/mmx-chat.js --preflight` 只解析入口并输出 `preflight_ok` / `preflight_failed`（含 `launch_resolution`、`fetch_timeout_guard`、`base_url_env`），不发请求、不占额度，退出码 0/1。宿主在批量调用前先跑一次预检，可以避免整批零请求失败。
 

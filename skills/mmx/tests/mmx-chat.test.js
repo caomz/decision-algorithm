@@ -188,7 +188,7 @@ after(() => {
 test("version remains a plain-text compatibility exception", () => {
   const run = runWrapper(["--version"]);
   assert.equal(run.status, 0);
-  assert.equal(run.stdout, "mmx-chat 2.8.0\n");
+  assert.equal(run.stdout, "mmx-chat 2.8.1\n");
 });
 
 test("the version constant and the SKILL.md frontmatter stay in sync", () => {
@@ -532,7 +532,8 @@ function withLauncher(body, name) {
 test("a PATH launcher that wraps the audited entry is bypassed and the audited entry runs", () => {
   if (process.platform === "win32") return;
   const auditedEntry = path.join(binDir, "node_modules/mmx-cli/dist/mmx.mjs");
-  const launcher = withLauncher(`#!/bin/sh\nexec "${process.execPath}" "${auditedEntry}" "$@"\n`, "launcher-bin");
+  const marker = path.join(root, "launcher-ran.marker");
+  const launcher = withLauncher(`#!/bin/sh\ntouch "${marker}"\nexec "${process.execPath}" "${auditedEntry}" "$@"\n`, "launcher-bin");
   writeInputs("launcher bypass");
   const run = runChat([], {
     PATH: `${launcher.dir}${path.delimiter}${binDir}${path.delimiter}${process.env.PATH || ""}`,
@@ -546,6 +547,28 @@ test("a PATH launcher that wraps the audited entry is bypassed and the audited e
   assert.equal(result.launch_resolution.path_launcher, launcher.file);
   assert.equal(result.launch_resolution.audited_entry, fs.realpathSync(auditedEntry));
   assert.equal(result.fetch_timeout_guard, "preloaded");
+  // The launcher must not run at all: it would carry its own environment and
+  // arguments, which the bypass does not apply.
+  assert.equal(fs.existsSync(marker), false, "the PATH launcher must not be executed");
+  fs.unlinkSync(launcher.file); fs.rmdirSync(launcher.dir);
+});
+
+test("a launcher that injects its own arguments is still bypassed with the wrapper's arguments", () => {
+  if (process.platform === "win32") return;
+  const auditedEntry = path.join(binDir, "node_modules/mmx-cli/dist/mmx.mjs");
+  const launcher = withLauncher(
+    `#!/bin/sh\nexec "${process.execPath}" "${auditedEntry}" --max-tokens 128 "$@"\n`, "injecting-launcher-bin");
+  writeInputs("launcher with injected defaults");
+  const run = runChat([], {
+    PATH: `${launcher.dir}${path.delimiter}${binDir}${path.delimiter}${process.env.PATH || ""}`,
+    MMX_NPM_GLOBAL_ROOT: binDir,
+  });
+  const result = jsonResult(run);
+  assert.equal(result.status, "ok");
+  assert.equal(result.launch_resolution.bypassed, true);
+  // The wrapper always passes its own budget, so the injected default cannot win.
+  const args = JSON.parse(fs.readFileSync(argsDumpPath, "utf8"));
+  assert.equal(args[args.indexOf("--max-tokens") + 1], "524288");
   fs.unlinkSync(launcher.file); fs.rmdirSync(launcher.dir);
 });
 
@@ -566,6 +589,46 @@ test("a PATH launcher that does not wrap the audited entry is never replaced", (
   fs.unlinkSync(launcher.file); fs.rmdirSync(launcher.dir);
 });
 
+test("a launcher that only mentions the audited entry is never replaced", () => {
+  if (process.platform === "win32") return;
+  const auditedEntry = path.join(binDir, "node_modules/mmx-cli/dist/mmx.mjs");
+  const launcher = withLauncher(
+    `#!/bin/sh\n# this script used to call ${auditedEntry}\nexec /bin/echo other-program\n`, "mentioning-launcher-bin");
+  writeInputs("mentioning launcher");
+  const run = runChat([], {
+    PATH: `${launcher.dir}${path.delimiter}${binDir}${path.delimiter}${process.env.PATH || ""}`,
+    MMX_NPM_GLOBAL_ROOT: binDir,
+  });
+  const result = jsonResult(run);
+  assert.equal(result.status, "native_budget_unavailable");
+  assert.equal(result.reason, "unverified_launcher");
+  assert.equal(result.cli_invoked, false);
+  assert.equal(result.launch_resolution.bypassed, false);
+  fs.unlinkSync(launcher.file); fs.rmdirSync(launcher.dir);
+});
+
+test("the bypass needs an acknowledgement when egress variables are set", () => {
+  if (process.platform === "win32") return;
+  const auditedEntry = path.join(binDir, "node_modules/mmx-cli/dist/mmx.mjs");
+  const launcher = withLauncher(`#!/bin/sh\nexec "${process.execPath}" "${auditedEntry}" "$@"\n`, "egress-launcher-bin");
+  writeInputs("egress launcher");
+  const env = {
+    PATH: `${launcher.dir}${path.delimiter}${binDir}${path.delimiter}${process.env.PATH || ""}`,
+    MMX_NPM_GLOBAL_ROOT: binDir,
+    HTTPS_PROXY: "http://127.0.0.1:9/",
+  };
+  const blocked = jsonResult(runChat([], env));
+  assert.equal(blocked.status, "native_budget_unavailable");
+  assert.equal(blocked.reason, "launcher_environment_differs");
+  assert.equal(blocked.cli_invoked, false);
+  assert.match(blocked.detail, /MMX_ALLOW_LAUNCHER_BYPASS/);
+
+  const allowed = jsonResult(runChat([], { ...env, MMX_ALLOW_LAUNCHER_BYPASS: "1" }));
+  assert.equal(allowed.status, "ok");
+  assert.equal(allowed.launch_resolution.bypassed, true);
+  fs.unlinkSync(launcher.file); fs.rmdirSync(launcher.dir);
+});
+
 test("MMX_REQUIRE_PATH_LAUNCHER keeps the PATH entry authoritative", () => {
   if (process.platform === "win32") return;
   const auditedEntry = path.join(binDir, "node_modules/mmx-cli/dist/mmx.mjs");
@@ -578,6 +641,7 @@ test("MMX_REQUIRE_PATH_LAUNCHER keeps the PATH entry authoritative", () => {
   });
   const result = jsonResult(run);
   assert.equal(result.status, "native_budget_unavailable");
+  assert.equal(result.reason, "unverified_launcher");
   assert.equal(result.cli_invoked, false);
   assert.match(result.detail, /MMX_REQUIRE_PATH_LAUNCHER/);
   fs.unlinkSync(launcher.file); fs.rmdirSync(launcher.dir);
@@ -597,6 +661,9 @@ test("--preflight reports the resolved entry without invoking the CLI", () => {
   assert.equal(result.launch_resolution.source, "audited_package_fallback");
   assert.equal(result.launch_resolution.bypassed, true);
   assert.equal(run.status, 0);
+  // No request was spent: the fake CLI never ran and no budget was claimed.
+  assert.equal(fs.readFileSync(invocationLog, "utf8"), "");
+  assert.equal(result.native_request_budget, undefined);
   fs.unlinkSync(launcher.file); fs.rmdirSync(launcher.dir);
 });
 
@@ -605,7 +672,9 @@ test("--preflight reports a missing runtime instead of spending a request", () =
   const result = jsonResult(run);
   assert.equal(result.status, "preflight_failed");
   assert.equal(result.ok, false);
+  assert.equal(result.reason, "cli_missing");
   assert.equal(result.cli_invoked, false);
+  assert.equal(fs.readFileSync(invocationLog, "utf8"), "");
   assert.equal(run.status, 1);
 });
 
@@ -618,6 +687,7 @@ test("--cli-entry accepts the audited package entry and rejects anything else", 
   }));
   assert.equal(accepted.status, "ok");
   assert.equal(accepted.launch_resolution.source, "explicit");
+  assert.equal(accepted.fetch_timeout_guard, "preloaded");
 
   const other = path.join(root, "not-the-cli.cjs");
   fs.writeFileSync(other, "module.exports = {};\n");
@@ -628,6 +698,33 @@ test("--cli-entry accepts the audited package entry and rejects anything else", 
   assert.equal(rejected.reason, "unverified_native_entry");
   assert.equal(rejected.cli_invoked, false);
   fs.unlinkSync(other);
+
+  // A path that does not exist must not fall back to another entry.
+  const missing = jsonResult(runChat(["--cli-entry", path.join(root, "no-such-entry.mjs")], {
+    PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`,
+  }));
+  assert.equal(missing.status, "native_budget_unavailable");
+  assert.equal(missing.reason, "unverified_native_entry");
+  assert.equal(missing.cli_invoked, false);
+});
+
+test("--cli-entry rejects an entry whose content does not match the reviewed digest", () => {
+  if (process.platform === "win32") return;
+  const tamperedRoot = path.join(root, "tampered", "node_modules", "mmx-cli");
+  fs.mkdirSync(path.join(tamperedRoot, "dist"), { recursive: true });
+  fs.writeFileSync(path.join(tamperedRoot, "package.json"),
+    JSON.stringify({ name: "mmx-cli", version: "1.0.29", bin: { mmx: "dist/mmx.mjs" } }));
+  const tamperedEntry = path.join(tamperedRoot, "dist", "mmx.mjs");
+  fs.writeFileSync(tamperedEntry, "// tampered content\n");
+  writeInputs("tampered entry");
+  const result = jsonResult(runChat(["--cli-entry", tamperedEntry], {
+    PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`,
+  }));
+  assert.equal(result.status, "native_budget_unavailable");
+  assert.equal(result.reason, "unverified_native_entry");
+  assert.equal(result.cli_invoked, false);
+  fs.unlinkSync(tamperedEntry);
+  fs.unlinkSync(path.join(tamperedRoot, "package.json"));
 });
 
 test("unexpected temp file is preserved", () => {
