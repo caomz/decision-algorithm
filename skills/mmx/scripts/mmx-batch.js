@@ -135,7 +135,8 @@ function readProfileBudget(file) {
 
 function parseArgs(argv) {
   const out = { promptFiles: [], promptsDir: null, concurrency: null, model: null,
-    maxTokens: null, retryMaxTokens: null, timeout: null, wrapTimeout: null, profileFile: null, receiptFile: null, allowPaidRetry: false };
+    maxTokens: null, retryMaxTokens: null, timeout: null, wrapTimeout: null, profileFile: null, receiptFile: null,
+    systemFile: null, cliEntry: null, allowPaidRetry: false };
   const seen = new Set();
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -185,6 +186,11 @@ function parseArgs(argv) {
       }
       case "--profile-file": out.profileFile = path.resolve(next()); break;
       case "--receipt-file": out.receiptFile = path.resolve(next()); break;
+      // The single-shot wrapper owns the review system prompt and the native
+      // entry selection; the batch entry passes both through so a sharded
+      // review runs under the same contract as a single-shot review.
+      case "--system-file": out.systemFile = path.resolve(next()); break;
+      case "--cli-entry": out.cliEntry = path.resolve(next()); break;
       case "--allow-paid-retry": out.allowPaidRetry = true; break;
       default: usageError(`Unknown flag: ${arg}`);
     }
@@ -393,7 +399,7 @@ async function main() {
     return;
   }
   if (argv.length === 1 && argv[0] === "--help") {
-    process.stdout.write(JSON.stringify({ status: "usage", usage: "node mmx-batch.js --prompt-file FILE [--prompt-file FILE ...] | --prompts-dir DIR [--concurrency 2] [--model ID] [--max-tokens N] [--timeout SEC] [--wrap-timeout SEC] [--profile-file FILE] [--receipt-file FILE] [--allow-paid-retry [--retry-max-tokens N]]" }) + "\n");
+    process.stdout.write(JSON.stringify({ status: "usage", usage: "node mmx-batch.js --prompt-file FILE [--prompt-file FILE ...] | --prompts-dir DIR [--concurrency 2] [--model ID] [--max-tokens N] [--timeout SEC] [--wrap-timeout SEC] [--profile-file FILE] [--system-file FILE] [--cli-entry FILE] [--receipt-file FILE] [--allow-paid-retry [--retry-max-tokens N]]" }) + "\n");
     return;
   }
 
@@ -413,6 +419,8 @@ async function main() {
   if (args.maxTokens !== null) fixedArgs.push("--max-tokens", String(args.maxTokens));
   if (args.timeout !== null) fixedArgs.push("--timeout", String(args.timeout));
   if (args.wrapTimeout !== null) fixedArgs.push("--wrap-timeout", String(args.wrapTimeout));
+  if (args.systemFile !== null) fixedArgs.push("--system-file", args.systemFile);
+  if (args.cliEntry !== null) fixedArgs.push("--cli-entry", args.cliEntry);
 
   // Claim the final receipt BEFORE a wrapper may send any provider request.
   let archive;

@@ -12,7 +12,7 @@ const path = require("path");
 const { spawn, spawnSync } = require("child_process");
 const { TextDecoder } = require("util");
 
-const VERSION = "2.7.0";
+const VERSION = "2.8.0";
 const FETCH_GUARD = path.join(__dirname, "fetch-timeout-guard.js");
 const PROXY_VARIABLES = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"];
 const FETCH_LIMIT_MS = 300000;
@@ -380,6 +380,107 @@ function linkedEntry(file) {
   catch { return null; }
 }
 
+// Directories that may hold a global npm install of the audited package.
+// MMX_NPM_GLOBAL_ROOT points at the root that owns node_modules/mmx-cli; the
+// standard locations cover the usual layouts.
+function auditedPackageRoots(env = process.env, platform = process.platform) {
+  const home = env[envKey(env, platform === "win32" ? "USERPROFILE" : "HOME", platform)] || os.homedir();
+  const roots = [];
+  const push = value => {
+    if (typeof value !== "string" || value === "") return;
+    const resolved = path.resolve(value);
+    if (!roots.includes(resolved)) roots.push(resolved);
+  };
+  push(env.MMX_NPM_GLOBAL_ROOT);
+  push(path.join(home, ".npm-global", "lib", "node_modules"));
+  push(path.join(home, ".node_modules"));
+  if (platform === "win32") {
+    push(path.join(env.APPDATA || path.join(home, "AppData", "Roaming"), "npm", "node_modules"));
+  } else {
+    push("/usr/local/lib/node_modules");
+    push("/opt/homebrew/lib/node_modules");
+  }
+  return roots;
+}
+
+// The mmx-cli package directory inside a global npm root, when the package
+// name and version match the audited release. The root may be the npm global
+// root (which holds node_modules/) or the node_modules directory itself.
+function auditedPackageCandidate(root) {
+  for (const pkgDir of [path.join(root, "mmx-cli"), path.join(root, "node_modules", "mmx-cli")]) {
+    try {
+      const metadata = path.join(pkgDir, "package.json");
+      if (!fs.statSync(metadata).isFile()) continue;
+      const pkg = JSON.parse(fs.readFileSync(metadata, "utf8"));
+      if (!isObject(pkg) || pkg.name !== "mmx-cli" || pkg.version !== "1.0.29") continue;
+      const bin = typeof pkg.bin === "string" ? pkg.bin : pkg.bin?.mmx;
+      if (typeof bin !== "string" || path.isAbsolute(bin)) continue;
+      const entry = path.resolve(pkgDir, bin);
+      const realEntry = fs.realpathSync(entry);
+      if (!/\.(?:cjs|mjs|js)$/i.test(realEntry)) continue;
+      return { entry: realEntry, declared_entry: entry, root: fs.realpathSync(pkgDir) };
+    } catch { /* try the next layout */ }
+  }
+  return null;
+}
+
+// An explicitly requested entry (--cli-entry / MMX_CLI_ENTRY). Only the
+// audited package layout verifies; anything else stays unverified.
+function explicitAuditedEntry(value) {
+  if (typeof value !== "string" || value === "") return null;
+  try {
+    const resolved = fs.realpathSync(path.resolve(value));
+    return mmxPackageEntry(resolved) ?? { entry: resolved, root: null };
+  } catch { return null; }
+}
+
+// The audited entry must match the reviewed SHA-256 before it may run.
+function verifyAuditedEntry(pkg) {
+  try {
+    if (!pkg) return { ok: false, entry: null, digest: null };
+    const digest = createHash("sha256").update(fs.readFileSync(pkg.entry)).digest("hex");
+    if (!require("./mmx-native-budget.js").supportedEntry(pkg.entry, pkg.root, digest)) {
+      return { ok: false, entry: pkg.entry, digest };
+    }
+    return { ok: true, entry: pkg.entry, root: pkg.root, digest, declared_entry: pkg.declared_entry ?? null };
+  } catch { return { ok: false, entry: pkg?.entry ?? null, digest: null }; }
+}
+
+// npm bin paths that resolve to the audited entry, for the usual global
+// layouts (<prefix>/lib/node_modules/mmx-cli and <prefix>/node_modules/mmx-cli).
+function npmBinCandidates(pkgRoot) {
+  const candidates = [];
+  const add = value => { if (value && !candidates.includes(value)) candidates.push(value); };
+  const up = (directory, levels) => {
+    let current = directory;
+    for (let i = 0; i < levels; i++) current = path.dirname(current);
+    return current;
+  };
+  const threeUp = up(pkgRoot, 3);
+  const twoUp = up(pkgRoot, 2);
+  add(path.join(threeUp, "bin", "mmx"));
+  add(path.join(twoUp, "bin", "mmx"));
+  add(path.join(twoUp, "mmx.cmd"));
+  return candidates;
+}
+
+// A launcher on PATH may only be bypassed when it is a thin wrapper for the
+// audited entry. The check is textual on purpose: a script that never mentions
+// the audited package is some other program and must not be replaced.
+function launcherTargetsAudited(launcherPath, pkg) {
+  try {
+    const stat = fs.statSync(launcherPath);
+    if (!stat.isFile() || stat.size > 65536) return false;
+    const body = fs.readFileSync(launcherPath, "utf8");
+    if (pkg.entry && body.includes(pkg.entry)) return true;
+    if (pkg.declared_entry && body.includes(pkg.declared_entry)) return true;
+    return npmBinCandidates(pkg.root).some(candidate => {
+      try { return fs.realpathSync(candidate) === pkg.entry && body.includes(candidate); }
+      catch { return false; }
+    });
+  } catch { return false; }
+}
+
 // cmd.exe expands % and ! inside quotes; other metacharacters affect parsing.
 function safeCmdArgument(s) {
   return typeof s === "string" && s.length > 0 &&
@@ -453,27 +554,96 @@ function cliLaunch(mmx, env = process.env, platform = process.platform, guardFil
 
 // Inspection only. The parent can check both providers before launching either.
 // Recheck the same policy inside the wrapper before allocating its private claim.
-function resolveBudgetLaunch(env) {
-  const mmx = findMmx(process.platform, env[envKey(env, "PATH", process.platform)] || "");
-  if (!mmx) return { ok: false, reason: "cli_missing" };
-  if (mmx.unsafe || mmx.argsPrefix.length !== 1) return { ok: false, reason: "unverified_launcher" };
-  const pkg = mmxPackageEntry(mmx.argsPrefix[0]);
-  try {
-    const digest = pkg && createHash("sha256").update(fs.readFileSync(pkg.entry)).digest("hex");
-    if (!pkg || !require("./mmx-native-budget.js").supportedEntry(pkg.entry, pkg.root, digest)) {
-      return { ok: false, reason: "unverified_native_entry" };
+//
+// Which native entry runs. A user-owned launcher script on PATH cannot carry
+// the fetch guard, because the guard is preloaded into a Node child. When the
+// PATH entry is not the audited package entry, the audited install is looked
+// up in the known global npm roots instead of failing outright. Every
+// candidate is still verified against the reviewed SHA-256 before it runs, so
+// the request budget keeps its guarantee; only the lookup gets smarter.
+function resolveLaunch(env = process.env, platform = process.platform, options = {}) {
+  const pathEnv = env[envKey(env, "PATH", platform)] || "";
+  const pathMmx = findMmx(platform, pathEnv);
+  const resolution = { source: null, path_launcher: null, audited_entry: null, bypassed: false, roots: [] };
+
+  const explicit = explicitAuditedEntry(options.explicitEntry ?? env.MMX_CLI_ENTRY);
+  if (explicit) {
+    resolution.source = "explicit";
+    resolution.audited_entry = explicit.entry;
+    const verdict = verifyAuditedEntry(explicit);
+    if (!verdict.ok) {
+      return { ok: false, reason: "unverified_native_entry", resolution,
+        detail: "The entry given by --cli-entry / MMX_CLI_ENTRY is not the audited mmx-cli 1.0.29 package entry." };
     }
-    const launch = cliLaunch(mmx, env);
-    if (!["preloaded", "proxy_limited"].includes(launch.fetch_timeout_guard)) {
-      return { ok: false, reason: launch.fetch_timeout_guard };
+    return finishLaunch({ cmd: process.execPath, argsPrefix: [verdict.entry], shell: false }, env, verdict, resolution);
+  }
+
+  if (pathMmx && !pathMmx.unsafe && pathMmx.argsPrefix.length === 1) {
+    const pkg = mmxPackageEntry(pathMmx.argsPrefix[0]);
+    const verdict = pkg ? verifyAuditedEntry(pkg) : { ok: false, entry: null, digest: null };
+    if (verdict.ok) {
+      resolution.source = "path";
+      resolution.audited_entry = verdict.entry;
+      return finishLaunch(pathMmx, env, verdict, resolution);
     }
-    return { ok: true, reason: null, mmx, launch, entry_sha256: digest, cli_version: "1.0.29" };
-  } catch { return { ok: false, reason: "native_budget_unavailable" }; }
+  }
+
+  resolution.path_launcher = pathMmx ? pathMmx.cmd : null;
+  if (env.MMX_REQUIRE_PATH_LAUNCHER === "1") {
+    return { ok: false, reason: "unverified_launcher", resolution,
+      detail: "MMX_REQUIRE_PATH_LAUNCHER=1 forbids running anything but the entry found on PATH." };
+  }
+
+  for (const root of auditedPackageRoots(env, platform)) {
+    resolution.roots.push(root);
+    const candidate = auditedPackageCandidate(root);
+    if (!candidate) continue;
+    const verdict = verifyAuditedEntry(candidate);
+    if (!verdict.ok) continue;
+    // Only a launcher that demonstrably wraps this audited entry may be
+    // bypassed. Anything else on PATH stays untouched.
+    if (!launcherTargetsAudited(resolution.path_launcher, verdict)) {
+      continue;
+    }
+    resolution.source = "audited_package_fallback";
+    resolution.audited_entry = verdict.entry;
+    resolution.bypassed = true;
+    return finishLaunch({ cmd: process.execPath, argsPrefix: [verdict.entry], shell: false }, env, verdict, resolution);
+  }
+
+  return {
+    ok: false,
+    reason: pathMmx ? "unverified_launcher" : "cli_missing",
+    resolution,
+    detail: pathMmx
+      ? "The first mmx on PATH is not the audited mmx-cli 1.0.29 package entry, and no audited install that this launcher wraps was found."
+      : "No mmx executable was found on PATH.",
+  };
 }
 
-function preflightRequestBudget(env = process.env) {
-  const { ok, reason, entry_sha256, cli_version } = resolveBudgetLaunch(env);
-  return ok ? { ok, reason, entry_sha256, cli_version } : { ok, reason };
+// The audited entry still has to run under the fetch guard; a guard that
+// cannot be prepared keeps the call closed.
+function finishLaunch(mmx, env, verdict, resolution) {
+  const launch = cliLaunch(mmx, env);
+  if (!["preloaded", "proxy_limited"].includes(launch.fetch_timeout_guard)) {
+    return { ok: false, reason: launch.fetch_timeout_guard, resolution,
+      detail: `The audited entry was found, but the fetch guard could not be prepared (${launch.fetch_timeout_guard}).` };
+  }
+  return { ok: true, reason: null, mmx, launch, resolution, entry_sha256: verdict.digest, cli_version: "1.0.29" };
+}
+
+function resolveBudgetLaunch(env, options = {}) {
+  try {
+    return resolveLaunch(env, process.platform, options);
+  } catch { return { ok: false, reason: "native_budget_unavailable", resolution: null }; }
+}
+
+function preflightRequestBudget(env = process.env, options = {}) {
+  const result = resolveBudgetLaunch(env, options);
+  if (!result.ok) return { ok: false, reason: result.reason, detail: result.detail ?? null, launch_resolution: result.resolution ?? null };
+  return { ok: true, reason: null, entry_sha256: result.entry_sha256, cli_version: result.cli_version,
+    launch_resolution: result.resolution, fetch_timeout_guard: result.launch.fetch_timeout_guard,
+    base_url_env: result.launch.base_url_env };
 }
 
 // Windows environment names are case-insensitive, but a copied environment
@@ -675,20 +845,25 @@ async function main() {
     process.stdout.write(`mmx-chat ${VERSION}\n`);
     return;
   }
+  // --preflight resolves the native entry and reports it without touching the
+  // network or spending a request, so a host can check the runtime first.
+  const preflightOnly = argv.includes("--preflight");
   const options = new Map();
-  for (let i = 0; i < argv.length; i += 2) {
-    const flag = argv[i] === "-m" ? "--model" : argv[i];
+  const flagArgs = argv.filter(arg => arg !== "--preflight");
+  for (let i = 0; i < flagArgs.length; i += 2) {
+    const flag = flagArgs[i] === "-m" ? "--model" : flagArgs[i];
     if (!["--prompt-file", "--system-file", "--model", "--max-tokens", "--profile-file",
-          "--timeout", "--wrap-timeout", "--observed-input-file", "--native-request-limit"].includes(flag)) {
+          "--timeout", "--wrap-timeout", "--observed-input-file", "--native-request-limit",
+          "--cli-entry"].includes(flag)) {
       usageError("Unknown MMX wrapper option.");
     }
-    if (i + 1 >= argv.length || !argv[i + 1] || argv[i + 1].startsWith("--") || options.has(flag)) {
+    if (i + 1 >= flagArgs.length || !flagArgs[i + 1] || flagArgs[i + 1].startsWith("--") || options.has(flag)) {
       usageError(`${flag} requires exactly one value.`);
     }
-    options.set(flag, argv[i + 1]);
+    options.set(flag, flagArgs[i + 1]);
   }
   const promptFile = options.get("--prompt-file");
-  if (!promptFile) usageError("--prompt-file is required");
+  if (!preflightOnly && !promptFile) usageError("--prompt-file is required");
   if (options.has("--native-request-limit") && options.get("--native-request-limit") !== "1") {
     usageError("--native-request-limit accepts only 1.");
   }
@@ -696,6 +871,15 @@ async function main() {
   try { validateInstall(); }
   catch {
     fail({ status: "install_mismatch", error: "MMX managed release is missing, inactive, or inconsistent. Run cross-validation doctor." });
+    return;
+  }
+
+  const explicitEntry = options.get("--cli-entry") ?? null;
+  if (preflightOnly) {
+    const report = preflightRequestBudget(process.env, { explicitEntry });
+    telemetry.launch_resolution = report.launch_resolution ?? null;
+    emit({ status: report.ok ? "preflight_ok" : "preflight_failed", ...report });
+    process.exitCode = report.ok ? 0 : 1;
     return;
   }
 
@@ -729,7 +913,8 @@ async function main() {
   if (!prompt.length) usageError("prompt file is empty");
   const systemFile = options.get("--system-file");
   const system = systemFile ? readInput(systemFile, "system").text : "";
-  const policy = resolveBudgetLaunch(process.env);
+  const policy = resolveBudgetLaunch(process.env, { explicitEntry });
+  telemetry.launch_resolution = policy.resolution ?? null;
   if (policy.reason === "cli_missing") {
     fail({ status: "cli_missing", error: "mmx CLI not found on PATH." });
     return;
@@ -738,7 +923,8 @@ async function main() {
     max_output_tokens: maxTokens, output_limit_verified: false };
   if (!policy.ok) {
     fail({ status: "native_budget_unavailable", reason: policy.reason,
-      error: "Choose the audited mmx-cli 1.0.29 npm entry on PATH with its undici dependency and guard." });
+      detail: policy.detail ?? null,
+      error: "Choose the audited mmx-cli 1.0.29 npm entry: put its npm bin first on PATH, pass --cli-entry <path to dist/mmx.mjs>, or set MMX_CLI_ENTRY." });
     return;
   }
   const { mmx, launch } = policy;
@@ -919,5 +1105,5 @@ if (require.main === module) {
     fail(error.envelope ?? { status: "api_error", exit_code: 1, code: null, error: "MMX wrapper failed locally." });
   }).finally(cleanup);
 } else {
-  module.exports = { safeCmdArgument, npmShimEntry, mmxPackageEntry, linkedEntry, cliLaunch, preflightRequestBudget, withFetchLimitHint, displayUrl, findMmx, terminateChildTree };
+  module.exports = { safeCmdArgument, npmShimEntry, mmxPackageEntry, linkedEntry, cliLaunch, preflightRequestBudget, withFetchLimitHint, displayUrl, findMmx, terminateChildTree, resolveLaunch, resolveBudgetLaunch, auditedPackageRoots, auditedPackageCandidate, explicitAuditedEntry, verifyAuditedEntry, launcherTargetsAudited, npmBinCandidates };
 }

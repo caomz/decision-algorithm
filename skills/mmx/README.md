@@ -11,10 +11,12 @@ MMX 一方的文本复核 skill：`/mmx <问题>`、`/mmx review <文件>`、`/m
 > **2026-11-18 v2.5.0**：新增 `scripts/mmx-batch.js` 分片批量入口（有界并发池 + 传输层 gate + 显式授权的预算重试），修复多分片交叉验证的两大复发故障：裸 CLI 默认 4096 预算截断、逐片串行墙钟求和。
 >
 > **2026-11-19 v2.7.0**：从 macOS 线回传三项修复：预加载 fetch 防护，取消 Node fetch 的 300 秒响应头上限；`thinking_budget_exhausted` 只在 `stop_reason=max_tokens` 时成立；只对子进程去掉 `MINIMAX_BASE_URL` 末尾的 `/v1`，并给 HTTP 404 诊断。wrapper 版本与 `SKILL.md` 统一为 2.7.0，并加一致性测试。只在 macOS 实测过，Windows 待测，见 [test-matrix](references/test-matrix.md)。
+>
+> **2026-11-26 v2.8.0**：修掉「自建启动脚本挡在 PATH 前面就整批零请求失败」这个复发故障。入口解析改为四级：显式 `--cli-entry` / `MMX_CLI_ENTRY` → PATH 上的已审计入口 → **已审计包的全局 npm 根回退**（只有当 PATH 脚本文本确实指向该已审计入口时才旁路，并在回执里记 `bypassed` 与被旁路路径）→ fail closed 并给出可操作提示。新增 `mmx-chat.js --preflight`（只解析入口、不发请求、不占额度）与 `mmx-batch.js --system-file` / `--cli-entry`（分片评审用同一份 system prompt 与同一入口）。信任模型不变：被执行的入口仍按已审 SHA-256 校验。
 
 ### Mac 原生单次收费请求
 
-当前文字入口校验已审 npm CLI 1.0.29 的原生入口 SHA、完整请求上的输出额度，并在首个模型 POST 前领取独占许可。选择了身份不明的启动器时预检会拒绝运行。用 `native_request_budget` 核对本地请求次数、所用 CLI 和输出预算；代理内部重试或供应商账单仍需单独取证。批量默认每片一次，明确授权重试额度的参数见 [SKILL.md](SKILL.md)。
+当前文字入口校验已审 npm CLI 1.0.29 的原生入口 SHA、完整请求上的输出额度，并在首个模型 POST 前领取独占许可。选择了身份不明的启动器时预检会拒绝运行；只有当该启动脚本确实代理同一个已审计入口时，才会改为直接运行已审计入口，并在 `launch_resolution` 里记 `bypassed`。用 `native_request_budget` 核对本地请求次数、所用 CLI 和输出预算；代理内部重试或供应商账单仍需单独取证。批量默认每片一次，明确授权重试额度的参数见 [SKILL.md](SKILL.md)。
 
 ## 外部依赖
 

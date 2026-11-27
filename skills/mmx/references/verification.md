@@ -111,13 +111,31 @@ node --test tests/mmx-chat.test.js
 node scripts/mmx-chat.js --version
 ```
 
+### 入口预检（不花钱）
+
+`node scripts/mmx-chat.js --preflight` 只解析本机要执行哪一个原生入口，输出 `preflight_ok` / `preflight_failed`，不发请求、不占额度，退出码 0/1。回执里的 `launch_resolution` 说明：
+
+| 字段 | 含义 |
+|---|---|
+| `source` | `path`（PATH 上就是已审计入口）、`explicit`（`--cli-entry` / `MMX_CLI_ENTRY`）、`audited_package_fallback`（旁路了自建启动脚本）、失败时为空 |
+| `path_launcher` | PATH 上被判定为启动脚本的路径 |
+| `bypassed` | 是否用已审计入口替换了 PATH 上的启动脚本 |
+| `audited_entry` | 实际会运行的已审计入口绝对路径 |
+| `roots` | 搜索过、但没有命中已审计包的 npm 根目录 |
+
+**旁路规则**：PATH 上第一个 `mmx` 如果是自建启动脚本（无法注入 Node guard），wrapper 会在已知全局 npm 根目录里找 `mmx-cli 1.0.29`，并**要求该脚本的文本确实指向这个已审计入口**（直接写入口路径，或写一个 realpath 指向同一入口的 npm bin 路径）才会改用它。文本里根本没提到这个包的脚本不会被替换——那是别的程序，替换它等于换了个程序在跑。
+
+`MMX_NPM_GLOBAL_ROOT` 可以补充额外的 npm 根目录；`MMX_REQUIRE_PATH_LAUNCHER=1` 禁止任何旁路，PATH 上的脚本始终优先。
+
+注意被旁路的是「谁被执行」，不是「信任谁」：被执行的入口仍然按已审 SHA-256 校验，guard、请求预算和凭据隔离逻辑一字未改。区别只在于自建启动脚本里那些额外动作（例如摘除代理变量、自行预加载 guard）不会被执行——wrapper 自身只对子进程去掉 `MINIMAX_BASE_URL` 末尾的 `/v1`。
+
 | 层级 | macOS | Windows PowerShell 5.1 / 7 | Git Bash + Windows Node | Linux / WSL |
 |---|---|---|---|---|
 | 静态检查 | 本次已执行 | 2026-11-17 已执行 | 2026-11-17 已执行 | 未验证 |
 | Windows 分支 mock | 本次已执行 | 不能代替真机 | 不能代替真机 | 不适用 |
 | 假 CLI 集成 | 本次已执行 | 2026-11-17 已执行 | 2026-11-17 已执行 | 未验证，执行上述命令 |
-| 真实 API | 2026-11-19 已执行（v2.7.0） | 2026-11-17 已执行 | 2026-11-17 已执行 | 未运行 |
+| 真实 API | 2026-11-26 已执行（v2.8.0，入口旁路路径） | 2026-11-17 已执行 | 2026-11-17 已执行 | 未运行 |
 
-v2.7.0 只在 macOS 上运行过。Windows 两列仍是 2026-11-17 对 v2.4.0 的结果，v2.7.0 的 Windows 实测（npm shim 预加载、PowerShell / Git Bash、超过 300 秒的真实请求）待值班机完成。
+v2.8.0 只在 macOS 上运行过。Windows 两列仍是 2026-11-17 对 v2.4.0 的结果，v2.7.0 / v2.8.0 的 Windows 实测（npm shim 预加载、PowerShell / Git Bash、超过 300 秒的真实请求）待值班机完成。
 
 Windows：在 PowerShell 中 `Set-Location 'C:\absolute\path\to\current\mmx'` 后执行三条 `node` 命令。Git Bash：`cd '/c/absolute/path/to/current/mmx'` 后执行三条 `node` 命令，并按上面示例核对 `cygpath` 与 MSYS 参数转换。真实 API 冒烟会消耗 quota，必须经用户明确授权后进行。2026-09-04 的 macOS + `mmx-cli 1.0.19` Chat/Review/Challenge smoke 3/3 是历史文档声明，不代表当前版本或其他平台。逐路径的实测记录见 [test-matrix.md](test-matrix.md)。

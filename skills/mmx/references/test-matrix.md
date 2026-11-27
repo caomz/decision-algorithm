@@ -4,6 +4,17 @@
 
 本文件是**事实记录**，不是契约。契约见 [verification.md](verification.md)。
 
+## 2026-11-26 v2.8.0 入口解析验证（macOS arm64，mmx-cli 1.0.29，Node v24.15.0；Windows 未运行）
+
+| 路径 | 覆盖方式 | 结果 |
+|---|---|---|
+| `node --test "skills/mmx/tests/*.test.js"` | mock / 构造 | 143/143 通过（新增 6 个用例：启动脚本旁路、外来脚本不替换、`MMX_REQUIRE_PATH_LAUNCHER`、`--preflight` 成功与失败、`--cli-entry` 接受与拒绝） |
+| 本机 PATH 首项为自建启动脚本 | 真实：PATH 第一项是 `~/.local/bin/mmx`（自建 bash 包装器，exec 指向 npm bin） | 修复前：`native_budget_unavailable` / `unverified_launcher`，四片全部零请求失败；修复后 `--preflight` 返回 `preflight_ok`，`source=audited_package_fallback`、`bypassed=true`、`path_launcher=/Users/mingtian/.local/bin/mmx`、`audited_entry=/Users/mingtian/.npm-global/lib/node_modules/mmx-cli/dist/mmx.mjs`、`entry_sha256=f70cc9e4…fc0522`、`fetch_timeout_guard=preloaded`、`cli_invoked=false`（未花额度） |
+| 真实 API 冒烟（走旁路路径） | 真实 ×1：`--max-tokens 8192 --timeout 120 --wrap-timeout 150` | `ok`、`MiniMax-M3.1-Flash`、`end_turn`、未截断；`native_request_budget.attempts=1`、`verified=true`、`output_limit_verified=true`；`launch_resolution.bypassed=true` |
+| 外来启动脚本不被替换 | mock：PATH 里的 `mmx` 是 `exec /bin/echo` 脚本 | `native_budget_unavailable` / `unverified_launcher`，`cli_invoked=false`，`detail` 指向 `--cli-entry` 与 npm bin 优先级 |
+| 显式 `--cli-entry` | mock：指向已审计包入口 / 指向非包文件 | 前者 `ok` 且 `source=explicit`；后者 `unverified_native_entry`，`cli_invoked=false` |
+| Windows：npm shim 预加载、PowerShell / Git Bash、超过 300 秒的真实请求 | — | **未运行**，待值班机实测 |
+
 ## 2026-11-19 v2.7.0 回传验证（macOS，mmx-cli 1.0.29，Node v24.15.0；Windows 未运行）
 
 | 路径 | 覆盖方式 | 结果 |

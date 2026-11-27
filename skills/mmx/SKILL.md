@@ -1,7 +1,7 @@
 ---
 name: mmx
 description: Use MiniMax through the MMX CLI for text-only chat, review, challenge, or an explicitly authorized second opinion, and for the full MiniMax CLI surface (images, video, speech, transcription, web search). Applies to asks such as "/mmx", "用 MMX 问一下", "用 MiniMax 交叉验证", "生成图片/视频/语音", "MiniMax 搜索" and approved review workflows that name MMX. Cross-validation runs through the synchronous text wrapper; media and search go through the bundled CLI reference.
-version: 2.7.0
+version: 2.8.0
 ---
 
 # /mmx — MiniMax 文本复核
@@ -24,14 +24,26 @@ NEVER：image / video / music / speech / vision / search / quota / config / file
 4. 无参数时显示用法。仅在命令或模式后解析 `-m <model>`、`--max-tokens <n>`、`--timeout <sec>`、`--wrap-timeout <sec>`，正文中的同名文本按原样保留。模型和预算参数分别传给 wrapper，不交给 shell 拼接。除这四个 flag 外 NEVER 接受任何 flag——直接拒绝整个请求。
 
 ```text
-node <MMX_SKILL_DIR>/scripts/mmx-chat.js --prompt-file <file> [--system-file <file>] [--model <id>] [--max-tokens <n>] [--timeout <sec>] [--wrap-timeout <sec>]
+node <MMX_SKILL_DIR>/scripts/mmx-chat.js --prompt-file <file> [--system-file <file>] [--model <id>] [--max-tokens <n>] [--timeout <sec>] [--wrap-timeout <sec>] [--cli-entry <path>]
+node <MMX_SKILL_DIR>/scripts/mmx-chat.js --preflight [--cli-entry <path>]
 ```
 
 prompt 和 system 只经文件传递。按当前平台使用[调用与验证参考](references/verification.md)。默认配置取自[本机运行配置](profiles/local.json)：输出预算 524288，请求超时 600 秒，wrapper 超时 630 秒（`--wrap-timeout` 必须大于 `--timeout`）。优先级：命令行 flag > 环境变量（`MMX_CHAT_REQ_TIMEOUT` / `MMX_CHAT_WRAP_TIMEOUT`）> profile > 硬编码兜底。默认模型由 MMX CLI 选择，用户指定的模型覆盖对应值。宿主应通过持续会话等待 wrapper 结果；**外层工具超时须给到 700000ms 以上**（600+30+630 预算），快速小请求可显式传 `--timeout 60 --wrap-timeout 80` 把外层缩回 120000ms。
 
 ## 原生请求预算
 
-每次单片调用检查 PATH 中选定的 npm `mmx-cli 1.0.29`、包声明的入口、入口 SHA-256、原生 Node 和本地 guard。启动链无法核验时返回 `native_budget_unavailable`，供应商请求次数为零。需要更换入口时显式选择同版本 npm CLI 的 PATH；个人 shell 启动器可能有独立的认证和代理设置。
+每次单片调用检查 PATH 中选定的 npm `mmx-cli 1.0.29`、包声明的入口、入口 SHA-256、原生 Node 和本地 guard。启动链无法核验时返回 `native_budget_unavailable`，供应商请求次数为零。
+
+**入口解析顺序（v2.8.0）**：
+
+1. `--cli-entry <path>` 或环境变量 `MMX_CLI_ENTRY` 指定的入口优先；只接受已审计的包入口，其它一律 `unverified_native_entry`。
+2. PATH 上第一个 `mmx` 本身就是已审计包入口时直接使用，回执 `launch_resolution.source = "path"`。
+3. PATH 上第一个 `mmx` 是**自建启动脚本**（无法注入 Node guard）时，在已知全局 npm 根目录里查找已审计的 `mmx-cli 1.0.29`，并且**只有当该启动脚本的文本确实指向这个已审计入口**（直接引用入口路径，或引用指向同一入口的 npm bin 路径）才会旁路它：直接运行已审计入口，回执 `launch_resolution.source = "audited_package_fallback"`、`bypassed = true`、`path_launcher` 记录被旁路的脚本路径。旁路不改变信任模型——被运行的入口仍按已审 SHA-256 校验。
+4. 都不成立时保持 fail closed，`detail` 给出可操作的处理方式。
+
+`MMX_NPM_GLOBAL_ROOT` 指向额外的 npm 根（其下有 `mmx-cli` 或 `node_modules/mmx-cli`）；`MMX_REQUIRE_PATH_LAUNCHER=1` 禁止任何旁路，PATH 上的脚本始终优先。
+
+**先查再花钱**：`node scripts/mmx-chat.js --preflight` 只解析入口并输出 `preflight_ok` / `preflight_failed`（含 `launch_resolution`、`fetch_timeout_guard`、`base_url_env`），不发请求、不占额度，退出码 0/1。宿主在批量调用前先跑一次预检，可以避免整批零请求失败。
 
 每次运行允许原生进程发起一次模型 POST，完整请求体的 `max_tokens` 须在本轮输出额度内。并发和失败的发送共用一次性许可；同步或异步重复请求、自动重定向和未识别的写入路由均被阻断。超时、断线、取消和未知终态结束本轮。`native_request_budget` 回执中的 `attempts` 是原生模型 fetch 预留次数，`max_output_tokens` 是授权的输出上限，`output_limit_verified` 表示本地检查过发出的请求体。CLI 身份取自 `cli_version` 和 `entry_sha256`。实际 token 用量见供应方的 usage；代理内部行为、供应商结算金额与远端计费完成情况仍以相应账单为准。
 
@@ -40,8 +52,10 @@ prompt 和 system 只经文件传递。按当前平台使用[调用与验证参�
 分片评审 NEVER 逐片串行调用：一次工具调用送整批，`mmx-batch.js` 经有界并发池并行执行、合并回执并记录每片的请求、输出预算：
 
 ```text
-node <MMX_SKILL_DIR>/scripts/mmx-batch.js --prompt-file <f1> [--prompt-file <f2> ...] | --prompts-dir <dir> [--concurrency 2] [--model <id>] [--max-tokens <n>] [--timeout <sec>] [--wrap-timeout <sec>] [--receipt-file <path>]
+node <MMX_SKILL_DIR>/scripts/mmx-batch.js --prompt-file <f1> [--prompt-file <f2> ...] | --prompts-dir <dir> [--concurrency 2] [--model <id>] [--max-tokens <n>] [--timeout <sec>] [--wrap-timeout <sec>] [--system-file <file>] [--cli-entry <path>] [--receipt-file <path>]
 ```
+
+- `--system-file` 把 review 的固定 system prompt 透传给每一片，让分片评审与单片评审用同一份契约；`--cli-entry` 把入口选择同样透传，每片的 `launch_resolution` 记录实际生效的入口与是否发生旁路。
 
 - 每片仍是一次完整 `mmx-chat.js` 调用（单发语义不变，wrapper 契约原样继承）。批级回执含每片完整回执、`batch` 统计与**传输层 gate**：全片 `status=ok` 且 `complete` 且未截断 → `PASS`；任一片截断/超时/失败 → `NOT_EVALUATED`（与 zcode-mmx-review 的 COMPLETED 语义对齐）。findings 级 P1/P2 判定仍由宿主完成，批级 gate 不冒充内容判定。
 - 默认每片一次。明确使用 `--allow-paid-retry` 时，终态限流或原因未细分的 `quota_error` 可在原输出上限内追加一次尝试。已确认的时段额度耗尽、余额/权益阻断会停止。提高输出预算还需显式提供 `--retry-max-tokens N`，N 须在该 profile 和 524288 的双重上限内。两次回执分别保留，超时、取消、断线和结果未知均不重发。
