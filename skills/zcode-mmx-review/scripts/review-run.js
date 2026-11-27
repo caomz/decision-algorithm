@@ -9,7 +9,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
-const { createHash } = require("node:crypto");
+const { createHash, randomUUID } = require("node:crypto");
 const { spawn, spawnSync } = require("node:child_process");
 const { buildPrompt, validateReview, validateIds, strictJson } = require("../../zcode/scripts/review.js");
 
@@ -81,6 +81,29 @@ function saveDurableRecord(file, bytes) {
   }
   // Directory fsync is supported on POSIX; Windows durability remains subject
   // to the native lifecycle gate and is never claimed by this fixture entry.
+  if (process.platform !== "win32") {
+    const dir = fs.openSync(path.dirname(file), "r");
+    try { fs.fsyncSync(dir); } finally { fs.closeSync(dir); }
+  }
+}
+
+// Publish a final record atomically and exclusively: a complete, fsynced
+// temporary file in the same directory is linked to its final name. link
+// fails when the target exists and never replaces it, and at no instant does
+// a partial file carry the final name. rename would overwrite; wx would
+// expose the created-but-unwritten file. A caught failure cleans up its
+// temporary; a crash between fsync and unlink leaves one behind, which
+// verifyRun reports as a problem.
+function publishExclusive(file, bytes) {
+  bytes = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes, "utf8");
+  const pending = `${file}.${process.pid}.${randomUUID()}.pending`;
+  let fd = fs.openSync(pending, "wx", 0o600);
+  try { fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); }
+  catch (error) { fs.closeSync(fd); try { fs.unlinkSync(pending); } catch {} throw error; }
+  fs.closeSync(fd);
+  try { fs.linkSync(pending, file); }
+  catch (error) { try { fs.unlinkSync(pending); } catch {} throw error; }
+  fs.unlinkSync(pending);
   if (process.platform !== "win32") {
     const dir = fs.openSync(path.dirname(file), "r");
     try { fs.fsyncSync(dir); } finally { fs.closeSync(dir); }
@@ -1176,8 +1199,11 @@ function writeRunRecords(out, { round, warnings = [] }) {
   // belongs to a complete, verified archive; a manifest without result.json
   // fails verify as incomplete.
   manifest["result.json"] = hash(resultBytes);
-  saveNew(path.join(out, "record-manifest.json"), JSON.stringify({ format: 1, files: manifest }, null, 2) + "\n");
-  saveNew(path.join(out, "result.json"), resultBytes);
+  // The manifest and the result are published exclusively and atomically:
+  // at no instant does a partial file carry either final name, and an
+  // existing record is never replaced (V2.2.1 D3).
+  publishExclusive(path.join(out, "record-manifest.json"), JSON.stringify({ format: 1, files: manifest }, null, 2) + "\n");
+  publishExclusive(path.join(out, "result.json"), resultBytes);
   return result;
 }
 
@@ -1188,6 +1214,12 @@ function writeRunRecords(out, { round, warnings = [] }) {
 function verifyRun(directory) {
   const problems = [];
   const problem = message => problems.push(message);
+  // A crash between the fsync of a publication temporary and its unlink
+  // leaves a complete copy behind. The directory was never fsynced with the
+  // final name in place, so any leftover temporary is a problem.
+  for (const name of fs.readdirSync(directory)) {
+    if (name.endsWith(".pending")) problem(`unpublished publication temporary present: ${name}`);
+  }
   const resolveInside = name => {
     if (typeof name !== "string" || !name || path.isAbsolute(name) || name.split("/").some(part => !/^[A-Za-z0-9_.-]+$/.test(part) || part === "." || part === "..")) {
       problem(`manifest path is not a safe relative name: ${JSON.stringify(name)}`);

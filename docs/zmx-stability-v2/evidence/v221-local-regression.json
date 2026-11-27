@@ -130,6 +130,30 @@
         "skills/mmx/references/test-matrix.md keeps its historical run records untouched; the authoritative commands live in the README and verification.md files, and CI runs the forced entry.",
         "Windows runs the sentinel case (same-name zcode/mmx launchers on PATH) through the batch entries; the chat-wrapper sentinel cases are POSIX-skipped and covered on CI Linux."
       ]
+    },
+    {
+      "id": "D3",
+      "title": "result.json and record-manifest.json are published exclusively and atomically",
+      "changed": [
+        "skills/zcode-mmx-review/scripts/review-run.js",
+        "skills/zcode-mmx-review/tests/review-run.test.js",
+        "skills/zcode-mmx-review/tests/staged-review.test.js"
+      ],
+      "mechanism": "publishExclusive writes a complete, fsynced temporary file in the same directory and links it to the final name. link never replaces an existing record and at no instant does a partial file carry the final name; a caught failure removes its temporary; a crash between fsync and unlink leaves a temporary that verifyRun reports as a problem. The manifest is published first and result.json last, so a visible result always belongs to a complete verified archive.",
+      "reproduced": {
+        "command": "node skills/zcode-mmx-review/tests/support/offline-test.js --test-name-pattern \"V2.2.1 D3\" skills/zcode-mmx-review/tests/review-run.test.js",
+        "observed": "The ENOSPC injection left an empty result.json under the final name (the old saveNew created the file, then wrote). The two in-process tests (existing result.json never replaced, no temporary on a clean publication) passed on the unmodified code and are regression guards, marked as such. Two fault-injection matchers were corrected during reproduction: the descriptor regex must span pid.uuid (dot included) and the kill matcher must compare the basename, or it fires on primary-result.json first."
+      },
+      "after": {
+        "zcode-mmx-review": {
+          "command": "node skills/zcode-mmx-review/tests/support/offline-test.js \"skills/zcode-mmx-review/tests/**/*.test.js\"",
+          "tests": 279,
+          "pass": 269,
+          "fail": 0,
+          "skipped": 10
+        },
+        "note": "Four new tests: ENOSPC (child process, injected through a preload with two branches matching the old and the new write path), process interruption at the link (child process, SIGKILL before the link completes), an existing result.json never replaced, and a clean publication leaving no temporary. The ENOSPC case additionally proves the launch-time P1 stays published in primary-result.json, bound to the request material_version."
+      }
     }
   ],
   "status": {

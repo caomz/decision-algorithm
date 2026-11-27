@@ -1132,3 +1132,72 @@ describe("run-level regression locks (F2: M27, M28, M33)", () => {
     assert.equal(fs.existsSync(out), false, "no run directory may be created");
   });
 });
+
+// ---------------------------------------------------------------------------
+// V2.2.1 D3: result.json is published exclusively and atomically. A failed or
+// interrupted final write leaves neither a partial result.json nor, on a
+// clean failure, a temporary behind; an existing result.json is never
+// replaced. The launch-time P1 evidence stays published either way.
+// ---------------------------------------------------------------------------
+
+const pendings = dir => fs.readdirSync(dir).filter(name => name.endsWith(".pending"));
+
+test("V2.2.1 D3: a failed final write leaves neither a partial result.json nor a temporary", { timeout: 60000 }, () => {
+  const out = path.join(root, "cli-publish-enospc");
+  const fault = path.join(root, "enospc-at-result.cjs");
+  // Two injection points: the uncorrected code creates the final name and
+  // writes through a path string; the corrected code writes an fsynced
+  // temporary through a descriptor before linking it.
+  fs.writeFileSync(fault, [
+    "const fs = require(\"node:fs\");",
+    "const realOpen = fs.openSync, realWrite = fs.writeFileSync, tracked = new Set();",
+    "const noSpace = () => Object.assign(new Error(\"no space left on device (injected)\"), { code: \"ENOSPC\" });",
+    "fs.openSync = (file, flags, mode) => { const fd = realOpen(file, flags, mode); if (/result\\.json\\.[0-9a-f.-]+\\.pending$/.test(String(file))) tracked.add(fd); return fd; };",
+    "fs.writeFileSync = (target, data, ...rest) => {",
+    "  if (typeof target === \"string\" && target.endsWith(\"result.json\")) { realWrite(target, Buffer.alloc(0), { flag: \"wx\", mode: 0o600 }); throw noSpace(); }",
+    "  if (tracked.has(target)) throw noSpace();",
+    "  return realWrite(target, data, ...rest);",
+    "};",
+  ].join("\n") + "\n");
+  const run = spawnSync(process.execPath, ["--require", fault, RUNNER, "run", "--backend", "fixture", "--scenario", "zcode-fail", "--packet", packetFile, "--out", out],
+    { encoding: "utf8", timeout: 50000, env: cleanEnv() });
+  assert.notEqual(run.status, 0, "a failed publication must fail the run");
+  assert.equal(run.stdout.trim(), "", "no result may reach stdout");
+  assert.equal(fs.existsSync(path.join(out, "result.json")), false, "no partial result.json may be visible");
+  assert.deepEqual(pendings(out), [], "the temporary is cleaned up on a caught failure");
+  // The launch-time P1 stays published in its own record, bound to the launch material.
+  const primary = JSON.parse(fs.readFileSync(path.join(out, "primary-result.json"), "utf8"));
+  assert.equal(primary.PRIMARY_REVIEW_GATE, "FAIL");
+  assert.equal(primary.material_version, JSON.parse(fs.readFileSync(path.join(out, "request.json"), "utf8")).material_version);
+  const report = runner.verifyRun(out);
+  assert.notEqual(report.integrity, "match", "the archive is not consumable");
+  assert.notEqual(report.replay, "match");
+});
+
+test("V2.2.1 D3: a process interrupted while publishing leaves no consumable result", { timeout: 60000 }, async () => {
+  const out = path.join(root, "cli-publish-killed");
+  const fault = path.join(root, "kill-at-result.cjs");
+  // The uncorrected code is killed halfway through a direct write of the
+  // final name; the corrected code is killed at the instant of its exclusive
+  // link, before the link happens, so the final name never appears.
+  fs.writeFileSync(fault, [
+    "const fs = require(\"node:fs\"); const realLink = fs.linkSync, realWrite = fs.writeFileSync;",
+    "const kill = () => process.kill(process.pid, \"SIGKILL\");",
+    "const base = to => String(to).replace(/\\\\/g, \"/\").split(\"/\").pop();",
+    "fs.linkSync = (from, to) => { if (base(to) === \"result.json\") kill(); return realLink(from, to); };",
+    "fs.writeFileSync = (target, data, ...rest) => {",
+    "  if (typeof target === \"string\" && target.endsWith(\"result.json\")) { const bytes = Buffer.isBuffer(data) ? data : Buffer.from(data); realWrite(target, bytes.subarray(0, 5), { flag: \"wx\", mode: 0o600 }); kill(); }",
+    "  return realWrite(target, data, ...rest);",
+    "};",
+  ].join("\n") + "\n");
+  const child = spawn(process.execPath, ["--require", fault, RUNNER, "run", "--backend", "fixture", "--scenario", "both-pass", "--packet", packetFile, "--out", out],
+    { stdio: ["ignore", "pipe", "pipe"], env: cleanEnv() });
+  const code = await new Promise(resolve => child.once("close", resolve));
+  assert.notEqual(code, 0);
+  assert.equal(fs.existsSync(path.join(out, "result.json")), false, "a kill before the link must not expose result.json");
+  assert.equal(fs.existsSync(path.join(out, "record-manifest.json")), true, "the manifest was published first");
+  assert.equal(fs.existsSync(path.join(out, "primary-result.json")), true);
+  const report = runner.verifyRun(out);
+  assert.notEqual(report.integrity, "match", "the archive is not consumable");
+  assert.ok(report.problems.some(text => /result\.json|pending/.test(text)), JSON.stringify(report.problems));
+});

@@ -468,3 +468,23 @@ test("a normal dual PASS publishes a complete archive whose result is the last r
   assert.equal(manifest.files["result.json"], digest(fs.readFileSync(path.join(job.out, "result.json"))));
   assert.equal(manifest.files["material.txt"], read(job.out, "request.json").material_sha256);
 });
+
+test("V2.2.1 D3: an existing result.json is never replaced", { timeout: 15000 }, async () => {
+  const out = path.join(root, "publish-conflict");
+  const job = libraryRound("publish-conflict", "both-pass", {
+    onSideClosed: side => { if (side === "mmx") fs.writeFileSync(path.join(out, "result.json"), "{\"stale\":true}\n"); },
+  });
+  await assert.rejects(publish(job));
+  assert.equal(fs.readFileSync(path.join(out, "result.json"), "utf8"), "{\"stale\":true}\n", "the existing record wins");
+  const report = runner.verifyRun(out);
+  assert.notEqual(report.integrity, "match");
+  assert.ok(report.problems.some(text => text.includes("result.json")), JSON.stringify(report.problems));
+  assert.equal(fs.readdirSync(out).some(name => name.endsWith(".pending")), false, "no temporary is left behind");
+});
+
+test("V2.2.1 D3: a normal publication leaves no temporary behind", { timeout: 15000 }, async () => {
+  const job = libraryRound("publish-clean", "both-pass");
+  await publish(job);
+  assert.equal(fs.readdirSync(job.out).some(name => name.endsWith(".pending")), false);
+  assert.equal(runner.verifyRun(job.out).replay, "match");
+});
