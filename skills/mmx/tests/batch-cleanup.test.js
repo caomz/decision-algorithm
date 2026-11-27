@@ -124,9 +124,9 @@ test("phase A: a surviving group member blocks a safe completion even with a suc
   assert.equal(r.shards[0].local_cleanup, "unconfirmed");
   assert.equal(r.shards[0].lifecycle_validation, "NOT_EVALUATED");
   assert.deepEqual(r.survivors, [], "the survivor is killed within the bounded settling window");
-  assert.equal(r.receipt.transport_gate, "PASS");
   assert.equal(r.receipt.lifecycle_gate, "NOT_EVALUATED");
   assert.equal(r.receipt.gate, "NOT_EVALUATED", "a success JSON is not a safe completion");
+  assert.equal(r.receipt.batch.halted, "cleanup_unconfirmed");
   assert.equal(launched("survivor-success-OK"), false);
 });
 
