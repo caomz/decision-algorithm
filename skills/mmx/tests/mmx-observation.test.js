@@ -213,7 +213,8 @@ test("V2.2.1 D4: the admitted identity is handed to the entry that runs", () => 
   const { configFile, env, config } = approvedLayout();
   const probe = path.join(root, "binding-probe.cjs");
   fs.writeFileSync(probe, "process.stdout.write(process.env.ZMX_ACCEPTANCE_BINDING + \"\\n\");\n");
-  const run = spawnSync(process.execPath, [acceptance, "--config", configFile, "--", probe], { encoding: "utf8", env });
+  const run = spawnSync(process.execPath, [acceptance, "--config", configFile, "--", probe],
+    { encoding: "utf8", env: cleanEnv({ PATH: env.PATH }) });
   assert.equal(run.status, 0, run.stdout + run.stderr);
   const binding = JSON.parse(run.stdout);
   for (const field of ["node.version", "cli.package", "cli.version", "cli.entry_sha256", "undici.version"]) {
