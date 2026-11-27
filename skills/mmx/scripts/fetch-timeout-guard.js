@@ -10,13 +10,26 @@
 const fs = require("node:fs");
 const target = process.env.MMX_CHAT_UNDICI_PATH;
 const statusFile = process.env.MMX_CHAT_FETCH_GUARD_STATUS;
+// Experiment-only instrumentation: when set, every dispatch through the
+// installed agent is appended here, so an experiment can tell "initialized"
+// from "actually used". It changes nothing about the dispatcher itself.
+const traceFile = process.env.MMX_CHAT_GUARD_TRACE;
 // Workers and forks inherit --require and the environment. Only the original
 // CLI process acknowledges this wrapper; descendants initialize independently.
 delete process.env.MMX_CHAT_FETCH_GUARD_STATUS;
+delete process.env.MMX_CHAT_GUARD_TRACE;
 try {
   if (!target) throw new Error("guard target missing");
   const { Agent, setGlobalDispatcher } = require(target);
-  setGlobalDispatcher(new Agent({ headersTimeout: 0, bodyTimeout: 0 }));
+  const agent = new Agent({ headersTimeout: 0, bodyTimeout: 0 });
+  if (traceFile) {
+    const dispatch = agent.dispatch.bind(agent);
+    agent.dispatch = (opts, handler) => {
+      try { fs.appendFileSync(traceFile, JSON.stringify({ at_ms: Date.now(), origin: typeof opts?.origin === "string" ? opts.origin : null }) + "\n"); } catch {}
+      return dispatch(opts, handler);
+    };
+  }
+  setGlobalDispatcher(agent);
   if (statusFile) {
     fs.writeFileSync(statusFile, "applied\n", { flag: "wx", mode: 0o600 });
   }

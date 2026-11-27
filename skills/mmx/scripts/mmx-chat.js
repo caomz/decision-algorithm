@@ -694,6 +694,23 @@ async function main() {
   }
   telemetry.fetch_timeout_guard = launch.fetch_timeout_guard;
   telemetry.base_url_env = launch.base_url_env;
+  // What the guard label does and does not mean. An acknowledgement only shows
+  // that a global dispatcher was installed before the CLI entry ran. It does
+  // not show that any request used it: with an environment proxy, Node may
+  // install EnvHttpProxyAgent after the preload (version dependent), and the
+  // CLI may install a dispatcher of its own.
+  telemetry.fetch_guard_detail = {
+    scope: "initialization_only",
+    node: process.version,
+    proxy_sources: {
+      environment: PROXY_VARIABLES.some(name => process.env[name]),
+      mmx_config: configProxy(process.env, process.platform),
+      node_env_proxy: Boolean(process.env.NODE_USE_ENV_PROXY) || process.execArgv.includes("--use-env-proxy"),
+    },
+    initialized: "not_selected",
+    request_path_verified: false,
+    note: "A preload acknowledgement is not evidence that requests were protected from the 300 s header/body limit. Verify per Node version and proxy configuration with a controlled local service and dispatch tracing.",
+  };
 
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mmx-chat-"));
   let guardStatusFile = null;
@@ -733,6 +750,7 @@ async function main() {
     try {
       initialized = fs.lstatSync(guardStatusFile).isFile() && fs.readFileSync(guardStatusFile, "utf8") === "applied\n";
     } catch {}
+    telemetry.fetch_guard_detail.initialized = initialized ? "acknowledged" : "not_confirmed";
     if (!initialized) {
       telemetry.fetch_timeout_guard = "preload_failed";
       if (chat.kind === "closed") {

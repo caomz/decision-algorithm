@@ -359,6 +359,9 @@ for (const [name, mutate] of tampers) {
   test(`F02: ${name} is reported corrupt and never repaired`, async () => {
     const c = setup(); const job = start(path.join(c.dir, "job"), c.options).job_dir; await finished(job);
     assert.equal(verify(job).integrity, "match");
+    // Let the worker finish its own release bookkeeping first: a tamper must
+    // not race with it. On Windows no release happens at all.
+    if (process.platform !== "win32") await until(() => status(job).execution?.slot_released === true, 8000);
     mutate(job);
     const slotRoot = path.join(c.dir, "slots"), slotsBefore = archiveEntries(slotRoot), archiveBefore = archiveEntries(shardsOf(job));
     assert.equal(verify(job).integrity, "corrupt", name);
@@ -376,6 +379,7 @@ test("F02: a raw receipt swapped in from another material is rejected", async ()
   const prompt = path.join(c.dir, "other.txt"); fs.writeFileSync(prompt, "SYNTHETIC REQUEST B\n");
   const other = start(path.join(c.dir, "other"), ["--backend", "fixture", "--prompt-file", prompt, "--slot-root", path.join(c.dir, "slots-other")]).job_dir;
   await finished(other);
+  if (process.platform !== "win32") await until(() => status(job).execution?.slot_released === true, 8000);
   fs.copyFileSync(path.join(shardsOf(other), "000.raw.json"), path.join(shardsOf(job), "000.raw.json"));
   assert.equal(verify(job).integrity, "corrupt");
   assert.equal(status(job).status, "unknown");

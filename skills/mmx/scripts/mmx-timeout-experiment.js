@@ -10,6 +10,47 @@ const { performance } = require("node:perf_hooks");
 const GUARD = path.join(__dirname, "fetch-timeout-guard.js");
 const EXPECTED_CLI = "1.0.29";
 const sha = b => createHash("sha256").update(b).digest("hex");
+const MODEL_PATH = "/anthropic/v1/messages";
+// Observation is counted per layer so that a single completed request body
+// is never mistaken for proof of "no retry": connections, request heads,
+// complete and aborted bodies, client errors, and model versus other
+// endpoints. A connection that never delivered a request head, an aborted
+// body or an in-flight request leaves the observation unknown.
+function observe(server, modelPath = MODEL_PATH) {
+  const counters = { connections: 0, request_heads: 0, complete_bodies: 0, aborted_bodies: 0, in_flight: 0, client_errors: 0, model_requests: 0, other_requests: 0 };
+  server.on("connection", () => { counters.connections += 1; });
+  server.on("request", (req, res) => {
+    counters.request_heads += 1;
+    const state = { done: false };
+    const kind = req.url.split("?")[0] === modelPath ? "model" : "other";
+    const settle = aborted => {
+      if (state.done) return;
+      state.done = true;
+      if (aborted || !req.complete) counters.aborted_bodies += 1;
+      else { counters.complete_bodies += 1; counters[kind === "model" ? "model_requests" : "other_requests"] += 1; }
+    };
+    req.on("end", () => settle(false));
+    req.on("aborted", () => settle(true));
+    req.on("close", () => settle(!req.complete));
+  });
+  // Registering clientError replaces Node's default 400 response: count the
+  // error and destroy the socket so the connection cannot linger.
+  server.on("clientError", (error, socket) => {
+    counters.client_errors += 1;
+    if (socket.writable) socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
+    socket.destroy();
+  });
+  return counters;
+}
+function observation(counters) {
+  const settled = counters.request_heads - counters.complete_bodies - counters.aborted_bodies;
+  const reasons = [
+    counters.connections > counters.request_heads ? "connections_without_request_head" : null,
+    counters.aborted_bodies > 0 ? "aborted_request_bodies" : null,
+    settled > 0 ? "requests_in_flight" : null,
+    counters.client_errors > 0 ? "client_errors" : null ].filter(Boolean);
+  return { ...counters, observation: reasons.length ? "unknown" : "complete", unknown_reasons: reasons };
+}
 function save(file, value) {
   const fd = fs.openSync(file, "wx", 0o600);
   try { fs.writeFileSync(fd, JSON.stringify(value, null, 2) + "\n"); fs.fsyncSync(fd); }
@@ -87,7 +128,7 @@ async function experiment(opts) {
       let bytes = 0; const hash = createHash("sha256");
       req.on("data", b => { bytes += b.length; hash.update(b); });
       req.on("end", () => {
-        events.push({ ordinal: events.length + 1, method: req.method, path: req.url, received_ms: Math.round(performance.now() - began), body_bytes: bytes, body_sha256: hash.digest("hex") });
+        events.push({ ordinal: events.length + 1, method: req.method, path: req.url, endpoint: req.url.split("?")[0] === MODEL_PATH ? "model" : "other", received_ms: Math.round(performance.now() - began), body_bytes: bytes, body_sha256: hash.digest("hex") });
         if (name === "connection-reset") { req.socket.destroy(); return; }
         const send = () => { res.setHeader("Content-Type", "application/json"); if (name.startsWith("http-")) { res.statusCode = Number(name.slice(5)); res.end(JSON.stringify({ type: "error", error: { type: "api_error", message: "controlled local failure" } })); } else res.end(JSON.stringify(response)); };
         if (name.startsWith("headers-")) { const timer = setTimeout(send, opts.delayMs); timers.add(timer); }
@@ -100,6 +141,7 @@ async function experiment(opts) {
       });
     });
     server.on("connection", sock => { sockets.add(sock); sock.on("close", () => sockets.delete(sock)); });
+    const counters = observe(server);
     await new Promise((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
     const endpoint = `http://127.0.0.1:${server.address().port}`;
     const ack = path.join(out, `${name}.guard`);
@@ -143,7 +185,7 @@ async function experiment(opts) {
     for (const socket of sockets) socket.destroy();
     await new Promise(resolve => server.close(resolve));
     let acknowledged = false; try { acknowledged = fs.readFileSync(ack, "utf8") === "applied\n"; } catch {}
-    const result = { case: name, elapsed_ms: Math.round(performance.now() - began), guarded, guard_initialized: acknowledged, requests: events.length, requests_after_first: Math.max(0, events.length - 1), events, ...outcome };
+    const result = { case: name, elapsed_ms: Math.round(performance.now() - began), guarded, guard_initialized: acknowledged, requests: events.length, requests_after_first: Math.max(0, events.length - 1), http_observation: observation(counters), events, ...outcome };
     save(path.join(out, `${name}.json`), result);
     process.stdout.write(JSON.stringify({ case: name, elapsed_ms: result.elapsed_ms, requests: events.length, exit_code: result.exit_code }) + "\n");
     return result;
@@ -151,7 +193,12 @@ async function experiment(opts) {
   // Fetch controls are independent, non-provider processes. Actual CLI cases stay serial.
   if (opts.suite === "node-fetch") results.push(...await Promise.all(cases.map(runCase)));
   else for (const name of cases) results.push(await runCase(name));
-  const report = { ...plan, real_mmx_transport: opts.suite === "mmx-cli" && results.some(r => r.requests > 0) ? (results.every(r => r.requests > 0) ? "OBSERVED_LOCAL_ONLY" : "INCOMPLETE_LOCAL_ONLY") : "NOT_EVALUATED", provider_internal_retry: opts.suite === "mmx-cli" ? { status: results.every(r => r.requests > 0 && r.local_process_exit_observed && !r.capture_truncated && r.stop_reason === null) ? "OBSERVED_LOCAL_SCENARIOS" : "INCOMPLETE_NOT_EVALUATED", evidence_scope: "listed local scenarios only; never generalized to all faults", observed_cases: results.filter(r => r.requests > 0).map(r => r.case), unobserved_cases: results.filter(r => r.requests === 0).map(r => r.case), additional_requests_observed: results.some(r => r.requests > 1) } : "NOT_EVALUATED", cases: results };
+  const report = { ...plan, real_mmx_transport: opts.suite === "mmx-cli" && results.some(r => r.requests > 0) ? (results.every(r => r.requests > 0) ? "OBSERVED_LOCAL_ONLY" : "INCOMPLETE_LOCAL_ONLY") : "NOT_EVALUATED", provider_internal_retry: opts.suite === "mmx-cli" ? { status: results.every(r => r.requests > 0 && r.local_process_exit_observed && !r.capture_truncated && r.stop_reason === null) ? "OBSERVED_LOCAL_SCENARIOS" : "INCOMPLETE_NOT_EVALUATED", evidence_scope: "listed local scenarios only; never generalized to all faults", observed_cases: results.filter(r => r.requests > 0).map(r => r.case), unobserved_cases: results.filter(r => r.requests === 0).map(r => r.case), additional_requests_observed: results.some(r => r.requests > 1) } : "NOT_EVALUATED",
+    http_observation: { cases: results.map(r => ({ case: r.case, ...r.http_observation })),
+      additional_model_requests_observed: results.some(r => r.http_observation.model_requests > 1),
+      other_endpoint_requests_observed: results.some(r => r.http_observation.other_requests > 0),
+      incomplete_observation: results.some(r => r.http_observation.observation !== "complete"),
+      note: "Only an additional complete request to the model endpoint is retry evidence. A second request elsewhere has another purpose; a connection without a request head or an aborted body is unknown, not zero." }, cases: results };
   save(path.join(out, "report.json"), report);
   return report;
 }
@@ -165,4 +212,4 @@ async function fetchChild() {
 }
 if (require.main === module) {
   (process.argv[2] === "--fetch-child" ? fetchChild() : experiment(parse(process.argv.slice(2)))).catch(error => { process.stderr.write(error.message + "\n"); process.exitCode = 2; });
-} else module.exports = { parse, isolation, experiment };
+} else module.exports = { parse, isolation, experiment, observe, observation, MODEL_PATH };
