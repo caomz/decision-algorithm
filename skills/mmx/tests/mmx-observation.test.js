@@ -9,7 +9,7 @@ const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
-const { observe, observation, MODEL_PATH } = require("../scripts/mmx-timeout-experiment.js");
+const { observe, observation, summarize, MODEL_PATH } = require("../scripts/mmx-timeout-experiment.js");
 const { checkAcceptance } = require("../scripts/acceptance-profile.js");
 const { cleanEnv } = require("./support/env.js");
 
@@ -41,7 +41,7 @@ test("phase D: a complete model request is counted on every layer", async () => 
   });
   await until(() => counters.complete_bodies === 1);
   assert.deepEqual(observation(counters), { connections: 1, request_heads: 1, complete_bodies: 1, aborted_bodies: 0, in_flight: 0,
-    client_errors: 0, model_requests: 1, other_requests: 0, observation: "complete", unknown_reasons: [] });
+    client_errors: 0, model_requests: 1, other_requests: 0, headless_connections: 0, observation: "complete", unknown_reasons: [] });
   await close(srv);
 });
 
@@ -90,6 +90,50 @@ test("phase D: a request to another endpoint is not model retry evidence", async
   assert.equal(counters.other_requests, 1, "a second request elsewhere has another purpose");
   assert.equal(observation(counters).observation, "complete");
   await close(srv);
+});
+
+async function reuseThenHeadless(port) {
+  // Two requests over one keep-alive connection, then a connection that closes without a request head.
+  const agent = new http.Agent({ keepAlive: true, maxSockets: 1 });
+  for (let i = 0; i < 2; i++) await new Promise((resolve, reject) => {
+    const req = http.get({ host: "127.0.0.1", port, path: MODEL_PATH, agent }, res => { res.resume(); res.on("end", resolve); });
+    req.on("error", reject);
+  });
+  agent.destroy();
+  await new Promise(resolve => { const socket = net.connect(port, "127.0.0.1", () => { socket.destroy(); setTimeout(resolve, 100); }); socket.on("error", () => {}); });
+}
+
+test("V2.2.1 D5: a headless connection is seen beside a reused keep-alive connection", async () => {
+  const { srv, counters, port } = await server((req, res) => res.end("{}"));
+  try {
+    await reuseThenHeadless(port);
+    await until(() => observation(counters).observation === "unknown");
+    const result = observation(counters);
+    assert.equal(result.connections, 2);
+    assert.equal(result.request_heads, 2);
+    assert.equal(result.model_requests, 2);
+    assert.ok(result.headless_connections >= 1, JSON.stringify(result));
+    assert.ok(result.unknown_reasons.includes("connections_without_request_head"));
+  } finally { await close(srv); }
+});
+
+test("V2.2.1 D5: verdicts use only complete requests to the model endpoint", () => {
+  const counters = (heads, model, other) => ({ connections: heads, request_heads: heads, complete_bodies: heads, aborted_bodies: 0, in_flight: 0,
+    client_errors: 0, model_requests: model, other_requests: other, headless_connections: 0 });
+  const caseOf = (name, observed, extra = {}) => ({ case: name, requests: observed.request_heads, http_observation: { ...observed, observation: "complete" },
+    local_process_exit_observed: true, capture_truncated: false, stop_reason: null, ...extra });
+  const otherOnly = [caseOf("telemetry", counters(1, 0, 1))];
+  assert.equal(summarize(otherOnly, "mmx-cli").real_mmx_transport, "NOT_EVALUATED", "a request elsewhere is not model transport");
+  assert.deepEqual(summarize(otherOnly, "mmx-cli").provider_internal_retry.unobserved_cases, ["telemetry"]);
+  const mixed = [caseOf("ok", counters(1, 1, 0)), caseOf("other", counters(1, 0, 1))];
+  assert.equal(summarize(mixed, "mmx-cli").real_mmx_transport, "INCOMPLETE_LOCAL_ONLY");
+  assert.deepEqual(summarize(mixed, "mmx-cli").provider_internal_retry.observed_cases, ["ok"]);
+  const unknown = [caseOf("ok", counters(1, 1, 0)),
+    caseOf("aborted", counters(1, 1, 0), { http_observation: { ...counters(1, 1, 0), aborted_bodies: 1, complete_bodies: 0, observation: "unknown", unknown_reasons: ["aborted_request_bodies"] } })];
+  assert.equal(summarize(unknown, "mmx-cli").provider_internal_retry.status, "INCOMPLETE_NOT_EVALUATED", "an unknown case cannot be verified");
+  const clean = [caseOf("a", counters(1, 1, 0)), caseOf("b", counters(1, 1, 0))];
+  assert.equal(summarize(clean, "mmx-cli").provider_internal_retry.status, "OBSERVED_LOCAL_SCENARIOS");
+  assert.equal(summarize(clean, "node-fetch").provider_internal_retry, "NOT_EVALUATED");
 });
 
 // ---------------------------------------------------------------------------

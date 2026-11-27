@@ -179,6 +179,29 @@
         },
         "note": "Three new tests: the A/B refusal (B never launched, no output directory, refusal names cli.entry_sha256 and undici.version), the checkBinding field table including a missing binding, and the profile handing the admitted identity to the entry it runs (probe). The existing zero-request synthetic-CLI case now runs WITH a matching binding and doubles as the positive admission path on CI Linux."
       }
+    },
+    {
+      "id": "D5",
+      "title": "HTTP observation is judged per socket, and verdicts use only complete model requests",
+      "changed": [
+        "skills/mmx/scripts/mmx-timeout-experiment.js",
+        "skills/mmx/tests/mmx-observation.test.js"
+      ],
+      "mechanism": "observe() follows every socket on its own: a socket that closes or stays open without ever delivering a request head is counted (headless_connections plus an open_headless live count), so the aggregate comparison connections > request_heads can no longer be defeated by a keep-alive connection that carried several requests. checkContinue/checkExpectation/upgrade/connect also mark their socket as headed. summarize() extracts the report verdicts: real_mmx_transport and provider_internal_retry now require, per case, a fully observed connection set and a complete request to the model endpoint; requests to other endpoints, aborted or in-flight bodies, client errors and headless connections are unknown, not zero. The raw any-endpoint repeat count is kept for diagnosis.",
+      "reproduced": {
+        "command": "node skills/mmx/tests/support/offline-test.js --test-name-pattern \"V2.2.1 D5\" skills/mmx/tests/mmx-observation.test.js",
+        "observed": "With two requests over one keep-alive connection plus one headless connection (connections 2, request heads 2) the observation stayed complete forever (deadline exceeded); summarize did not exist. The reproduction also exposed a test-hygiene defect: the until deadline threw before close(srv), leaving the server with open keep-alive sockets; the test now closes in a finally."
+      },
+      "after": {
+        "mmx": {
+          "command": "node skills/mmx/tests/support/offline-test.js \"skills/mmx/tests/**/*.test.js\"",
+          "tests": 162,
+          "pass": 146,
+          "fail": 0,
+          "skipped": 16
+        },
+        "note": "Two new tests: the keep-alive masking case (headless connection seen, unknown with connections_without_request_head) and the verdict table (other-endpoint-only is NOT_EVALUATED with the case unobserved; mixed is INCOMPLETE_LOCAL_ONLY; an unknown case cannot verify internal retry; fully observed single-request cases are OBSERVED_LOCAL_SCENARIOS; node-fetch stays NOT_EVALUATED). The existing layered-counting expectation gained headless_connections: 0."
+      }
     }
   ],
   "status": {

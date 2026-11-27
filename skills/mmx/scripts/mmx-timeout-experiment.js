@@ -11,15 +11,25 @@ const GUARD = path.join(__dirname, "fetch-timeout-guard.js");
 const EXPECTED_CLI = "1.0.29";
 const sha = b => createHash("sha256").update(b).digest("hex");
 const MODEL_PATH = "/anthropic/v1/messages";
-// Observation is counted per layer so that a single completed request body
-// is never mistaken for proof of "no retry": connections, request heads,
-// complete and aborted bodies, client errors, and model versus other
-// endpoints. A connection that never delivered a request head, an aborted
-// body or an in-flight request leaves the observation unknown.
+// Observation is counted per layer and per socket, so that a single completed
+// request body is never mistaken for proof of "no retry": connections, request
+// heads, complete and aborted bodies, client errors, and model versus other
+// endpoints. Every socket is followed on its own, so a connection that never
+// delivered a request head is seen even beside a connection that carried
+// several; an aborted body or an in-flight request leaves the observation
+// unknown (V2.2.1 D5).
 function observe(server, modelPath = MODEL_PATH) {
-  const counters = { connections: 0, request_heads: 0, complete_bodies: 0, aborted_bodies: 0, in_flight: 0, client_errors: 0, model_requests: 0, other_requests: 0 };
-  server.on("connection", () => { counters.connections += 1; });
+  const counters = { connections: 0, request_heads: 0, complete_bodies: 0, aborted_bodies: 0, in_flight: 0, client_errors: 0, model_requests: 0, other_requests: 0, headless_connections: 0 };
+  const sockets = new Map();
+  server.on("connection", socket => {
+    counters.connections += 1;
+    const state = { heads: 0 };
+    sockets.set(socket, state);
+    socket.once("close", () => { sockets.delete(socket); if (state.heads === 0) counters.headless_connections += 1; });
+  });
+  const head = socket => { const state = sockets.get(socket); if (state) state.heads += 1; };
   server.on("request", (req, res) => {
+    head(req.socket);
     counters.request_heads += 1;
     const state = { done: false };
     const kind = req.url.split("?")[0] === modelPath ? "model" : "other";
@@ -33,6 +43,9 @@ function observe(server, modelPath = MODEL_PATH) {
     req.on("aborted", () => settle(true));
     req.on("close", () => settle(!req.complete));
   });
+  // Other ways a request head can arrive all mark their socket.
+  for (const event of ["checkContinue", "checkExpectation", "upgrade"]) server.on(event, req => head(req.socket));
+  server.on("connect", (req, socket) => head(socket));
   // Registering clientError replaces Node's default 400 response: count the
   // error and destroy the socket so the connection cannot linger.
   server.on("clientError", (error, socket) => {
@@ -40,16 +53,40 @@ function observe(server, modelPath = MODEL_PATH) {
     if (socket.writable) socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
     socket.destroy();
   });
+  // Sockets still open without a head are unknown as well. Exposed through a
+  // non-enumerable property so the counters stay a plain record.
+  Object.defineProperty(counters, "open_headless", { enumerable: false, get: () => [...sockets.values()].filter(state => state.heads === 0).length });
   return counters;
 }
 function observation(counters) {
   const settled = counters.request_heads - counters.complete_bodies - counters.aborted_bodies;
+  const headless = counters.headless_connections + (counters.open_headless ?? 0);
   const reasons = [
-    counters.connections > counters.request_heads ? "connections_without_request_head" : null,
+    headless > 0 ? "connections_without_request_head" : null,
     counters.aborted_bodies > 0 ? "aborted_request_bodies" : null,
     settled > 0 ? "requests_in_flight" : null,
     counters.client_errors > 0 ? "client_errors" : null ].filter(Boolean);
-  return { ...counters, observation: reasons.length ? "unknown" : "complete", unknown_reasons: reasons };
+  return { ...counters, headless_connections: headless, observation: reasons.length ? "unknown" : "complete", unknown_reasons: reasons };
+}
+// Verdicts use only complete requests to the model endpoint on fully observed
+// cases. A request to another endpoint, an aborted or in-flight request, a
+// client error or a headless connection is not evidence of model transport,
+// and a case that is not fully observed cannot verify internal retry.
+function summarize(results, suite) {
+  if (suite !== "mmx-cli") return { real_mmx_transport: "NOT_EVALUATED", provider_internal_retry: "NOT_EVALUATED" };
+  const complete = r => r.http_observation.observation === "complete";
+  const model = r => (complete(r) ? r.http_observation.model_requests : 0);
+  const settled = r => r.local_process_exit_observed && !r.capture_truncated && r.stop_reason === null;
+  const observed = results.filter(r => model(r) > 0);
+  return {
+    real_mmx_transport: observed.length === results.length ? "OBSERVED_LOCAL_ONLY" : observed.length > 0 ? "INCOMPLETE_LOCAL_ONLY" : "NOT_EVALUATED",
+    provider_internal_retry: {
+      status: results.every(r => model(r) === 1 && settled(r)) ? "OBSERVED_LOCAL_SCENARIOS" : "INCOMPLETE_NOT_EVALUATED",
+      evidence_scope: "listed local scenarios only; never generalized to all faults",
+      observed_cases: observed.map(r => r.case), unobserved_cases: results.filter(r => !observed.includes(r)).map(r => r.case),
+      additional_model_requests_observed: results.some(r => model(r) > 1),
+    },
+  };
 }
 function save(file, value) {
   const fd = fs.openSync(file, "wx", 0o600);
@@ -214,12 +251,15 @@ async function experiment(opts) {
   // Fetch controls are independent, non-provider processes. Actual CLI cases stay serial.
   if (opts.suite === "node-fetch") results.push(...await Promise.all(cases.map(runCase)));
   else for (const name of cases) results.push(await runCase(name));
-  const report = { ...plan, real_mmx_transport: opts.suite === "mmx-cli" && results.some(r => r.requests > 0) ? (results.every(r => r.requests > 0) ? "OBSERVED_LOCAL_ONLY" : "INCOMPLETE_LOCAL_ONLY") : "NOT_EVALUATED", provider_internal_retry: opts.suite === "mmx-cli" ? { status: results.every(r => r.requests > 0 && r.local_process_exit_observed && !r.capture_truncated && r.stop_reason === null) ? "OBSERVED_LOCAL_SCENARIOS" : "INCOMPLETE_NOT_EVALUATED", evidence_scope: "listed local scenarios only; never generalized to all faults", observed_cases: results.filter(r => r.requests > 0).map(r => r.case), unobserved_cases: results.filter(r => r.requests === 0).map(r => r.case), additional_requests_observed: results.some(r => r.requests > 1) } : "NOT_EVALUATED",
+  // Verdicts use only complete model requests on fully observed cases; the
+  // raw any-endpoint repeat count is kept separately for diagnosis.
+  const verdicts = summarize(results, opts.suite);
+  const report = { ...plan, real_mmx_transport: verdicts.real_mmx_transport, provider_internal_retry: opts.suite === "mmx-cli" ? { ...verdicts.provider_internal_retry, additional_requests_observed: results.some(r => r.requests > 1) } : "NOT_EVALUATED",
     http_observation: { cases: results.map(r => ({ case: r.case, ...r.http_observation })),
-      additional_model_requests_observed: results.some(r => r.http_observation.model_requests > 1),
+      additional_model_requests_observed: opts.suite === "mmx-cli" ? verdicts.provider_internal_retry.additional_model_requests_observed : false,
       other_endpoint_requests_observed: results.some(r => r.http_observation.other_requests > 0),
       incomplete_observation: results.some(r => r.http_observation.observation !== "complete"),
-      note: "Only an additional complete request to the model endpoint is retry evidence. A second request elsewhere has another purpose; a connection without a request head or an aborted body is unknown, not zero." }, cases: results };
+      note: "Only an additional complete request to the model endpoint on a fully observed case is retry evidence. A second request elsewhere has another purpose; a connection without a request head or an aborted body is unknown, not zero." }, cases: results };
   save(path.join(out, "report.json"), report);
   return report;
 }
@@ -233,4 +273,4 @@ async function fetchChild() {
 }
 if (require.main === module) {
   (process.argv[2] === "--fetch-child" ? fetchChild() : experiment(parse(process.argv.slice(2)))).catch(error => { process.stderr.write(error.message + "\n"); process.exitCode = 2; });
-} else module.exports = { parse, isolation, experiment, observe, observation, checkBinding, MODEL_PATH };
+} else module.exports = { parse, isolation, experiment, observe, observation, summarize, checkBinding, MODEL_PATH };
