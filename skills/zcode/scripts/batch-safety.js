@@ -78,6 +78,21 @@ function finishArchive(archive, envelope) {
 function archiveErrorCode(err) {
   return typeof err?.code === "string" ? err.code : "IO";
 }
+// The wrapper's own cleanup report. MMX reports its CLI group in
+// local_tree_cleanup. ZCode reports cleanup_confirmed with cleanup_scope:
+// only an explicit true with a known scope is evidence. false, null, a
+// missing field, another type, a missing or unknown scope and the Windows
+// scope (descendants unverified) all leave the cleanup unconfirmed, so such
+// a shard is never followed by a new launch.
+const CONFIRMED_WRAPPER_REPORT = ["posix_group_absent", "not_applicable", "not_reported", "not_checked"];
+function wrapperGroupReport(side, receipt, grouped) {
+  if (side === "mmx") return grouped ? (receipt.local_tree_cleanup ?? "not_reported") : "not_applicable";
+  if (receipt.cleanup_confirmed !== true) return receipt.cleanup_confirmed === false ? "cleanup_failed" : "cleanup_unknown";
+  if (receipt.cleanup_scope !== "posix_process_group_only") {
+    return receipt.cleanup_scope === "descendants_unverified" ? "descendants_unverified" : "scope_unknown";
+  }
+  return grouped ? "posix_group_absent" : "not_applicable";
+}
 
 function sourceBytes(file) {
   const real = fs.realpathSync(file), before = fs.lstatSync(real);
@@ -218,13 +233,13 @@ function createBatch({ side, args, shards, fixedArgs, configFiles, supervisorSec
         //               wrapper that died without a usable envelope, a group
         //               member that is still alive, or an unknown CLI group.
         // Such a shard is never followed by a new launch in this batch.
-        const wrapperGroup = receipt.local_tree_cleanup ?? "not_reported";
+        const wrapperGroup = wrapperGroupReport(side, receipt, grouped);
         const group = ownedGroup();
         const normalEnd = !reason && rootExited && closed && binding && structure && [0, 1].includes(code);
         // A group member that outlived the wrapper root was observed; a later
         // kill does not turn that execution into a safe completion.
-        const confirmed = normalEnd && !survivorObserved && (group === "absent" || group === "not_applicable") && (!grouped ||
-          wrapperGroup === "posix_group_absent" || wrapperGroup === "not_reported" || wrapperGroup === "not_checked");
+        const confirmed = normalEnd && !survivorObserved && (group === "absent" || group === "not_applicable") &&
+          CONFIRMED_WRAPPER_REPORT.includes(wrapperGroup);
         resolve({ ...receipt, ...identity, request_state: rootExited && closed && !reason ? "LOCAL_TERMINAL" : "UNKNOWN",
           root_exit_observed: rootExited, pipe_close_observed: closed,
           owned_process_group: group, wrapper_cli_group: wrapperGroup, survivor_observed: survivorObserved,

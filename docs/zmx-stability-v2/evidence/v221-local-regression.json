@@ -1,0 +1,37 @@
+{
+  "format": 1,
+  "baseline": "6396f0ed282ce524b1f4342312a7d04276f84137",
+  "host": { "os": "win32 (Windows native)", "node": "v22.22.2", "worktree": "D:/python_code/github_my/decision-algorithm-zmx-v221" },
+  "baseline_tests": {
+    "zcode": { "tests": 94, "pass": 88, "fail": 0, "skipped": 6 },
+    "mmx": { "tests": 157, "pass": 141, "fail": 0, "skipped": 16 },
+    "zcode-mmx-review": { "tests": 268, "pass": 260, "fail": 0, "skipped": 8 },
+    "note": "zcode and mmx were recorded before any edit. The first cross-review run was polluted by a concurrent edit to skills/zcode/tests/zcode-batch.test.js (5 failures from a stale zcode release manifest: install_mismatch and doctor offline) and was rerun clean with the working tree stashed: 268 = 260 pass / 0 fail / 8 skipped. The clean totals match the Windows-native record in PR #39 (519 = 489/0/30)."
+  },
+  "defects": [
+    {
+      "id": "D1",
+      "title": "ZCode batch-safety ignored the wrapper's cleanup_confirmed / cleanup_scope",
+      "changed": [
+        "skills/zcode/scripts/batch-safety.js",
+        "skills/zcode/scripts/zcode-batch.js",
+        "skills/zcode/tests/zcode-batch.test.js",
+        "skills/zcode/.zcode-release.json",
+        "skills/zcode-mmx-review/tests/phase2-http-count.test.js"
+      ],
+      "semantics": "Only cleanup_confirmed === true (boolean) with a known cleanup_scope is evidence. false, null, a missing field, another type, a missing or unknown scope and descendants_unverified all leave the cleanup unconfirmed, and a shard with unconfirmed cleanup is never followed by a new launch. A business failure with confirmed cleanup keeps later shards running. On Windows the real wrapper reports cleanup_confirmed:null with descendants_unverified, so a real zcode batch stops after the first shard (decision A, recorded as a boundary).",
+      "reproduced": {
+        "command": "node --test skills/zcode/tests/zcode-batch.test.js",
+        "failed_tests": 7,
+        "observed": "every CLEANUP_* variant left shard.local_cleanup 'confirmed' and started the next shard; in review mode a missing cleanup_scope still produced gate 'PASS'. The vote test first ran in chat mode where votes are always null and could not discriminate; it was corrected to review mode and then reproduced gate 'PASS' on the unmodified code.",
+        "guard_tests_passing_before_fix": ["a business failure with confirmed cleanup does not stop later shards"]
+      },
+      "after": {
+        "zcode": { "command": "node --test \"skills/zcode/tests/**/*.test.js\"", "tests": 103, "pass": 97, "fail": 0, "skipped": 6 },
+        "zcode-mmx-review": { "command": "node --test \"skills/zcode-mmx-review/tests/**/*.test.js\"", "tests": 268, "pass": 260, "fail": 0, "skipped": 8 },
+        "note": "phase2-http-count T06 needed its fixture receipt aligned with the real wrapper's cleanup contract (a business failure with confirmed cleanup keeps later shards running); its HTTP-count purpose is unchanged. The mmx suite is untouched by this change and is re-run in the final full pass."
+      }
+    }
+  ],
+  "status": { "DURABLE_DEFAULT": "DISABLED", "REAL_BACKEND": "DISABLED", "REAL_PROVIDER": "NOT_EVALUATED" }
+}

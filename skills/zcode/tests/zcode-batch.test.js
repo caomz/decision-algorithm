@@ -46,7 +46,7 @@ const ok = extra => Object.assign({
   tool_calls: 0, tool_requests: 0, stop_reason: "stop", truncated: false,
   usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 },
   review_gate: "NOT_EVALUATED", artifacts_dir: "C:\\\\fake\\\\zcode-text-fake",
-  cleanup_confirmed: true, text: "REPLY:" + prompt.trim().slice(0, 30),
+  cleanup_confirmed: true, cleanup_scope: "posix_process_group_only", text: "REPLY:" + prompt.trim().slice(0, 30),
 }, extra);
 const passReview = { version: 1, summary: "Checked: unit; Not checkable: none", findings: [] };
 const failReview = { version: 1, summary: "Checked: unit; Not checkable: none", findings: [{
@@ -91,6 +91,30 @@ if (prompt.includes("REVIEW_BAD_SIGNAL")) { emit(reviewed(passReview, "PASS")); 
 if (prompt.includes("REVIEW_DUP_KEY")) { process.stdout.write('{"status":"ok","status":"ok","review_gate":"PASS"}\\n'); return; }
 if (prompt.includes("REVIEW_FAKE_GATE")) { emit(reviewed(passReview, "FAIL")); return; }
 if (prompt.includes("REVIEW_CLEANUP_NULL")) { emit(reviewed(passReview, "PASS", { cleanup_confirmed: null })); return; }
+if (prompt.includes("REVIEW_CLEANUP_SCOPE_MISSING")) {
+  const receipt = reviewed(passReview, "PASS", { cleanup_confirmed: true }); delete receipt.cleanup_scope; emit(receipt); return;
+}
+if (prompt.includes("BUSINESS_CLEANED")) {
+  // A normal business failure whose cleanup the wrapper reports as confirmed:
+  // later shards must keep running (V2.2.1 D1).
+  emit({ status: "cli_error", cli_invoked: true, complete: false, review_gate: "NOT_EVALUATED", exit_code: 3, signal: null,
+    cleanup_confirmed: true, cleanup_scope: "posix_process_group_only" });
+  process.exitCode = 1; return;
+}
+if (prompt.includes("CLEANUP_")) {
+  // Every variant of failed, unknown or missing cleanup evidence. Only an
+  // explicit true with a known scope is evidence (V2.2.1 D1).
+  const receipt = { status: "cli_error", cli_invoked: true, complete: false, review_gate: "NOT_EVALUATED", exit_code: 3, signal: null,
+    cleanup_confirmed: true, cleanup_scope: "posix_process_group_only" };
+  if (prompt.includes("CLEANUP_FALSE")) receipt.cleanup_confirmed = false;
+  if (prompt.includes("CLEANUP_NULL")) receipt.cleanup_confirmed = null;
+  if (prompt.includes("CLEANUP_TYPE")) receipt.cleanup_confirmed = "yes";
+  if (prompt.includes("CLEANUP_MISSING")) { delete receipt.cleanup_confirmed; delete receipt.cleanup_scope; }
+  if (prompt.includes("CLEANUP_SCOPE_MISSING")) delete receipt.cleanup_scope;
+  if (prompt.includes("CLEANUP_SCOPE_UNKNOWN")) receipt.cleanup_scope = "whole_machine";
+  if (prompt.includes("CLEANUP_SCOPE_DESC_UNVERIFIED")) receipt.cleanup_scope = "descendants_unverified";
+  emit(receipt); process.exitCode = 1; return;
+}
 if (prompt.includes("REVIEW_MODEL_FALSE")) { emit(reviewed(passReview, "PASS", { model_identity_source: "environment" })); return; }
 if (prompt.includes("REVIEW_TOOLS")) { emit(reviewed(passReview, "PASS", { tool_calls: 1 })); return; }
 if (prompt.includes("REVIEW_PASS")) { emit(reviewed(passReview, "PASS")); return; }
@@ -98,9 +122,9 @@ if (prompt.includes("REVIEW_FAIL")) { emit(reviewed(failReview, "FAIL")); return
 if (prompt.includes("AUTH_ERR")) { emit({ status: "auth_error", cli_invoked: false, complete: false, review_gate: "NOT_EVALUATED", error: "auth failed" }); return; }
 if (prompt.includes("POLICY_ERR")) { emit({ status: "policy_violation", cli_invoked: true, complete: false, review_gate: "NOT_EVALUATED", error: "tool used" }); return; }
 if (prompt.includes("TRUNC")) { emit(ok({ truncated: true, complete: false, stop_reason: "max_tokens", review_gate: "PASS" })); return; }
-if (prompt.includes("QUOTA_ONCE") && invocations === 0) { emit({ status: "quota_error", cli_invoked: true, complete: false, review_gate: "NOT_EVALUATED", error: "rate limited" }); return; }
-if (prompt.includes("TIMEOUT_ONCE") && invocations === 0) { emit({ status: "timeout", cli_invoked: true, complete: false, review_gate: "NOT_EVALUATED", error: "timed out" }); return; }
-if (prompt.includes("QUOTA_ALWAYS")) { emit({ status: "quota_error", cli_invoked: true, complete: false, review_gate: "NOT_EVALUATED", error: "rate limited" }); return; }
+if (prompt.includes("QUOTA_ONCE") && invocations === 0) { emit({ status: "quota_error", cli_invoked: true, complete: false, review_gate: "NOT_EVALUATED", error: "rate limited", cleanup_confirmed: true, cleanup_scope: "posix_process_group_only" }); return; }
+if (prompt.includes("TIMEOUT_ONCE") && invocations === 0) { emit({ status: "timeout", cli_invoked: true, complete: false, review_gate: "NOT_EVALUATED", error: "timed out", cleanup_confirmed: true, cleanup_scope: "posix_process_group_only" }); return; }
+if (prompt.includes("QUOTA_ALWAYS")) { emit({ status: "quota_error", cli_invoked: true, complete: false, review_gate: "NOT_EVALUATED", error: "rate limited", cleanup_confirmed: true, cleanup_scope: "posix_process_group_only" }); return; }
 emit(ok());
 `);
 
@@ -476,4 +500,42 @@ test("Phase 2: abrupt batch crash leaves completed shard and unknown intent",
     // exits by itself after 2.5s; give it time before removing fixture paths.
     await new Promise(resolve=>setTimeout(resolve,2700));
   } finally { if(child.exitCode===null&&child.signalCode===null) child.kill("SIGKILL"); }
+});
+
+// ---------------------------------------------------------------------------
+// V2.2.1 D1: the ZCode wrapper's own cleanup report (cleanup_confirmed with
+// cleanup_scope) decides whether the local cleanup counts as confirmed. Only
+// an explicit true with a known scope is evidence; a shard with unconfirmed
+// cleanup is never followed by a new launch.
+// ---------------------------------------------------------------------------
+
+const unconfirmed = ["CLEANUP_FALSE", "CLEANUP_NULL", "CLEANUP_TYPE", "CLEANUP_MISSING",
+  "CLEANUP_SCOPE_MISSING", "CLEANUP_SCOPE_UNKNOWN", "CLEANUP_SCOPE_DESC_UNVERIFIED"];
+for (const marker of unconfirmed) test(`V2.2.1 D1: ${marker} is unconfirmed and stops later shards`, () => {
+  const a = shardFile(`d1-${marker}-a.txt`, marker), b = shardFile(`d1-${marker}-b.txt`, "completed");
+  const result = receiptOf(runBatch(["--prompt-file", a, "--prompt-file", b]));
+  assert.equal(result.shards[0].local_cleanup, "unconfirmed");
+  assert.equal(result.shards[0].lifecycle_validation, "NOT_EVALUATED");
+  assert.equal(result.lifecycle_gate, "NOT_EVALUATED");
+  assert.equal(result.batch.halted, "cleanup_unconfirmed");
+  assert.equal(result.shards[1].status, "not_started");
+  assert.equal(result.shards[1].not_started_reason, "cleanup_unconfirmed");
+  assert.equal(fs.existsSync(path.join(stateDir, `d1-${marker}-b.txt`)), false, "the later shard must not start");
+});
+
+test("V2.2.1 D1: a business failure with confirmed cleanup does not stop later shards", () => {
+  const a = shardFile("d1-business-a.txt", "BUSINESS_CLEANED"), b = shardFile("d1-business-b.txt", "completed");
+  const result = receiptOf(runBatch(["--prompt-file", a, "--prompt-file", b]));
+  assert.equal(result.shards[0].status, "cli_error");
+  assert.equal(result.shards[0].local_cleanup, "confirmed");
+  assert.equal(result.shards[1].status, "ok");
+  assert.equal(result.batch.halted, null);
+  assert.equal(fs.existsSync(path.join(stateDir, "d1-business-b.txt")), true, "the later shard keeps running");
+});
+
+test("V2.2.1 D1: a PASS vote needs a known cleanup scope", () => {
+  const result = receiptOf(runBatch(["--prompt-file", shardFile("d1-vote-a.txt", "REVIEW_CLEANUP_SCOPE_MISSING"),
+    "--mode", "review", "--evidence-ids-file", idsFile]));
+  assert.equal(result.gate, "NOT_EVALUATED");
+  assert.equal(result.batch.review_not_evaluated, 1);
 });

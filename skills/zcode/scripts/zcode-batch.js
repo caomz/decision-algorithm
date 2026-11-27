@@ -178,7 +178,7 @@ function verifiedReviewVote(receipt, evidenceIds) {
       receipt.wrapper_exit_code !== 0 || receipt.wrapper_signal !== null ||
       receipt.exit_code !== 0 || receipt.signal !== null ||
       receipt.complete !== true || receipt.truncated !== false ||
-      receipt.cleanup_confirmed !== true ||
+      receipt.local_cleanup !== "confirmed" ||
       typeof receipt.model !== "string" || !/^glm(?:[-_.]|$)/i.test(receipt.model) ||
       typeof receipt.provider !== "string" || !receipt.provider.trim() ||
       receipt.model_identity_source !== "runtime.model_request" ||
