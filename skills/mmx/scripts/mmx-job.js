@@ -19,7 +19,10 @@ const RUNTIME = [__filename, BATCH, path.join(__dirname, "batch-safety.js"),
 const ADMISSION = Object.freeze({ default_enabled: false, allowed_backend: "fixture",
   native_lifecycle: "NOT_EVALUATED", real_transport: "NOT_EVALUATED" });
 const EXIT_UNKNOWN = 2;
-const FORMAT = 3;
+// Format 4 binds the completion record to the shard archive plan. Jobs written
+// by earlier formats no longer verify after the upgrade and report unknown, as
+// any job does once its pinned runtime scripts change.
+const FORMAT = 4;
 const CANCEL_GRACE_MS = 5000;
 const CANCEL_KILL_WAIT_MS = 2000;
 const HASH = /^[a-f0-9]{64}$/;
@@ -121,6 +124,27 @@ function matchesFingerprint(file, expected) {
   }
   const actual = fingerprint(file);
   if (actual.bytes !== expected.bytes || actual.sha256 !== expected.sha256) throw new Error("record digest mismatch");
+}
+function matchesDigest(file, expected, what) {
+  if (!HASH.test(expected)) throw new Error(`invalid digest record: ${what}`);
+  const bytes = regularBytes(file);
+  if (digest(bytes) !== expected) throw new Error(`record digest mismatch: ${what}`);
+  return bytes;
+}
+function matchesBytes(file, expected, what) {
+  const bytes = regularBytes(file);
+  if (!bytes.equals(Buffer.isBuffer(expected) ? expected : Buffer.from(expected, "utf8"))) throw new Error(`record content mismatch: ${what}`);
+  return bytes;
+}
+function listFiles(dir, base = dir, out = []) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const file = path.join(dir, entry.name);
+    if (entry.isSymbolicLink()) throw new Error("archive entry is a link");
+    if (entry.isDirectory()) listFiles(file, base, out);
+    else if (entry.isFile()) out.push(path.relative(base, file).split(path.sep).join("/"));
+    else throw new Error("unsupported archive entry");
+  }
+  return out;
 }
 function resolveArgs(argv) {
   // Admission is checked before reading any input or reserving any directory.
@@ -303,12 +327,65 @@ function submit(rootPath, key, argv) {
   syncCreatedPath(root, firstCreated);
   return { ...start(path.join(root, "job-" + digest(key)), argv), idempotency_key_sha256: digest(key) };
 }
+// The expected archive set is derived from the plan and the execution state in
+// the bound summary receipt; it never enumerates whatever survived on disk.
+// plan.json itself is bound through the completion record (shard_plan).
+function verifyShardArchive(job, request, receipt) {
+  const dir = path.join(job, "receipt.json.shards");
+  const stat = fs.lstatSync(dir);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("shard archive missing or not a directory");
+  const plan = readJson(path.join(dir, "plan.json"));
+  if (plan.format !== 1 || plan.provider !== "mmx" || plan.retry_policy !== "none" || plan.concurrency !== 1 ||
+      plan.batch_id !== receipt.batch_id || !Array.isArray(plan.config) || plan.config.length !== 1 ||
+      plan.config[0].flag !== "--profile-file" || plan.config[0].file !== "profile.json" ||
+      plan.config[0].sha256 !== request.profile.sha256 || !Array.isArray(plan.shards) ||
+      plan.shards.length !== request.prompts.length) throw new Error("shard archive plan mismatch");
+  const expected = new Set(["plan.json", "profile.json"]);
+  // Side files written inside the sealed input directory by the pinned fixture
+  // script or by cooperative cancellation; they are not shard evidence.
+  const sideFiles = /^\d{3}\.input\/(?:fixture-start|fixture-end)\.json$|^\d{3}\.input\/cancel\.request$/;
+  matchesDigest(path.join(dir, "profile.json"), request.profile.sha256, "sealed profile");
+  for (const [i, planned] of plan.shards.entries()) {
+    const label = String(i).padStart(3, "0"), shard = receipt.shards[i], prompt = request.prompts[i];
+    const snapshot = `${label}.input/${path.basename(prompt.file)}`;
+    if (!shard || planned.shard_id !== shard.shard_id || planned.attempt_id !== shard.attempt_id ||
+        planned.material_sha256 !== prompt.sha256 || planned.material_sha256 !== shard.material_sha256 ||
+        planned.request_sha256 !== shard.request_sha256 ||
+        String(planned.snapshot).split(path.sep).join("/") !== snapshot ||
+        planned.material_bytes !== prompt.bytes) throw new Error("shard archive plan mismatch");
+    expected.add(snapshot);
+    matchesDigest(path.join(dir, snapshot), prompt.sha256, `shard ${label} snapshot`);
+    if (shard.status === "not_started" && shard.request_state === "NOT_STARTED") continue;
+    // Launched attempts carry their launch intent and terminal record.
+    expected.add(`${label}.started.json`);
+    const intent = readJson(path.join(dir, `${label}.started.json`));
+    if (intent.state !== "launch_intent" || intent.request_state !== "UNKNOWN" || intent.attempt_id !== shard.attempt_id ||
+        intent.shard_id !== shard.shard_id || intent.material_sha256 !== shard.material_sha256 ||
+        intent.request_sha256 !== shard.request_sha256) throw new Error("shard launch intent mismatch");
+    if (shard.status === "not_started") continue;
+    expected.add(`${label}.json`);
+    matchesBytes(path.join(dir, `${label}.json`), Buffer.from(JSON.stringify(shard, null, 2) + "\n", "utf8"), `shard ${label} record`);
+    const raw = `${label}.raw.json`;
+    if (shard.raw_receipt_file === null) {
+      if (fs.existsSync(path.join(dir, raw))) throw new Error("unexpected raw shard receipt");
+    } else {
+      if (shard.status !== "ok" || shard.raw_receipt_file !== raw) throw new Error("raw shard receipt reference mismatch");
+      expected.add(raw);
+      matchesDigest(path.join(dir, raw), shard.captured_stdout_sha256, `shard ${label} raw receipt`);
+    }
+  }
+  for (const entry of listFiles(dir)) {
+    if (!expected.has(entry) && !sideFiles.test(entry)) throw new Error("unexpected shard archive entry");
+  }
+}
 function readExecution(job, requestDigest, request) {
   const confirmed = readJson(path.join(job, "completion-confirmed.json"));
   if (confirmed.request_sha256 !== requestDigest || confirmed.prior_completion_synced !== (process.platform !== "win32"))
     throw new Error("completion publication not confirmed for this platform");
   matchesFingerprint(path.join(job, "completion.json"), confirmed.completion);
   const completion = readJson(path.join(job, "completion.json"));
+  // A completion record must state which shard evidence it promises.
+  if (!Object.hasOwn(completion, "shard_plan")) throw new Error("completion does not state the shard archive binding");
   matchesFingerprint(path.join(job, "execution.json"), completion.execution);
   matchesFingerprint(path.join(job, "started.json"), completion.started);
   const execution = readJson(path.join(job, "execution.json"));
@@ -332,6 +409,7 @@ function readExecution(job, requestDigest, request) {
   if (execution.batch_started && !["cancelled", "supervisor_timeout"].includes(execution.reason) && !execution.batch_exit_observed) throw new Error("unobserved exit");
   if (execution.batch_started && execution.termination_confirmed === true) throw new Error("unproven descendant termination");
   for (const name of ["stdout.json", "stderr.log"]) matchesFingerprint(path.join(job, name), execution.outputs[name]);
+  let archiveBinding = "none_no_receipt";
   if (execution.receipt_exists) {
     matchesFingerprint(path.join(job, "receipt.json"), execution.outputs["receipt.json"]);
     const receipt = readJson(path.join(job, "receipt.json"));
@@ -340,7 +418,16 @@ function readExecution(job, requestDigest, request) {
       if (shard.material_sha256 !== request.prompts[i].sha256 ||
           (shard.status === "ok" && shard.batch_config_sha256 !== request.profile.sha256)) throw new Error("receipt material version mismatch");
     }
-  } else if (fs.existsSync(path.join(job, "receipt.json")) || execution.outputs["receipt.json"] !== null) throw new Error("unexpected receipt");
+    // The plan is bound by the completion record; every other archive entry
+    // is derived from that plan and the per-shard execution state.
+    if (!completion.shard_plan || typeof completion.shard_plan !== "object") throw new Error("completion is not bound to a shard plan");
+    matchesFingerprint(path.join(job, "receipt.json.shards", "plan.json"), completion.shard_plan);
+    verifyShardArchive(job, request, receipt);
+    archiveBinding = "completion_bound_plan_and_per_shard_records";
+  } else {
+    if (fs.existsSync(path.join(job, "receipt.json")) || execution.outputs["receipt.json"] !== null) throw new Error("unexpected receipt");
+    if (completion.shard_plan !== null) throw new Error("completion claims a shard plan without a receipt");
+  }
   const releasedPath = path.join(job, "slot-release.json");
   if (fs.existsSync(releasedPath)) {
     const released = readJson(releasedPath);
@@ -349,6 +436,7 @@ function readExecution(job, requestDigest, request) {
       throw new Error("invalid slot release evidence");
     execution.slot_released = true;
   }
+  execution.shard_archive_binding = archiveBinding;
   return execution;
 }
 function status(jobPath) {
@@ -380,7 +468,8 @@ function verify(jobPath) {
       return { integrity: "incomplete", job_dir: job };
     const execution = readExecution(job, requestDigest, request);
     if (execution.batch_started && !execution.batch_exit_observed) return { integrity: "incomplete", job_dir: job };
-    return { integrity: "match", job_dir: job, state: execution.reason,
+    return { integrity: "match", job_dir: job, state: execution.reason, record_format: execution.format,
+      shard_archive_binding: execution.shard_archive_binding ?? null,
       termination_confirmed: execution.termination_confirmed,
       note: "Local record consistency only; detached descendants and provider completion are not independently proven." };
   } catch {
@@ -559,10 +648,19 @@ async function worker(jobPath) {
     termination_confirmed: child ? (requested ? false : null) : true,
     batch_group_gone: groupGone(child), ...(spawnError ? { spawn_error: spawnError } : {}),
   });
+  // The completion record states the shard evidence it promises: the plan
+  // that defines the expected archive set. The set is checked here before
+  // publication, so a damaged archive never becomes a verified completion.
+  let shardPlan = null;
+  if (receipt_exists) {
+    shardPlan = fingerprint(path.join(shardArchive, "plan.json"));
+    verifyShardArchive(job, request, readJson(path.join(job, "receipt.json")));
+  }
   // Publish completion only after all evidence records are closed and hashed.
   writeOnce(path.join(job, "completion.json"), {
     execution: fingerprint(path.join(job, "execution.json")),
     started: fingerprint(path.join(job, "started.json")),
+    shard_plan: shardPlan,
   });
   // This confirmation is created only after completion's directory sync has
   // succeeded. A visible but unsuccessfully synced completion stays UNKNOWN.

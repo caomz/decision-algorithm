@@ -313,3 +313,94 @@ fs.fsyncSync=function(fd){const st=fs.fstatSync(fd);
   assert.equal(fs.existsSync(path.join(job, "slot-release.json")), false);
   assert.equal(cli(["worker", job]).status, 2);
 });
+
+// ---------------------------------------------------------------------------
+// F02: the completion record is bound to the shard archive plan. The expected
+// archive set is derived from that plan and the per-shard execution state,
+// never from whatever survived on disk. status/verify are read-only.
+// ---------------------------------------------------------------------------
+function archiveEntries(dir, base = dir, out = []) {
+  if (!fs.existsSync(dir)) return out;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const file = path.join(dir, entry.name);
+    if (entry.isDirectory()) archiveEntries(file, base, out); else out.push(path.relative(base, file).split(path.sep).join("/"));
+  }
+  return out.sort();
+}
+const shardsOf = job => path.join(job, "receipt.json.shards");
+const BINDING = "completion_bound_plan_and_per_shard_records";
+
+test("F02: completion is bound to the shard plan and the archive verifies as a whole", async () => {
+  const c = setup(); const job = start(path.join(c.dir, "job"), c.options).job_dir;
+  const result = await finished(job);
+  assert.equal(result.execution.shard_archive_binding, BINDING);
+  const report = verify(job);
+  assert.equal(report.integrity, "match");
+  assert.equal(report.record_format, 4);
+  assert.equal(report.shard_archive_binding, BINDING);
+  assert.equal(read(job, "completion.json").shard_plan.sha256, fp(path.join(shardsOf(job), "plan.json")).sha256);
+  assert.deepEqual(archiveEntries(shardsOf(job)), ["000.input/fixture-end.json", "000.input/fixture-start.json", "000.input/shard-0.txt",
+    "000.json", "000.raw.json", "000.started.json", "plan.json", "profile.json"]);
+});
+
+const tampers = [
+  ["raw shard receipt deleted", job => fs.unlinkSync(path.join(shardsOf(job), "000.raw.json"))],
+  ["raw shard receipt truncated", job => fs.truncateSync(path.join(shardsOf(job), "000.raw.json"), 8)],
+  ["per-shard record corrupted", job => fs.appendFileSync(path.join(shardsOf(job), "000.json"), "corrupt")],
+  ["per-shard record content rewritten", job => { const file = path.join(shardsOf(job), "000.json"); const record = JSON.parse(fs.readFileSync(file, "utf8")); record.text = "FORGED REPLACEMENT"; fs.writeFileSync(file, JSON.stringify(record, null, 2) + "\n"); }],
+  ["plan metadata rewritten", job => { const file = path.join(shardsOf(job), "plan.json"); const plan = JSON.parse(fs.readFileSync(file, "utf8")); plan.shards[0].material_sha256 = "f".repeat(64); fs.writeFileSync(file, JSON.stringify(plan, null, 2) + "\n"); }],
+  ["whole archive deleted", job => { for (const rel of archiveEntries(shardsOf(job)).slice().reverse()) fs.unlinkSync(path.join(shardsOf(job), rel)); fs.rmdirSync(path.join(shardsOf(job), "000.input")); fs.rmdirSync(shardsOf(job)); }],
+  ["launch intent deleted", job => fs.unlinkSync(path.join(shardsOf(job), "000.started.json"))],
+  ["unexpected archive entry", job => fs.writeFileSync(path.join(shardsOf(job), "999.json"), "{}\n")],
+  ["sealed input snapshot rewritten", job => fs.writeFileSync(path.join(shardsOf(job), "000.input", "shard-0.txt"), "REWRITTEN\n")],
+  ["sealed profile replaced", job => fs.writeFileSync(path.join(shardsOf(job), "profile.json"), "{}\n")],
+];
+for (const [name, mutate] of tampers) {
+  test(`F02: ${name} is reported corrupt and never repaired`, async () => {
+    const c = setup(); const job = start(path.join(c.dir, "job"), c.options).job_dir; await finished(job);
+    assert.equal(verify(job).integrity, "match");
+    mutate(job);
+    const slotRoot = path.join(c.dir, "slots"), slotsBefore = archiveEntries(slotRoot), archiveBefore = archiveEntries(shardsOf(job));
+    assert.equal(verify(job).integrity, "corrupt", name);
+    assert.equal(verify(job).integrity, "corrupt", "repeated read-only queries agree");
+    assert.equal(status(job).status, "unknown", name);
+    assert.deepEqual(archiveEntries(shardsOf(job)), archiveBefore, "inspection never rewrites the archive");
+    assert.deepEqual(archiveEntries(slotRoot), slotsBefore, "inspection never touches the provider slot");
+    assert.equal(start(job, c.options).reused, true, "the same key resolves to the same job");
+    assert.equal(cli(["worker", job]).status, 2, "corruption never starts another worker");
+  });
+}
+
+test("F02: a raw receipt swapped in from another material is rejected", async () => {
+  const c = setup(); const job = start(path.join(c.dir, "job"), c.options).job_dir; await finished(job);
+  const prompt = path.join(c.dir, "other.txt"); fs.writeFileSync(prompt, "SYNTHETIC REQUEST B\n");
+  const other = start(path.join(c.dir, "other"), ["--backend", "fixture", "--prompt-file", prompt, "--slot-root", path.join(c.dir, "slots-other")]).job_dir;
+  await finished(other);
+  fs.copyFileSync(path.join(shardsOf(other), "000.raw.json"), path.join(shardsOf(job), "000.raw.json"));
+  assert.equal(verify(job).integrity, "corrupt");
+  assert.equal(status(job).status, "unknown");
+});
+
+test("F02: an archive directory redirected elsewhere is rejected", { skip: process.platform === "win32" }, async () => {
+  const c = setup(); const job = start(path.join(c.dir, "job"), c.options).job_dir; await finished(job);
+  const outside = path.join(c.dir, "moved-archive"); fs.renameSync(shardsOf(job), outside);
+  fs.symlinkSync(outside, shardsOf(job), "dir");
+  assert.equal(verify(job).integrity, "corrupt");
+});
+
+test("F02: a failed shard carries its intent and record but promises no raw receipt", async () => {
+  const c = setup("FIXTURE_TRANSPORT_FAIL\n"); const job = start(path.join(c.dir, "job"), c.options).job_dir; await finished(job);
+  assert.equal(read(job, "receipt.json").shards[0].raw_receipt_file, null);
+  assert.equal(verify(job).integrity, "match");
+  fs.writeFileSync(path.join(shardsOf(job), "000.raw.json"), "{}\n");
+  assert.equal(verify(job).integrity, "corrupt", "a raw receipt the execution never promised is rejected");
+});
+
+test("F02: a job written by an earlier record format is not silently upgraded", async () => {
+  const c = setup(); const job = start(path.join(c.dir, "job"), c.options).job_dir; await finished(job);
+  const requestFile = path.join(job, "request.json"); const request = JSON.parse(fs.readFileSync(requestFile, "utf8"));
+  request.format = 3; fs.writeFileSync(requestFile, JSON.stringify(request, null, 2) + "\n");
+  fs.writeFileSync(path.join(job, "request-digest.json"), JSON.stringify(fp(requestFile)));
+  assert.equal(status(job).status, "unknown");
+  assert.equal(verify(job).integrity, "corrupt");
+});
