@@ -73,11 +73,11 @@ for (const side of ["mmx", "zcode"]) {
     assert.equal(launched(), before, "no CLI launcher may be started");
   });
 
-  test(`S0 ${side}: an override outside offline mode never falls back to the production wrapper`, () => {
+  test(`S0 ${side}: an override without its fixture contract is never launched`, () => {
     const before = launched();
     const result = attempt(side, { [keyOf(side)]: wrapper });
     assert.equal(result.envelope?.status, "usage_error");
-    assert.match(result.envelope.error, /requires ZMX_OFFLINE_FIXTURE=1/);
+    assert.match(result.envelope.error, /fixture root missing/);
     assert.equal(result.reserved, false);
     assert.equal(launched(), before);
   });

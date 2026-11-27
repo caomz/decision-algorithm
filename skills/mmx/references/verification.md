@@ -106,7 +106,7 @@ WSL 内 `node -p "process.platform"` 为 `linux` 时使用 POSIX 路径；调用
 
 ```text
 node --check scripts/mmx-chat.js
-node --test tests/mmx-chat.test.js
+node tests/support/offline-test.js tests/mmx-chat.test.js
 node scripts/mmx-chat.js --version
 ```
 

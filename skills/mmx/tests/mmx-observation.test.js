@@ -153,7 +153,8 @@ test("phase D: a matching approved combination is reported in dry-run without la
   // A drifted combination is refused with the differing field named.
   const driftedConfig = path.join(base, "drifted.json");
   fs.writeFileSync(driftedConfig, JSON.stringify({ ...config, cli: { ...config.cli, version: "1.0.30" } }, null, 2));
-  const refused = spawnSync(process.execPath, [acceptance, "--config", driftedConfig, "--dry-run"], { encoding: "utf8", env });
+  const refused = spawnSync(process.execPath, [acceptance, "--config", driftedConfig, "--dry-run"],
+    { encoding: "utf8", env: cleanEnv({ PATH: env.PATH }) });
   assert.equal(refused.status, 2);
   assert.deepEqual(JSON.parse(refused.stdout).problems, ["cli.version differs: expected 1.0.30, found 9.9.9"]);
 });

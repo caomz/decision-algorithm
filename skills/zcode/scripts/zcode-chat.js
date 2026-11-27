@@ -76,7 +76,10 @@ function checkInstall() {
 }
 
 function findCli(explicit, env = process.env) {
-  if (explicit) return fs.realpathSync(explicit);
+  const fixture = env.ZMX_OFFLINE_FIXTURE === "1";
+  const bind = file => { if (fixture) fixtureCli(file, env); return fs.realpathSync(file); };
+  if (explicit) return bind(explicit);
+  let unusable = null;
   for (const directory of (env.PATH || "").split(path.delimiter)) {
     if (!directory) continue;
     for (const name of process.platform === "win32" ? ["zcode.exe", "zcode.cmd", "zcode"] : ["zcode"]) {
@@ -87,11 +90,30 @@ function findCli(explicit, env = process.env) {
         // accept it because a directory is also "executable".
         if (!fs.statSync(file).isFile()) continue;
         fs.accessSync(file, fs.constants.X_OK);
-        return fs.realpathSync(file);
-      } catch {}
+        return bind(file);
+      } catch { if (fixture && unusable === null) unusable = file; }
     }
   }
+  // In fixture mode a launcher that exists but cannot run is refused: the
+  // search never continues to the next directory, so a missing or unusable
+  // fake can never fall through to an installed CLI.
+  if (unusable !== null) fail("fixture_contract");
   fail("cli_missing");
+}
+
+// Offline fixture contract for the CLI. In fixture mode the launcher must be a
+// regular file inside the declared root with the declared digest.
+function fixtureCli(file, env) {
+  const root = env.ZMX_FIXTURE_CLI_ROOT, expected = env.ZMX_FIXTURE_CLI_SHA256;
+  if (typeof root !== "string" || !path.isAbsolute(root) ||
+      typeof expected !== "string" || !/^[a-f0-9]{64}$/.test(expected)) fail("fixture_contract");
+  let stat;
+  try { stat = fs.lstatSync(file); } catch { fail("fixture_contract"); }
+  if (stat.isSymbolicLink() || !stat.isFile()) fail("fixture_contract");
+  const real = fs.realpathSync(file);
+  if (!real.startsWith(fs.realpathSync(root) + path.sep)) fail("fixture_contract");
+  if (createHash("sha256").update(fs.readFileSync(real)).digest("hex") !== expected) fail("fixture_contract");
+  return real;
 }
 
 function resolveLaunch(cli, originalHome = os.homedir()) {

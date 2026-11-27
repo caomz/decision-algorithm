@@ -44,6 +44,25 @@ function fail(result) {
   process.exitCode = 1;
 }
 
+// Offline fixture contract for the CLI. In fixture mode (ZMX_OFFLINE_FIXTURE=1,
+// forced by the shared test environment) only a launcher inside the declared
+// root with the declared digest is started, so a missing, unusable or unbound
+// fake can never fall through to an installed CLI. Returns the refusal
+// envelope, or null when the launcher satisfies the contract.
+function fixtureCliRefusal(file, env = process.env) {
+  const root = env.ZMX_FIXTURE_CLI_ROOT, expected = env.ZMX_FIXTURE_CLI_SHA256;
+  const refused = why => ({ status: "fixture_contract", complete: false, error: `offline fixture CLI refused: ${why}` });
+  if (typeof root !== "string" || !path.isAbsolute(root) ||
+      typeof expected !== "string" || !/^[a-f0-9]{64}$/.test(expected)) return refused("contract missing");
+  let stat;
+  try { stat = fs.lstatSync(file); } catch { return refused("launcher not found"); }
+  if (stat.isSymbolicLink() || !stat.isFile()) return refused("launcher is not a regular file");
+  const real = fs.realpathSync(file);
+  if (!real.startsWith(fs.realpathSync(root) + path.sep)) return refused("launcher escapes the fixture root");
+  if (createHash("sha256").update(fs.readFileSync(real)).digest("hex") !== expected) return refused("launcher digest mismatch");
+  return null;
+}
+
 function usageError(message) {
   throw Object.assign(new Error(message), { envelope: { status: "usage_error", error: message } });
 }
@@ -683,6 +702,11 @@ async function main() {
     return;
   }
   if (mmx.unsafe) usageError("Unsafe cmd.exe batch path. Use a resolvable npm shim.");
+  // The contract binds the file that is actually launched: the package entry
+  // for a shim or a linked launcher, the launcher itself for a custom one.
+  const fixtureRefusal = process.env.ZMX_OFFLINE_FIXTURE === "1"
+    ? fixtureCliRefusal(mmx.argsPrefix.length ? mmx.argsPrefix[0] : mmx.cmd) : null;
+  if (fixtureRefusal) { fail(fixtureRefusal); return; }
   const launch = cliLaunch(mmx);
   telemetry.cli_identity = launch.cli_identity;
   telemetry.provider_internal_retry = "NOT_EVALUATED";

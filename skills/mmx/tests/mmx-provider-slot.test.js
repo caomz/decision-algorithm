@@ -6,6 +6,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
+const { cleanEnv } = require("./support/env.js");
 const { acquireMmxSlot } = require("../scripts/mmx-provider-slot.js");
 
 async function withRoot(fn) {
@@ -23,7 +24,7 @@ test("a second process cannot enter the same MMX provider slot before release", 
     ].join("");
     const runner = path.resolve(__dirname, "../scripts/mmx-provider-slot.js");
     const result = await new Promise((resolve, reject) => {
-      const child = spawn(process.execPath, ["-e", script, runner, root], { stdio: ["ignore", "pipe", "pipe"] });
+      const child = spawn(process.execPath, ["-e", script, runner, root], { stdio: ["ignore", "pipe", "pipe"], env: cleanEnv() });
       let stdout = "";
       child.stdout.on("data", chunk => { stdout += chunk; });
       child.on("error", reject);

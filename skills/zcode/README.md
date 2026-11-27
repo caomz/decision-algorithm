@@ -87,9 +87,9 @@ node --check scripts/review.js
 node --check scripts/zcode-run.js
 node --check scripts/zcode-batch.js
 node --check scripts/repin-release.js
-node --test tests/zcode-chat.test.js
-node --test tests/zcode-batch.test.js
-node --test tests/repin-release.test.js
+node tests/support/offline-test.js tests/zcode-chat.test.js
+node tests/support/offline-test.js tests/zcode-batch.test.js
+node tests/support/offline-test.js tests/repin-release.test.js
 node scripts/zcode-chat.js --version
 node scripts/zcode-batch.js --version
 ```

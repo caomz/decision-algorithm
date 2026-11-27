@@ -62,7 +62,7 @@ function roundFor(scenario, name, options = {}) {
   const argv = { zcode: assembled.zcode.argv, mmx: assembled.mmx.argv };
   return runner.runFixtureRound(inputs, {
     out: dir, scenario, timeoutSeconds: 600, maxTokens: 524288,
-    argv, envBase: { PATH: process.env.PATH },
+    argv, envBase: { PATH: cleanEnv().PATH },
     strategy: options.strategy ?? "dual-parallel",
     fakeProcessMs: options.fakeProcessMs ?? 10000,
   }).then(round => ({ round, dir, argv }));
@@ -899,7 +899,7 @@ describe("cancellation state machine", { skip: process.platform === "win32" && "
     let mmxAtSignal = null;
     const roundPromise = runner.runFixtureRound(inputs, {
       out: dir, scenario: "zcode-fail-mmx-slow", strategy: "dual-parallel", timeoutSeconds: 600, maxTokens: 524288,
-      argv: argvBySide, envBase: { PATH: process.env.PATH }, fakeProcessMs: 300, // 截止时间短于 exitMs 1500
+      argv: argvBySide, envBase: { PATH: cleanEnv().PATH }, fakeProcessMs: 300, // 截止时间短于 exitMs 1500
       onSpawn: (side, child) => {
         if (side !== "mmx") return;
         // 同步于 mmx spawn 之后发信号：两侧 entry 都已建、都尚未 close（U5 前置）。
@@ -931,7 +931,7 @@ describe("cancellation state machine", { skip: process.platform === "win32" && "
     let signalled = false;
     const roundPromise = runner.runFixtureRound(inputs, {
       out: dir, scenario: "zcode-fail-mmx-slow", strategy: "dual-parallel", timeoutSeconds: 600, maxTokens: 524288,
-      argv: argvBySide, envBase: { PATH: process.env.PATH }, fakeProcessMs: 1200, // 仍短于 exitMs 1500
+      argv: argvBySide, envBase: { PATH: cleanEnv().PATH }, fakeProcessMs: 1200, // 仍短于 exitMs 1500
       onSideClosed: side => {
         if (side !== "zcode" || signalled) return;
         // 信号同步于 zcode close 处理之后：zcode 已定态 completed；mmx 的退出只可能
@@ -962,7 +962,7 @@ describe("cancellation state machine", { skip: process.platform === "win32" && "
     const { dir, assembled, argvBySide } = await prepareRoundDir("cancel-b");
     const roundPromise = runner.runFixtureRound(inputs, {
       out: dir, scenario: "zcode-fail-mmx-slow", strategy: "dual-parallel", timeoutSeconds: 600, maxTokens: 524288,
-      argv: argvBySide, envBase: { PATH: process.env.PATH }, fakeProcessMs: 300,
+      argv: argvBySide, envBase: { PATH: cleanEnv().PATH }, fakeProcessMs: 300,
     });
     await waitFor(() => fs.existsSync(path.join(dir, "mmx-observed-input.json")), "mmx observed");
     // 等 deadline（300ms）触发、进入 terminating（mmx 收到 SIGTERM 开始 1500ms 退出计时）之后再取消。

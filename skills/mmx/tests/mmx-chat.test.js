@@ -8,7 +8,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
 const { safeCmdArgument, npmShimEntry, mmxPackageEntry, linkedEntry, cliLaunch, withFetchLimitHint, findMmx, terminateChildTree } = require(path.join(__dirname, "..", "scripts", "mmx-chat.js"));
-const { cleanEnv } = require("./support/env.js");
+const { cleanEnv, fixtureCliEnv } = require("./support/env.js");
 
 const skillRoot = path.resolve(__dirname, "..");
 const wrapper = path.join(skillRoot, "scripts", "mmx-chat.js");
@@ -128,7 +128,8 @@ function writeInputs(prompt = "hello", system = null) {
 function runWrapper(args = [], extraEnv = {}, includeFake = true) {
   fs.writeFileSync(invocationLog, "");
   const env = cleanEnv({
-    PATH: includeFake ? `${binDir}${path.delimiter}${process.env.PATH || ""}` : "",
+    PATH: includeFake ? `${binDir}` : "",
+    ...fixtureCliEnv(fakeMmxPath),
     TMPDIR: wrapperTmp,
     TMP: wrapperTmp,
     TEMP: wrapperTmp,
@@ -477,7 +478,7 @@ test("POSIX CLI path with spaces, Chinese, and metacharacters is direct", () => 
   const cli = path.join(specialBin, "mmx");
   fs.writeFileSync(cli, `#!${process.execPath}\nrequire(${JSON.stringify(fakeJsPath)});\n`, { mode: 0o755 });
   writeInputs("special path");
-  assert.equal(jsonResult(runChat([], { PATH: `${specialBin}${path.delimiter}${process.env.PATH || ""}` })).status, "ok");
+  assert.equal(jsonResult(runChat([], { PATH: `${specialBin}`, ...fixtureCliEnv(path.join(specialBin, "mmx")) })).status, "ok");
   fs.unlinkSync(cli); fs.rmdirSync(specialBin);
 });
 
@@ -487,7 +488,7 @@ test("launch error yields one JSON object", () => {
   const cli = path.join(bin, "mmx");
   fs.writeFileSync(cli, "#!/definitely/missing/interpreter\n", { mode: 0o755 });
   writeInputs("launch failure");
-  const run = runChat([], { PATH: bin });
+  const run = runChat([], { PATH: bin, ...fixtureCliEnv(cli) });
   assert.equal(jsonResult(run).status, "api_error");
   assert.equal(run.stdout.trim().split(/\r?\n/).length, 1);
   fs.unlinkSync(cli); fs.rmdirSync(bin);
@@ -508,7 +509,7 @@ test("SIGTERM cancellation yields one final JSON object", async () => {
   if (process.platform === "win32") return;
   writeInputs("cancel");
   unlinkKnown(argsDumpPath);
-  const env = cleanEnv({ PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`,
+  const env = cleanEnv({ PATH: `${binDir}`, ...fixtureCliEnv(fakeMmxPath),
     TMPDIR: wrapperTmp, TMP: wrapperTmp, TEMP: wrapperTmp, FAKE_MODE: "hang",
     FAKE_ARGS_DUMP: argsDumpPath, FAKE_MESSAGES_DUMP: messagesDumpPath });
   const child = spawn(process.execPath, [wrapper, "--prompt-file", promptPath], { env, stdio: ["ignore", "pipe", "pipe"] });
@@ -573,7 +574,7 @@ test("managed release rejects mixed or interrupted installation before launching
   function run() {
     fs.writeFileSync(invocationLog, "");
     return jsonResult(spawnSync(process.execPath, [installedWrapper, "--prompt-file", promptPath], {
-      env: cleanEnv({ PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`, TMPDIR: wrapperTmp,
+      env: cleanEnv({ PATH: `${binDir}`, ...fixtureCliEnv(fakeMmxPath), TMPDIR: wrapperTmp,
         TMP: wrapperTmp, TEMP: wrapperTmp, FAKE_INVOCATIONS: invocationLog }),
       encoding: "utf8", timeout: 15000,
     }));
@@ -618,7 +619,7 @@ test("a managed layout without a release marker fails closed before the CLI runs
   fs.writeFileSync(invocationLog, "");
   const run = spawnSync(process.execPath, [path.join(managed, "mmx", "scripts", "mmx-chat.js"),
     "--prompt-file", promptPath], {
-    env: cleanEnv({ PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`, TMPDIR: wrapperTmp,
+    env: cleanEnv({ PATH: `${binDir}`, ...fixtureCliEnv(fakeMmxPath), TMPDIR: wrapperTmp,
       TMP: wrapperTmp, TEMP: wrapperTmp, FAKE_INVOCATIONS: invocationLog }),
     encoding: "utf8", timeout: 15000,
   });
@@ -647,7 +648,7 @@ test("a plain install without siblings and without a marker is not treated as ma
   fs.writeFileSync(invocationLog, "");
   const run = spawnSync(process.execPath, [path.join(plain, "mmx", "scripts", "mmx-chat.js"),
     "--prompt-file", promptPath], {
-    env: cleanEnv({ PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`, TMPDIR: wrapperTmp,
+    env: cleanEnv({ PATH: `${binDir}`, ...fixtureCliEnv(fakeMmxPath), TMPDIR: wrapperTmp,
       TMP: wrapperTmp, TEMP: wrapperTmp, FAKE_INVOCATIONS: invocationLog }),
     encoding: "utf8", timeout: 15000,
   });
@@ -714,7 +715,7 @@ test("the mmx-cli package entry launches with the fetch guard preloaded and a no
   try {
     writeInputs("guard");
     const result = jsonResult(runChat([], {
-      PATH: `${pkgBin}${path.delimiter}${process.env.PATH || ""}`,
+      PATH: `${pkgBin}`, ...fixtureCliEnv(entry),
       MINIMAX_BASE_URL: "https://api.example.com/v1/",
       FAKE_ENV_DUMP: envDumpPath,
       ...noProxy,
@@ -742,7 +743,7 @@ test("the mmx-cli package entry launches with the fetch guard preloaded and a no
     unlinkKnown(path.join(pkgRoot, "node_modules", "undici", "package.json"));
     unlinkKnown(envDumpPath);
     const withoutUndici = jsonResult(runChat([], {
-      PATH: `${pkgBin}${path.delimiter}${process.env.PATH || ""}`, FAKE_ENV_DUMP: envDumpPath, ...noProxy,
+      PATH: `${pkgBin}`, ...fixtureCliEnv(entry), FAKE_ENV_DUMP: envDumpPath, ...noProxy,
     }));
     assert.equal(withoutUndici.status, "ok");
     assert.equal(withoutUndici.fetch_timeout_guard, "undici_not_found");
@@ -766,7 +767,7 @@ test("a selected fetch guard fails before invoking the CLI if initialization thr
       "module.exports = { Agent: class {}, setGlobalDispatcher() { throw new Error('dispatcher rejected'); } };",
     ]) {
       fs.writeFileSync(undiciFile, broken);
-      const run = runChat([], { PATH: `${pkgBin}${path.delimiter}${process.env.PATH || ""}` });
+      const run = runChat([], { PATH: `${pkgBin}`, ...fixtureCliEnv(entry) });
       const receipt = jsonResult(run);
       assert.equal(run.status, 1);
       assert.equal(receipt.status, "guard_error");
@@ -788,7 +789,7 @@ test("fetch guard acknowledgement does not break inherited Worker preloads", () 
       "worker.on('exit', code => { if (code) process.exit(code); else createRequire(import.meta.url)(" +
       JSON.stringify(fakeJsPath) + "); });\n");
     writeInputs("worker preload");
-    const result = jsonResult(runChat([], { PATH: `${pkgBin}${path.delimiter}${process.env.PATH || ""}` }));
+    const result = jsonResult(runChat([], { PATH: `${pkgBin}`, ...fixtureCliEnv(entry) }));
     assert.equal(result.status, "ok");
     assert.notEqual(result.fetch_timeout_guard, "preload_failed");
     assert.deepEqual(fs.readdirSync(wrapperTmp), []);
@@ -802,7 +803,7 @@ test("a blocked guard import preserves timeout without claiming initialization",
       "Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30000);\n");
     writeInputs("blocked preload");
     const run = runChat(["--timeout", "1", "--wrap-timeout", "2"],
-      { PATH: `${pkgBin}${path.delimiter}${process.env.PATH || ""}` });
+      { PATH: `${pkgBin}`, ...fixtureCliEnv(entry) });
     const result = jsonResult(run);
     assert.equal(run.status, 1);
     assert.equal(result.status, "timeout");
@@ -823,7 +824,7 @@ test("the mmx config proxy key downgrades the guard the way mmx-cli reads it", (
   const homeConfigDir = path.join(home, ".mmx");
   const homeConfigFile = path.join(homeConfigDir, "config.json");
   const run = extra => jsonResult(runChat([], {
-    PATH: `${pkgBin}${path.delimiter}${process.env.PATH || ""}`, FAKE_ENV_DUMP: envDumpPath, ...noProxy, ...extra,
+    PATH: `${pkgBin}`, ...fixtureCliEnv(entry), FAKE_ENV_DUMP: envDumpPath, ...noProxy, ...extra,
   }));
   try {
     writeInputs("config proxy guard");
@@ -859,7 +860,7 @@ test("proxy variables downgrade the preloaded guard to proxy_limited", () => {
   try {
     writeInputs("proxy guard");
     const result = jsonResult(runChat([], {
-      PATH: `${pkgBin}${path.delimiter}${process.env.PATH || ""}`,
+      PATH: `${pkgBin}`, ...fixtureCliEnv(entry),
       HTTPS_PROXY: "http://127.0.0.1:7890",
       FAKE_ENV_DUMP: envDumpPath,
     }));
@@ -990,7 +991,7 @@ test("V2.1: fixed CLI version records local identity and refuses a mismatch befo
     const meta = path.join(pkgRoot, "package.json");
     fs.writeFileSync(meta, JSON.stringify({ ...JSON.parse(fs.readFileSync(meta)), version: "1.0.29" }));
     writeInputs("pinned synthetic CLI");
-    const env = { PATH: `${pkgBin}${path.delimiter}${process.env.PATH || ""}` };
+    const env = { PATH: `${pkgBin}`, ...fixtureCliEnv(entry) };
     const ok = jsonResult(runChat(["--expected-cli-version", "1.0.29"], env));
     assert.equal(ok.status, "ok");
     assert.equal(ok.cli_identity.version, "1.0.29");

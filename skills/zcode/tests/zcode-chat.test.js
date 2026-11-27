@@ -8,7 +8,7 @@ const { spawnSync } = require("node:child_process");
 const { createHash } = require("node:crypto");
 const { resolveLaunch, isolatedEnv, setupMacKeychain, resolveMode, DENIED_TOOLS } = require("../scripts/zcode-chat.js");
 const { validateReview, strictJson } = require("../scripts/review.js");
-const { cleanEnv } = require("./support/env.js");
+const { cleanEnv, fixtureCliEnv } = require("./support/env.js");
 
 const wrapper = path.resolve(__dirname, "../scripts/zcode-chat.js");
 const fixture = path.resolve(__dirname, "fixtures/fake-zcode.cjs");
@@ -35,7 +35,7 @@ function run(scenario = "ok", options = {}) {
   }
   if (options.timeout) args.push("--timeout-seconds", String(options.timeout));
   const result = spawnSync(process.execPath, args, {
-    env: cleanEnv({ ZCODE_MODEL: "must-not-reach-child", FAKE_UNTRUSTED: "must-not-reach-child" }),
+    env: cleanEnv({ ZCODE_MODEL: "must-not-reach-child", FAKE_UNTRUSTED: "must-not-reach-child", ...fixtureCliEnv(cli) }),
     encoding: "utf8", timeout: 15000, maxBuffer: 8 * 1024 * 1024,
   });
   assert.equal(result.stderr, "");
@@ -126,7 +126,7 @@ test("existing output directories remain untouched", () => {
   fs.writeFileSync(prompt, "question");
   const cli = path.join(root, "existing-fake.cjs");
   fs.writeFileSync(cli, `require(${JSON.stringify(fixture)}).run("ok");`);
-  const result = spawnSync(process.execPath, [wrapper, "--prompt-file", prompt, "--cli-path", cli, "--output-dir", directory], { encoding: "utf8", env: cleanEnv() });
+  const result = spawnSync(process.execPath, [wrapper, "--prompt-file", prompt, "--cli-path", cli, "--output-dir", directory], { encoding: "utf8", env: cleanEnv({ ...fixtureCliEnv(cli) }) });
   assert.equal(result.status, 1);
   assert.equal(JSON.parse(result.stdout).cli_invoked, false);
   assert.deepEqual(fs.readdirSync(directory), []);
@@ -316,7 +316,13 @@ async function runSupervised(scenario, timeout = 2) {
   fs.writeFileSync(cli, `require(${JSON.stringify(fixture)}).run(${JSON.stringify(scenario)});`);
   fs.writeFileSync(prompt, "supervised question");
   const job = path.join(directory, "job");
-  const launch = supervisor.start(job, ["--prompt-file", prompt, "--cli-path", cli, "--timeout-seconds", String(timeout)], { wrapperPath: driver });
+  // zcode-run passes the caller environment to its children by design, so the
+  // CLI fixture contract for this run travels through process.env.
+  Object.assign(process.env, fixtureCliEnv(cli));
+  let launch;
+  try {
+    launch = supervisor.start(job, ["--prompt-file", prompt, "--cli-path", cli, "--timeout-seconds", String(timeout)], { wrapperPath: driver });
+  } finally { delete process.env.ZMX_FIXTURE_CLI_ROOT; delete process.env.ZMX_FIXTURE_CLI_SHA256; }
   assert.ok(Number.isSafeInteger(launch.supervisor_pid));
   const deadline = Date.now() + 10000;
   let result;

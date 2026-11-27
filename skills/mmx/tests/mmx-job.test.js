@@ -6,6 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { createHash } = require("node:crypto");
 const { spawn, spawnSync } = require("node:child_process");
+const { cleanEnv } = require("./support/env.js");
 const { start, submit, status, waitForJob, cancel, verify, ADMISSION } = require("../scripts/mmx-job.js");
 
 const script = path.resolve(__dirname, "../scripts/mmx-job.js");
@@ -27,12 +28,12 @@ async function until(predicate, maxMs = 6000) {
   throw new Error("fixture deadline exceeded");
 }
 async function finished(job) { return until(() => { const r = status(job); return r.status === "finished" && r; }); }
-function cli(args, env) {
+function cli(args, env = cleanEnv()) {
   return spawnSync(process.execPath, [script, ...args], { encoding: "utf8", timeout: 10000, env });
 }
 function cliAsync(args) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [script, ...args], { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(process.execPath, [script, ...args], { stdio: ["ignore", "pipe", "pipe"], env: cleanEnv() });
     let stdout = "", stderr = "";
     child.stdout.on("data", c => { stdout += c; }); child.stderr.on("data", c => { stderr += c; });
     child.on("error", reject); child.on("close", code => resolve({ code, stdout, stderr }));
@@ -247,7 +248,7 @@ test("permanent worker claim survives a supervisor crash with uncertain completi
 test("importing parsers installs no signal handlers and durable concurrency stays one", () => {
   const c = setup(); assert.throws(() => start(path.join(c.dir, "bad"), [...c.options, "--concurrency", "2"]), /concurrency/);
   const code = `const b=['SIGTERM','SIGINT','SIGHUP'].map(s=>process.listenerCount(s));require(${JSON.stringify(script)});console.log(JSON.stringify(['SIGTERM','SIGINT','SIGHUP'].map((s,i)=>process.listenerCount(s)-b[i])));`;
-  const r = spawnSync(process.execPath, ["-e", code], { encoding: "utf8" });
+  const r = spawnSync(process.execPath, ["-e", code], { encoding: "utf8", env: cleanEnv() });
   assert.equal(r.status, 0); assert.deepEqual(JSON.parse(r.stdout), [0, 0, 0]);
 });
 
@@ -304,7 +305,7 @@ fs.fsyncSync=function(fd){const st=fs.fstatSync(fd);
  if(st.isDirectory()&&st.dev===dir.dev&&st.ino===dir.ino&&fs.existsSync(path.join(job,'completion.json')))
    throw Object.assign(new Error('synthetic directory fsync failure'),{code:'EIO'});
  return original.call(fs,fd);};`);
-  const run = spawnSync(process.execPath, ["--require", fault, script, "worker", job], { encoding: "utf8", timeout: 10000 });
+  const run = spawnSync(process.execPath, ["--require", fault, script, "worker", job], { encoding: "utf8", timeout: 10000, env: cleanEnv() });
   assert.equal(run.status, 2, run.stdout + run.stderr);
   assert.equal(fs.existsSync(path.join(job, "completion.json")), true, "fault is after the visible link");
   assert.equal(fs.existsSync(path.join(job, "completion-confirmed.json")), false);

@@ -13,7 +13,7 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
 const runner = require("../scripts/review-run.js");
-const { cleanEnv } = require("./support/env.js");
+const { cleanEnv, fixtureCliEnv } = require("./support/env.js");
 const mmxChat = path.resolve(__dirname, "../../mmx/scripts/mmx-chat.js");
 const fakeMmxSource = path.join(__dirname, "fixtures/native/mmx");
 
@@ -56,7 +56,7 @@ function runDelivery(material, name) {
     encoding: "utf8", timeout: 60000, maxBuffer: 32 * 1024 * 1024,
     env: cleanEnv({
       PATH: binDir, TMPDIR: wrapperTmp, TMP: wrapperTmp, TEMP: wrapperTmp,
-      MMX_FAKE_DUMP: dumpPath,
+      MMX_FAKE_DUMP: dumpPath, ...fixtureCliEnv(installed),
     }),
   });
   const receipt = JSON.parse(result.stdout);

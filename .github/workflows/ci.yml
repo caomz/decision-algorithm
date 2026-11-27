@@ -28,11 +28,11 @@ jobs:
           git rev-parse HEAD
           node --version
       - name: Isolated ZCode fixtures
-        run: bash .github/scripts/zmx-isolated-test.sh node --test 'skills/zcode/tests/**/*.test.js'
+        run: bash .github/scripts/zmx-isolated-test.sh node skills/zcode/tests/support/offline-test.js 'skills/zcode/tests/**/*.test.js'
       - name: Isolated MMX fixtures
-        run: bash .github/scripts/zmx-isolated-test.sh node --test 'skills/mmx/tests/**/*.test.js'
+        run: bash .github/scripts/zmx-isolated-test.sh node skills/mmx/tests/support/offline-test.js 'skills/mmx/tests/**/*.test.js'
       - name: Isolated cross-review fixtures
-        run: bash .github/scripts/zmx-isolated-test.sh node --test 'skills/zcode-mmx-review/tests/**/*.test.js'
+        run: bash .github/scripts/zmx-isolated-test.sh node skills/zcode-mmx-review/tests/support/offline-test.js 'skills/zcode-mmx-review/tests/**/*.test.js'
       - name: Isolated offline doctor
         run: bash .github/scripts/zmx-isolated-test.sh node skills/zcode-mmx-review/scripts/review-run.js doctor --offline --json
 

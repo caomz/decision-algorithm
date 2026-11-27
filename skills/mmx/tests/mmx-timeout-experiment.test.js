@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
 const { spawnSync } = require("node:child_process");
+const { cleanEnv } = require("./support/env.js");
 const { parse } = require("../scripts/mmx-timeout-experiment.js");
 const script = path.resolve(__dirname, "../scripts/mmx-timeout-experiment.js");
 
@@ -22,7 +23,7 @@ test("controlled runner fails closed outside isolation or records bounded fetch-
     fs.writeFileSync(path.join(dep, "package.json"), JSON.stringify({ name: "undici", version: "0.0.0-test-fixture" }));
     fs.writeFileSync(path.join(dep, "index.js"), "module.exports={Agent:class Agent{},setGlobalDispatcher(){}};\n");
     const out = path.join(root, "result");
-    const run = spawnSync(process.execPath, [script, "--suite", "node-fetch", "--delay-ms", "20", "--undici-path", path.join(dep, "index.js"), "--out", out], { encoding: "utf8", timeout: 15000, env: { PATH: path.dirname(process.execPath) } });
+    const run = spawnSync(process.execPath, [script, "--suite", "node-fetch", "--delay-ms", "20", "--undici-path", path.join(dep, "index.js"), "--out", out], { encoding: "utf8", timeout: 15000, env: cleanEnv() });
     let devices = []; try { devices = fs.readFileSync("/proc/net/dev", "utf8").trim().split("\n").slice(2).map(l => l.split(":")[0].trim()); } catch {}
     if (process.platform !== "linux" || devices.length !== 1 || devices[0] !== "lo") {
       assert.equal(run.status, 2);
@@ -41,7 +42,7 @@ test("controlled runner fails closed outside isolation or records bounded fetch-
     assert.deepEqual(report.cases.map(c => c.requests), [1, 1]);
     assert.deepEqual(report.cases.map(c => c.guard_initialized), [false, true]);
     assert.ok(report.cases.every(c => c.exit_code === 0));
-    const again = spawnSync(process.execPath, [script, "--suite", "node-fetch", "--delay-ms", "20", "--undici-path", path.join(dep, "index.js"), "--out", out], { encoding: "utf8", timeout: 15000, env: { PATH: path.dirname(process.execPath) } });
+    const again = spawnSync(process.execPath, [script, "--suite", "node-fetch", "--delay-ms", "20", "--undici-path", path.join(dep, "index.js"), "--out", out], { encoding: "utf8", timeout: 15000, env: cleanEnv() });
     assert.equal(again.status, 2);
     assert.equal(fs.readFileSync(path.join(out, "report.json"), "utf8"), JSON.stringify(report, null, 2) + "\n");
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
@@ -53,7 +54,7 @@ test("real CLI experiment requires exact installed version without invoking unkn
     const marker = path.join(root, "invoked");
     fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "mmx-cli", version: "1.0.28", bin: "cli.js" }));
     fs.writeFileSync(path.join(root, "cli.js"), `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'bad');`);
-    const run = spawnSync(process.execPath, [script, "--suite", "mmx-cli", "--cli-root", root, "--out", path.join(root, "out")], { encoding: "utf8", timeout: 10000, env: { PATH: path.dirname(process.execPath) } });
+    const run = spawnSync(process.execPath, [script, "--suite", "mmx-cli", "--cli-root", root, "--out", path.join(root, "out")], { encoding: "utf8", timeout: 10000, env: cleanEnv() });
     assert.equal(run.status, 2);
     assert.equal(fs.existsSync(marker), false);
     assert.equal(fs.existsSync(path.join(root, "out")), false);
@@ -71,7 +72,7 @@ test("zero-request pinned synthetic CLI cannot claim real transport or retry ver
     fs.writeFileSync(path.join(dep, "package.json"), JSON.stringify({ name: "undici", version: "0.0.0-fixture", main: "index.js" }));
     fs.writeFileSync(path.join(dep, "index.js"), "module.exports={Agent:class Agent{},setGlobalDispatcher(){}};\n");
     const out = path.join(root, "out");
-    const run = spawnSync(process.execPath, [script, "--suite", "mmx-cli", "--case-group", "errors", "--cli-root", root, "--out", out], { encoding: "utf8", timeout: 10000, env: { PATH: path.dirname(process.execPath) } });
+    const run = spawnSync(process.execPath, [script, "--suite", "mmx-cli", "--case-group", "errors", "--cli-root", root, "--out", out], { encoding: "utf8", timeout: 10000, env: cleanEnv() });
     if (run.status === 2 && /isolat/.test(run.stderr)) { assert.equal(fs.existsSync(out), false); return; }
     assert.equal(run.status, 0, run.stderr);
     const report = JSON.parse(fs.readFileSync(path.join(out, "report.json")));

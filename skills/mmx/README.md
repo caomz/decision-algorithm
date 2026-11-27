@@ -92,9 +92,9 @@ python3 scripts/install_skills.py --skill mmx --apply
 cd skills/mmx
 node --check scripts/mmx-chat.js
 node --check scripts/mmx-batch.js
-node --test tests/mmx-chat.test.js
-node --test tests/mmx-batch.test.js
-node --test tests/mmx-clean-temp.test.js
+node tests/support/offline-test.js tests/mmx-chat.test.js
+node tests/support/offline-test.js tests/mmx-batch.test.js
+node tests/support/offline-test.js tests/mmx-clean-temp.test.js
 node scripts/mmx-chat.js --version
 node scripts/mmx-batch.js --version
 ```
