@@ -154,6 +154,31 @@
         },
         "note": "Four new tests: ENOSPC (child process, injected through a preload with two branches matching the old and the new write path), process interruption at the link (child process, SIGKILL before the link completes), an existing result.json never replaced, and a clean publication leaving no temporary. The ENOSPC case additionally proves the launch-time P1 stays published in primary-result.json, bound to the request material_version."
       }
+    },
+    {
+      "id": "D4",
+      "title": "The acceptance approval is bound to the CLI the runner actually launches",
+      "changed": [
+        "skills/mmx/scripts/mmx-timeout-experiment.js",
+        "skills/mmx/scripts/acceptance-profile.js",
+        "skills/mmx/tests/mmx-timeout-experiment.test.js",
+        "skills/mmx/tests/mmx-observation.test.js"
+      ],
+      "mechanism": "acceptance-profile.js hands the verified identity (node.version, cli.package, cli.version, cli.entry_sha256, undici.version) to the entry in ZMX_ACCEPTANCE_BINDING. The real-CLI suite re-derives the identity of what --cli-root actually resolves (package, version, entry digest, undici version, running Node) and compares every field before the network namespace is checked, before the output directory exists and before any process starts. The suite also refuses to run without a binding at all, so direct invocation cannot bypass admission.",
+      "reproduced": {
+        "command": "node skills/mmx/tests/support/offline-test.js --test-name-pattern \"V2.2.1 D4\" skills/mmx/tests/mmx-timeout-experiment.test.js",
+        "observed": "The A/B counterexample failed on the unmodified code at the isolation check: with an approval for package A and --cli-root naming package B, the runner never compared anything and would have launched B on an isolated Linux host. checkBinding was not exported."
+      },
+      "after": {
+        "mmx": {
+          "command": "node skills/mmx/tests/support/offline-test.js \"skills/mmx/tests/**/*.test.js\"",
+          "tests": 160,
+          "pass": 144,
+          "fail": 0,
+          "skipped": 16
+        },
+        "note": "Three new tests: the A/B refusal (B never launched, no output directory, refusal names cli.entry_sha256 and undici.version), the checkBinding field table including a missing binding, and the profile handing the admitted identity to the entry it runs (probe). The existing zero-request synthetic-CLI case now runs WITH a matching binding and doubles as the positive admission path on CI Linux."
+      }
     }
   ],
   "status": {

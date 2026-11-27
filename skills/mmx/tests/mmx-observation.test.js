@@ -122,8 +122,9 @@ test("phase D: acceptance requires the exact approved combination with full valu
   assert.equal(checkAcceptance({ format: 1, approved: true }, observed).length, 5, "every approved field must be present");
 });
 
-test("phase D: a matching approved combination is reported in dry-run without launching anything", () => {
-  // A synthetic mmx-cli package layout; only metadata and digests are read.
+// A synthetic mmx-cli package layout with an approved admission config; only
+// metadata and digests are read. Shared by the dry-run and binding tests.
+function approvedLayout() {
   const base = path.join(root, "acceptance");
   const pkg = path.join(base, "node_modules", "mmx-cli");
   fs.mkdirSync(path.join(pkg, "dist"), { recursive: true });
@@ -143,6 +144,11 @@ test("phase D: a matching approved combination is reported in dry-run without la
   const configFile = path.join(base, "approved.json");
   fs.writeFileSync(configFile, JSON.stringify(config, null, 2));
   const env = cleanEnv({ PATH: `${base}${path.delimiter}${cleanEnv().PATH}` });
+  return { base, config, configFile, env };
+}
+
+test("phase D: a matching approved combination is reported in dry-run without launching anything", () => {
+  const { base, config, configFile, env } = approvedLayout();
   const matched = spawnSync(process.execPath, [acceptance, "--config", configFile, "--dry-run"], { encoding: "utf8", env });
   assert.equal(matched.status, 0, matched.stdout + matched.stderr);
   const report = JSON.parse(matched.stdout);
@@ -157,4 +163,19 @@ test("phase D: a matching approved combination is reported in dry-run without la
     { encoding: "utf8", env: cleanEnv({ PATH: env.PATH }) });
   assert.equal(refused.status, 2);
   assert.deepEqual(JSON.parse(refused.stdout).problems, ["cli.version differs: expected 1.0.30, found 9.9.9"]);
+});
+
+test("V2.2.1 D4: the admitted identity is handed to the entry that runs", () => {
+  const { configFile, env, config } = approvedLayout();
+  const probe = path.join(root, "binding-probe.cjs");
+  fs.writeFileSync(probe, "process.stdout.write(process.env.ZMX_ACCEPTANCE_BINDING + \"\\n\");\n");
+  const run = spawnSync(process.execPath, [acceptance, "--config", configFile, "--", probe], { encoding: "utf8", env });
+  assert.equal(run.status, 0, run.stdout + run.stderr);
+  const binding = JSON.parse(run.stdout);
+  for (const field of ["node.version", "cli.package", "cli.version", "cli.entry_sha256", "undici.version"]) {
+    assert.equal(typeof binding[field], "string", field);
+  }
+  assert.equal(binding["cli.entry_sha256"], config.cli.entry_sha256);
+  assert.equal(binding["undici.version"], config.undici.version);
+  assert.equal(binding["node.version"], process.version);
 });

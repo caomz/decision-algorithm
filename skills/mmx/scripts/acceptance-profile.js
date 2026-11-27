@@ -83,8 +83,11 @@ async function main(argv) {
   if (options.dryRun) { process.stdout.write(JSON.stringify({ status: "matched", launched: false, observed }) + "\n"); return 0; }
   const [entry, ...args] = options.command;
   if (!entry || !path.isAbsolute(entry) || !fs.statSync(entry).isFile()) throw Object.assign(new Error("the command must be one absolute JavaScript entry file"), { usage: true });
+  // Hand the verified identity to the entry. The entry re-derives the identity
+  // of what it actually launches and must refuse on any difference (V2.2.1 D4).
+  const binding = Object.fromEntries(FIELDS.map(([where]) => [where, observed[where]]));
   return await new Promise(resolve => {
-    const child = spawn(process.execPath, [entry, ...args], { stdio: "inherit", shell: false });
+    const child = spawn(process.execPath, [entry, ...args], { stdio: "inherit", shell: false, env: { ...process.env, ZMX_ACCEPTANCE_BINDING: JSON.stringify(binding) } });
     child.once("error", () => resolve(2));
     child.once("close", code => resolve(code ?? 2));
   });

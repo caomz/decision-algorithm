@@ -86,8 +86,20 @@ function dependency(entry) {
     dir = path.dirname(dir);
   }
 }
+// Differences between the approved acceptance binding and what this runner
+// would actually launch. Empty only when every field is identical.
+function checkBinding(binding, actual) {
+  if (!binding || typeof binding !== "object" || Array.isArray(binding)) return ["acceptance binding is missing or malformed"];
+  const fields = ["node.version", "cli.package", "cli.version", "cli.entry_sha256", "undici.version"];
+  return fields.filter(where => binding[where] !== actual[where])
+    .map(where => binding[where] === undefined ? `${where} is missing from the binding`
+      : `${where} differs: approved ${binding[where]}, launch would use ${actual[where] ?? "nothing"}`);
+}
+function readBinding(text) {
+  if (typeof text !== "string" || !text) return null;
+  try { return JSON.parse(text); } catch { return null; }
+}
 async function experiment(opts) {
-  const network = isolation();
   let entry = null, cli = null, undiciPath = opts.undiciPath;
   if (opts.suite === "mmx-cli") {
     if (!opts.cliRoot) throw new Error("--cli-root must name an already-installed mmx-cli package");
@@ -106,6 +118,15 @@ async function experiment(opts) {
   if (!undiciPath) throw new Error("--undici-path is required for node-fetch controls (use an installed dependency)");
   undiciPath = fs.realpathSync(undiciPath);
   const dep = dependency(undiciPath);
+  // The approval is compared with what is actually launched: before the
+  // network namespace is checked, before the output directory exists and
+  // before any process starts (V2.2.1 D4).
+  if (opts.suite === "mmx-cli") {
+    const problems = checkBinding(readBinding(process.env.ZMX_ACCEPTANCE_BINDING), { "node.version": process.version,
+      "cli.package": cli.name, "cli.version": cli.version, "cli.entry_sha256": cli.entry_sha256, "undici.version": dep.version });
+    if (problems.length) throw Object.assign(new Error(`acceptance binding refused: ${problems.join("; ")}`), { code: "ZMX_ACCEPTANCE_REFUSED" });
+  }
+  const network = isolation();
   const out = path.resolve(opts.out);
   fs.mkdirSync(out, { mode: 0o700 });
   const envRoot = path.join(out, "isolated"); fs.mkdirSync(envRoot, { mode: 0o700 });
@@ -212,4 +233,4 @@ async function fetchChild() {
 }
 if (require.main === module) {
   (process.argv[2] === "--fetch-child" ? fetchChild() : experiment(parse(process.argv.slice(2)))).catch(error => { process.stderr.write(error.message + "\n"); process.exitCode = 2; });
-} else module.exports = { parse, isolation, experiment, observe, observation, MODEL_PATH };
+} else module.exports = { parse, isolation, experiment, observe, observation, checkBinding, MODEL_PATH };
