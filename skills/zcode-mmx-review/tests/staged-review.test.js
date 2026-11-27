@@ -364,3 +364,107 @@ test("an invalid strategy or real backend fails before creating output", () => {
     assert.match(report.stderr, name === "disabled-real" ? /real backend is not enabled/ : /strategy/);
   }
 });
+
+// ---------------------------------------------------------------------------
+// Publication integrity: the inputs sealed at launch are verified before any
+// result is published. The barrier is the secondary wrapper writing its
+// observed-input record (an fs.watch event, not a sleep): both sides have
+// then been dispatched on the launch-time material.
+// ---------------------------------------------------------------------------
+function whenSecondaryObserved(out, action) {
+  return {
+    onSpawn(side) {
+      if (side !== "mmx") return;
+      const watcher = fs.watch(out, (event, filename) => {
+        if (filename !== "mmx-observed-input.json") return;
+        watcher.close();
+        action(out);
+      });
+    },
+  };
+}
+async function publish(job) {
+  const round = await job.promise;
+  return runner.writeRunRecords(job.out, { round, warnings: job.inputs.warnings });
+}
+async function refused(job, name, problem) {
+  await assert.rejects(publish(job), error => error.code === "ZMX_ARCHIVE_INTEGRITY" &&
+    error.message.includes(problem) && error.message.includes(name), "publication must be refused");
+  const out = job.out;
+  assert.equal(fs.existsSync(path.join(out, "result.json")), false, "no consumable result may be published");
+  assert.equal(fs.existsSync(path.join(out, "record-manifest.json")), false, "no manifest may be published");
+  const record = read(out, "integrity-error.json");
+  assert.equal(record.integrity, "corrupt");
+  assert.equal(record.material_version, read(out, "request.json").material_version, "diagnosis stays bound to the launch-time version");
+  const report = runner.verifyRun(out);
+  assert.equal(report.integrity, "corrupt");
+  assert.ok(report.problems.some(text => text.startsWith("publication refused:")), JSON.stringify(report.problems));
+  return record;
+}
+
+for (const name of ["packet.json", "material.txt", "evidence-ids.json", "prompt.txt"]) {
+  test(`publication refuses ${name} changed after both sides were dispatched`, { timeout: 15000 }, async () => {
+    const job = libraryRound(`publish-changed-${name}`, "primary-pass-secondary-delayed",
+      whenSecondaryObserved(path.join(root, `publish-changed-${name}`), out => fs.appendFileSync(path.join(out, name), "\nchanged after dispatch\n")));
+    const record = await refused(job, name, "changed");
+    // The launch-time evaluation is retained for diagnosis; it is not a content FAIL.
+    assert.equal(record.evaluation_of_launch_material.REVIEW_GATE, "PASS");
+    assert.equal(record.evaluation_of_launch_material.SECONDARY_REVIEW_GATE, "PASS");
+  });
+}
+
+test("publication refuses a sealed input that disappeared after dispatch", { timeout: 15000 }, async () => {
+  const job = libraryRound("publish-missing", "primary-pass-secondary-delayed",
+    whenSecondaryObserved(path.join(root, "publish-missing"), out => fs.unlinkSync(path.join(out, "material.txt"))));
+  await refused(job, "material.txt", "missing");
+});
+
+test("publication refuses a sealed input that was replaced by a directory", { timeout: 15000 }, async () => {
+  const job = libraryRound("publish-replaced", "primary-pass-secondary-delayed", whenSecondaryObserved(path.join(root, "publish-replaced"), out => {
+    fs.renameSync(path.join(out, "evidence-ids.json"), path.join(out, "evidence-ids.moved"));
+    fs.mkdirSync(path.join(out, "evidence-ids.json"));
+  }));
+  await refused(job, "evidence-ids.json", "replaced");
+});
+
+test("an interrupted publication never leaves a consumable result", { timeout: 15000 }, async () => {
+  const out = path.join(root, "publish-interrupted");
+  // result.json is published last; blocking it must leave an archive that
+  // verify reports as corrupt rather than a result a consumer could read.
+  const job = libraryRound("publish-interrupted", "primary-pass-secondary-delayed",
+    { onSideClosed: side => { if (side === "mmx") fs.mkdirSync(path.join(out, "result.json")); } });
+  await assert.rejects(publish(job));
+  assert.equal(fs.statSync(path.join(out, "result.json")).isDirectory(), true);
+  const report = runner.verifyRun(out);
+  assert.equal(report.integrity, "corrupt");
+  assert.ok(report.problems.some(text => text.includes("result.json")), JSON.stringify(report.problems));
+});
+
+test("changing the caller's original packet after launch leaves the sealed inputs authoritative", { timeout: 15000 }, async () => {
+  const source = prepare("publish-external-change");
+  const job = libraryRound("publish-external-change", "both-pass", { onSpawn: side => { if (side === "mmx") fs.appendFileSync(source.packet, "\nexternal edit\n"); } });
+  const result = await publish(job);
+  assert.equal(result.REVIEW_GATE, "PASS");
+  assert.equal(result.material_version, read(job.out, "request.json").material_version);
+  assert.equal(runner.verifyRun(job.out).replay, "match");
+  assert.equal(fs.existsSync(path.join(job.out, "integrity-error.json")), false);
+});
+
+test("a valid P1 of the launch-time material is retained and not attributed to changed files", { timeout: 15000 }, async () => {
+  const job = libraryRound("publish-p1-retained", "zcode-fail", {
+    onPrimaryReady() { fs.appendFileSync(path.join(job.out, "material.txt"), "\nchanged between phases\n"); },
+  });
+  const record = await refused(job, "material.txt", "changed");
+  assert.equal(record.evaluation_of_launch_material.PRIMARY_REVIEW_GATE, "FAIL");
+  assert.equal(record.evaluation_of_launch_material.REVIEW_GATE, "FAIL", "the veto of the launch-time material is not lost");
+});
+
+test("a normal dual PASS publishes a complete archive whose result is the last record", { timeout: 15000 }, async () => {
+  const job = libraryRound("publish-complete", "both-pass");
+  const result = await publish(job);
+  assert.equal(result.REVIEW_GATE, "PASS");
+  assert.equal(runner.verifyRun(job.out).replay, "match");
+  const manifest = read(job.out, "record-manifest.json");
+  assert.equal(manifest.files["result.json"], digest(fs.readFileSync(path.join(job.out, "result.json"))));
+  assert.equal(manifest.files["material.txt"], read(job.out, "request.json").material_sha256);
+});

@@ -1068,16 +1068,25 @@ function writeRunInputs(out, { packetBytes, inputs }) {
   saveDurableRecord(path.join(out, "prompt.txt"), Buffer.from(inputs.prompt, "utf8"));
 }
 
+// Returns the digests of the exact bytes it verified and published, so the
+// final manifest never has to re-read a file that may have changed since.
 function persistSideRecords(out, record) {
+  const digests = {};
   if (record.execution.observed_input !== "unobserved") {
     const file = path.join(out, `${record.side}-observed-input.json`);
     const bytes = fs.readFileSync(file);
     if (hash(bytes) !== record.execution.observed_input) throw new Error("observed input changed before persistence");
     saveDurableRecord(file, bytes);
+    digests[`${record.side}-observed-input.json`] = record.execution.observed_input;
   }
   saveDurableRecord(path.join(out, `${record.side}-stdout.json`), record.stdoutBytes);
   saveDurableRecord(path.join(out, `${record.side}-stderr.log`), record.stderrBytes);
-  saveDurableRecord(path.join(out, `${record.side}-execution.json`), JSON.stringify(record.execution, null, 2) + "\n");
+  const executionBytes = Buffer.from(JSON.stringify(record.execution, null, 2) + "\n", "utf8");
+  saveDurableRecord(path.join(out, `${record.side}-execution.json`), executionBytes);
+  digests[`${record.side}-stdout.json`] = record.execution.stdout_sha256;
+  digests[`${record.side}-stderr.log`] = record.execution.stderr_sha256;
+  digests[`${record.side}-execution.json`] = hash(executionBytes);
+  return digests;
 }
 
 function buildRunRequest(inputs, { strategy, scenario, timeoutSeconds, maxTokens, argv, envKeys }) {
@@ -1096,16 +1105,51 @@ function buildRunRequest(inputs, { strategy, scenario, timeoutSeconds, maxTokens
   };
 }
 
+// Inputs are sealed before either wrapper starts. Publication verifies the
+// archived copies against the launch-time digests recorded in the prelaunch
+// request. Nothing is recomputed from files that may have changed after
+// dispatch, and a changed, missing or replaced input publishes no result.
+const SEALED_INPUTS = Object.freeze([
+  ["packet.json", "packet_sha256"],
+  ["material.txt", "material_sha256"],
+  ["evidence-ids.json", "evidence_ids_sha256"],
+  ["prompt.txt", "prompt_sha256"],
+]);
+
 function writeRunRecords(out, { round, warnings = [] }) {
   // Reuse the exact immutable prelaunch intent, including its original code
   // fingerprints. Never rebuild a request from mutable files after execution.
   const request = strictJson(round.requestJson);
-  saveDurableRecord(path.join(out, "request.json"), round.requestJson);
-  for (const side of ["zcode", "mmx"]) {
-    const record = round.executions[side];
-    persistSideRecords(out, record);
+  const manifest = {};
+  for (const [name, key] of SEALED_INPUTS) {
+    const file = path.join(out, name);
+    let stat = null;
+    try { stat = fs.lstatSync(file); } catch {}
+    const problem = !stat ? "missing" : stat.isSymbolicLink() || !stat.isFile() ? "replaced"
+      : sha256File(file) !== request[key] ? "changed" : null;
+    if (problem) {
+      // An integrity problem is not a content FAIL. The evaluation below
+      // describes only the launch-time material version and is kept for
+      // diagnosis; no complete result is published for any later file state.
+      saveNew(path.join(out, "integrity-error.json"), JSON.stringify({
+        entry_version: ENTRY_VERSION, backend: "fixture", integrity: "corrupt",
+        problem: `archived input ${problem} before publication: ${name}`,
+        material_version: round.material_version,
+        evaluation_of_launch_material: { cancelled: round.cancelled, round_status: round.outcome.round_status,
+          review_gate: round.outcome.review_gate, PRIMARY_REVIEW_GATE: round.outcome.PRIMARY_REVIEW_GATE,
+          SECONDARY_REVIEW_GATE: round.outcome.SECONDARY_REVIEW_GATE, REVIEW_GATE: round.outcome.REVIEW_GATE },
+        note: "No result.json or record-manifest.json is published. The gates above belong to the launch-time material version only.",
+      }, null, 2) + "\n");
+      throw Object.assign(new Error(`archived input ${problem} before publication: ${name}`), { code: "ZMX_ARCHIVE_INTEGRITY" });
+    }
+    manifest[name] = request[key];
   }
-  saveDurableRecord(path.join(out, "primary-result.json"), JSON.stringify(round.primaryResult, null, 2) + "\n");
+  saveDurableRecord(path.join(out, "request.json"), round.requestJson);
+  manifest["request.json"] = hash(round.requestJson);
+  for (const side of ["zcode", "mmx"]) Object.assign(manifest, persistSideRecords(out, round.executions[side]));
+  const primaryBytes = Buffer.from(JSON.stringify(round.primaryResult, null, 2) + "\n", "utf8");
+  saveDurableRecord(path.join(out, "primary-result.json"), primaryBytes);
+  manifest["primary-result.json"] = hash(primaryBytes);
   const result = {
     entry_version: ENTRY_VERSION,
     backend: "fixture",
@@ -1126,13 +1170,14 @@ function writeRunRecords(out, { round, warnings = [] }) {
     note: "backend=fixture: served by repository fixtures, not an external review",
     completed_at: new Date().toISOString(),
   };
-  saveNew(path.join(out, "result.json"), JSON.stringify(result, null, 2) + "\n");
-  const manifest = {};
-  for (const name of [...REQUIRED_RECORDS, "primary-result.json", "zcode-observed-input.json", "mmx-observed-input.json"]) {
-    const file = path.join(out, name);
-    if (fs.existsSync(file)) manifest[name] = sha256File(file);
-  }
+  const resultBytes = Buffer.from(JSON.stringify(result, null, 2) + "\n", "utf8");
+  // Every digest above comes from bytes verified in memory. The manifest is
+  // published first and result.json last, so a visible result.json always
+  // belongs to a complete, verified archive; a manifest without result.json
+  // fails verify as incomplete.
+  manifest["result.json"] = hash(resultBytes);
   saveNew(path.join(out, "record-manifest.json"), JSON.stringify({ format: 1, files: manifest }, null, 2) + "\n");
+  saveNew(path.join(out, "result.json"), resultBytes);
   return result;
 }
 
@@ -1150,6 +1195,11 @@ function verifyRun(directory) {
     }
     return path.join(directory, name);
   };
+  const refused = path.join(directory, "integrity-error.json");
+  if (fs.existsSync(refused)) {
+    // Publication was refused before any result existed; say why.
+    try { problem(`publication refused: ${readJsonFile(refused).problem}`); } catch { problem("publication refused: integrity-error.json is unreadable"); }
+  }
   let manifest = null;
   try {
     const manifestPath = path.join(directory, "record-manifest.json");
@@ -1610,7 +1660,19 @@ async function main(argv) {
     // 确定性发信号。默认 0，生产路径无延迟。该 env 不进入子进程环境与任何记录。
     const holdMs = Number(process.env.ZMX_TEST_HOLD_BEFORE_RECORDS_MS ?? 0);
     if (Number.isSafeInteger(holdMs) && holdMs > 0) await new Promise(resolve => setTimeout(resolve, holdMs));
-    const result = writeRunRecords(out, { scenario: args.scenario, timeoutSeconds: args.timeout, maxTokens: args.maxTokens, argv: argvBySide, envKeys: Object.keys(assembled.zcode.env).sort(), round, warnings: inputs.warnings });
+    let result;
+    try {
+      result = writeRunRecords(out, { scenario: args.scenario, timeoutSeconds: args.timeout, maxTokens: args.maxTokens, argv: argvBySide, envKeys: Object.keys(assembled.zcode.env).sort(), round, warnings: inputs.warnings });
+    } catch (error) {
+      // A sealed input changed, disappeared or was replaced: nothing is
+      // published. The event names the diagnostic record; stdout stays empty
+      // so no consumer can mistake this for a complete result.
+      if (error.code === "ZMX_ARCHIVE_INTEGRITY") process.stderr.write(JSON.stringify({
+        event: "RESULT_NOT_PUBLISHED", file: path.join(out, "integrity-error.json"),
+        material_version: round.material_version, error: error.message,
+      }) + "\n");
+      throw error;
+    }
     process.stdout.write(JSON.stringify(result) + "\n");
     return result.exit_code;
   }
