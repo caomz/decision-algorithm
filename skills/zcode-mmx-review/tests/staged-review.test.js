@@ -2,7 +2,7 @@
 
 // These tests use only repository fixture executables. CI additionally places
 // the entire suite in a loopback-only network namespace.
-const { test } = require("node:test");
+const { test, after } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -11,6 +11,8 @@ const { spawn, spawnSync } = require("node:child_process");
 const { createHash } = require("node:crypto");
 const runner = require("../scripts/review-run.js");
 const { cleanEnv } = require("./support/env.js");
+const { track, teardown } = require("./support/teardown.js");
+after(async () => { await teardown(); });
 
 const RUNNER = path.resolve(__dirname, "../scripts/review-run.js");
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "zmx-staged-"));
@@ -135,6 +137,7 @@ test("abrupt process-group death after primary delivery leaves complete intent a
   const child = spawn(process.execPath, cliArgs(job, "primary-pass-secondary-delayed"), {
     env: cleanEnv(), detached: true, stdio: ["ignore", "pipe", "pipe"],
   });
+  track(child);
   const closed = new Promise(resolve => child.once("close", (code, signal) => resolve({ code, signal })));
   let stderr = "";
   let beforeCrash;

@@ -9,6 +9,7 @@ const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
 const { safeCmdArgument, npmShimEntry, mmxPackageEntry, linkedEntry, cliLaunch, withFetchLimitHint, findMmx, terminateChildTree } = require(path.join(__dirname, "..", "scripts", "mmx-chat.js"));
 const { cleanEnv, fixtureCliEnv } = require("./support/env.js");
+const { track, teardown } = require("./support/teardown.js");
 
 const skillRoot = path.resolve(__dirname, "..");
 const wrapper = path.join(skillRoot, "scripts", "mmx-chat.js");
@@ -101,7 +102,7 @@ switch (process.env.FAKE_MODE || "success") {
   }
   case "hang": setInterval(() => {}, 1000); break;
   case "tree_hang": {
-    const child = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { stdio: "ignore" });
+    const child = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); /* mmx-chat-contract-tree-hang */"], { stdio: "ignore" });
     fs.writeFileSync(process.env.FAKE_CHILD_PID, String(child.pid));
     setInterval(() => {}, 1000);
     break;
@@ -157,7 +158,8 @@ function unlinkKnown(p) {
   try { fs.unlinkSync(p); } catch {}
 }
 
-after(() => {
+after(async () => {
+  try { await teardown(); } catch {}
   unlinkKnown(promptPath);
   unlinkKnown(systemPath);
   unlinkKnown(argsDumpPath);
@@ -380,6 +382,8 @@ test("a timed-out subprocess tree does not survive the wrapper", async () => {
   });
   assert.equal(jsonResult(run).status, "timeout");
   const pid = Number(fs.readFileSync(childPidPath, "utf8"));
+  // If a later assertion fails, teardown still proves and stops the descendant.
+  track({ pid, marker: "mmx-chat-contract-tree-hang" });
   await new Promise((resolve) => setTimeout(resolve, 100));
   let alive = true;
   try { process.kill(pid, 0); } catch { alive = false; }
@@ -513,6 +517,7 @@ test("SIGTERM cancellation yields one final JSON object", async () => {
     TMPDIR: wrapperTmp, TMP: wrapperTmp, TEMP: wrapperTmp, FAKE_MODE: "hang",
     FAKE_ARGS_DUMP: argsDumpPath, FAKE_MESSAGES_DUMP: messagesDumpPath });
   const child = spawn(process.execPath, [wrapper, "--prompt-file", promptPath], { env, stdio: ["ignore", "pipe", "pipe"] });
+  track(child);
   const chunks = [];
   child.stdout.on("data", chunk => chunks.push(chunk));
   for (let i = 0; i < 40 && !fs.existsSync(argsDumpPath); i++) await new Promise(resolve => setTimeout(resolve, 50));

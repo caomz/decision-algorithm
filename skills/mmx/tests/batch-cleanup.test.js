@@ -7,13 +7,14 @@
 // return value. POSIX process-group cases skip on Windows, where the wrappers
 // do not detach the CLI; that is not evidence that Windows cleans up on its
 // own.
-const { test } = require("node:test");
+const { test, after } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { cleanEnv, fixtureEnv } = require("./support/env.js");
+const { track, teardown } = require("./support/teardown.js");
 
 const batch = path.resolve(__dirname, "../scripts/mmx-batch.js");
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "mmx-batch-cleanup-"));
@@ -21,6 +22,10 @@ const pidDir = path.join(root, "state");
 const archiveTmp = path.join(root, "archives");
 fs.mkdirSync(pidDir);
 fs.mkdirSync(archiveTmp);
+after(async () => {
+  try { await teardown(); }
+  finally { try { fs.rmSync(root, { recursive: true, force: true }); } catch {} }
+});
 const wrapper = path.join(root, "cleanup-wrapper.cjs");
 fs.writeFileSync(wrapper, `"use strict";
 const fs = require("node:fs"), path = require("node:path"), crypto = require("node:crypto");
@@ -33,7 +38,7 @@ const config = argv[argv.indexOf("--profile-file") + 1];
 const bind = receipt => ({ ...receipt, batch_attempt_id: process.env.ZMX_BATCH_ATTEMPT_ID,
   batch_material_sha256: digest(fs.readFileSync(file)), batch_config_sha256: digest(fs.readFileSync(config)) });
 const descendant = (detached, stdio) => {
-  const child = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {});setInterval(() => {}, 1000)"],
+  const child = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {});setInterval(() => {}, 1000); /* mmx-batch-cleanup-descendant */"],
     { detached, stdio, windowsHide: true });
   fs.writeFileSync(path.join(dir, tag + ".pid"), String(child.pid));
   child.unref();
@@ -69,7 +74,9 @@ function run(name, modes, extraArgs = []) {
   // Only pids this test recorded are ever signalled, and only after the batch
   // has exited, so the assertion below reflects what the batch left behind.
   const survivors = modes.map(mode => pidOf(name + "-" + mode)).filter(pid => pid && alive(pid));
-  for (const pid of survivors) { try { process.kill(pid); } catch {} }
+  // Survivors are tracked, not signalled here: teardown proves each pid
+  // against the descendant marker and stops it within a bound (V2.2.1 D6).
+  for (const pid of survivors) track({ pid, marker: "mmx-batch-cleanup-descendant" });
   return { run, receipt, survivors, shards: receipt?.shards ?? [] };
 }
 

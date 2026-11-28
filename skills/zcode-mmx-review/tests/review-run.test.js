@@ -4,7 +4,7 @@
 // 取消与超时、verify 全部用例、doctor 反例。全部离线；本文件不删除任何文件，
 // 自建产物都留在 mkdtemp(os.tmpdir()) 之下（受控 TMPDIR）。
 
-const { test, describe } = require("node:test");
+const { test, describe, after } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -28,6 +28,10 @@ const canSymlink = (() => {
 })();
 const symlinkSkip = !canSymlink && "file symbolic links cannot be created on this host";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "zmx-review-run-"));
+// Children spawned by the signal tests are tracked; teardown stops any
+// survivor with a bounded SIGTERM -> SIGKILL and verifies the exit.
+const { track, stop, teardown } = require("./support/teardown.js");
+after(async () => { await teardown(); });
 const sha256 = bytes => createHash("sha256").update(bytes).digest("hex");
 
 const PACKET = {
@@ -374,6 +378,7 @@ test("SIGTERM mid-run cancels but preserves the bound FAIL", { timeout: 60000, s
   const child = spawn(process.execPath, [RUNNER, "run", "--backend", "fixture", "--strategy", "dual-parallel", "--scenario", "zcode-fail-mmx-hang", "--packet", packetFile, "--out", out], {
     stdio: ["ignore", "pipe", "pipe"], env: cleanEnv({ ZMX_TEST_CLOSE_MARKER: "1" }),
   });
+  track(child);
   let stdout = "";
   child.stdout.on("data", data => { stdout += data; });
   // mmx 一侧 hang 前会先写 observed 文件；它出现即说明两侧均已启动。
@@ -414,6 +419,7 @@ describe("second signals and entry hardening (fix2)", { skip: process.platform =
     const child = spawn(process.execPath, [RUNNER, "run", "--backend", "fixture", "--strategy", "dual-parallel", "--scenario", scenario, "--packet", packetFile, "--out", out], {
       stdio: ["ignore", "pipe", "pipe"], env: cleanEnv(extraEnv),
     });
+    track(child);
     return { out, child };
   };
   const waitForMmxObserved = async out => {
@@ -1192,6 +1198,7 @@ test("V2.2.1 D3: a process interrupted while publishing leaves no consumable res
   ].join("\n") + "\n");
   const child = spawn(process.execPath, ["--require", fault, RUNNER, "run", "--backend", "fixture", "--scenario", "both-pass", "--packet", packetFile, "--out", out],
     { stdio: ["ignore", "pipe", "pipe"], env: cleanEnv() });
+  track(child);
   const code = await new Promise(resolve => child.once("close", resolve));
   assert.notEqual(code, 0);
   assert.equal(fs.existsSync(path.join(out, "result.json")), false, "a kill before the link must not expose result.json");

@@ -110,7 +110,7 @@ test("V2.2.1 S0: no test starts a process without the shared environment", () =>
 });
 
 test("V2.2.1 S0: the shared support files are byte-identical in every skill", () => {
-  for (const name of ["env.js", "offline-test.js"]) {
+  for (const name of ["env.js", "offline-test.js", "teardown.js"]) {
     const copies = ["zcode", "mmx", "zcode-mmx-review"].map(side => fs.readFileSync(path.join(skill(side), "tests/support", name)));
     assert.ok(copies.every(bytes => bytes.equals(copies[0])), name);
   }

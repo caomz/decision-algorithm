@@ -202,6 +202,35 @@
         },
         "note": "Two new tests: the keep-alive masking case (headless connection seen, unknown with connections_without_request_head) and the verdict table (other-endpoint-only is NOT_EVALUATED with the case unobserved; mixed is INCOMPLETE_LOCAL_ONLY; an unknown case cannot verify internal retry; fully observed single-request cases are OBSERVED_LOCAL_SCENARIOS; node-fetch stays NOT_EVALUATED). The existing layered-counting expectation gained headless_connections: 0."
       }
+    },
+    {
+      "id": "D6",
+      "title": "Test teardown stops owned processes within a bound and verifies their exit",
+      "changed": [
+        "skills/zcode/tests/support/teardown.js (new)",
+        "skills/mmx/tests/support/teardown.js (new)",
+        "skills/zcode-mmx-review/tests/support/teardown.js (new)",
+        "skills/zcode-mmx-review/tests/teardown.test.js (new)",
+        "skills/zcode/tests/zcode-batch.test.js",
+        "skills/mmx/tests/mmx-batch.test.js",
+        "skills/mmx/tests/batch-cleanup.test.js",
+        "skills/zcode-mmx-review/tests/review-run.test.js",
+        "skills/zcode-mmx-review/tests/staged-review.test.js",
+        "skills/mmx/tests/mmx-chat.test.js",
+        "skills/zcode-mmx-review/tests/offline-entry.test.js",
+        "skills/zcode/.zcode-release.json"
+      ],
+      "mechanism": "tests/support/teardown.js tracks (a) ChildProcess objects the test spawned and (b) pids that fixtures record together with a marker this run placed into the command line. stop() is bounded: SIGTERM, 1.5 s, SIGKILL, 5 s, then the exit is verified; a survivor fails the run by name. A live pid whose command line lacks the marker is never signalled - for a recorded pid that proves the original process exited and the pid was reused. Ownership is proven through an owned probe (command-line query with one retry; the Windows command-line launcher is resolved absolutely because it lives outside the directories CreateProcess searches and is unreachable from the whitelisted test PATH).",
+      "reproduced": {
+        "command": "node scripts/tmp-teardown-probe.cjs (removed after the run)",
+        "observed": "The old pattern (finally { if alive child.kill(SIGTERM) }, no wait, no verification) leaves the real leak shape alive: the PIPE_HOLDER fixture's detached descendant survived the killed parent (parent dead: true, detached descendant alive: true); the recorded marker was proven through the command line and the bounded stop verified the exit (alive: false). On Windows the direct-child SIGTERM case does not leak (kill is unconditional there); the POSIX deaf-wrapper leak is covered by the teardown tests and CI."
+      },
+      "after": {
+        "zcode": { "tests": 103, "pass": 97, "fail": 0, "skipped": 6 },
+        "mmx": { "tests": 162, "pass": 146, "fail": 0, "skipped": 16 },
+        "zcode-mmx-review": { "tests": 282, "pass": 272, "fail": 0, "skipped": 10 },
+        "note": "Three new teardown tests (deaf child stopped within a bound with verified exit; recorded pid with marker stopped, unprovable pid untouched; teardown leaves an unprovable pid alone and confirms the rest). Fixture descendants and SIGTERM-deaf wrappers now record pids with file-unique markers; the survived branch of stop() is defensive and unreachable while SIGKILL works."
+      }
     }
   ],
   "status": {

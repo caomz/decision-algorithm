@@ -11,6 +11,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawnSync, spawn } = require("node:child_process");
 const { cleanEnv, fixtureEnv } = require("./support/env.js");
+const { track, stop, teardown } = require("./support/teardown.js");
 
 const skillRoot = path.resolve(__dirname, "..");
 const batch = path.join(skillRoot, "scripts", "zcode-batch.js");
@@ -20,10 +21,25 @@ const fakeWrapper = path.join(root, "fake-wrapper.cjs");
 const argsDump = path.join(root, "args-dump.txt");
 const concLog = path.join(root, "conc.log");
 const stateDir = path.join(root, "state");
+const pidDir = path.join(root, "pids");
 const idsFile = path.join(root, "ids.json");
 
 fs.mkdirSync(stateDir);
-after(() => { try { fs.rmSync(root, { recursive: true, force: true }); } catch {} });
+fs.mkdirSync(pidDir);
+// Recorded fixture pids (SIGTERM-deaf wrappers, detached pipe holders) are
+// proven against their command-line marker before any signal; dead or reused
+// pids are skipped (V2.2.1 D6).
+after(async () => {
+  try {
+    for (const name of fs.readdirSync(pidDir)) {
+      const pid = Number(fs.readFileSync(path.join(pidDir, name), "utf8"));
+      if (Number.isSafeInteger(pid) && pid > 0) {
+        track({ pid, marker: name.startsWith("hang-") ? fakeWrapper : "zcode-batch-contract-pipe-holder" });
+      }
+    }
+    await teardown();
+  } finally { try { fs.rmSync(root, { recursive: true, force: true }); } catch {} }
+});
 // The upstream validator requires a nonempty unique array of plain id
 // STRINGS; an object array is rejected as input_error.
 fs.writeFileSync(idsFile, JSON.stringify(["E1", "E2"]));
@@ -78,11 +94,15 @@ if (prompt.includes("MISSING_TRUNCATED")) { const receipt = ok(); delete receipt
 if (prompt.includes("OUTPUT_OVERFLOW")) { process.stdout.write(Buffer.alloc(16 * 1024 * 1024 + 1024, 32)); return; }
 if (prompt.includes("CRASH_HOLD")) { setTimeout(() => {}, 2500); return; }
 if (prompt.includes("WRONG_BINDING")) { process.stdout.write(JSON.stringify(ok()) + "\\n"); return; }
-if (prompt.includes("HANG_WRAPPER")) { process.on("SIGTERM", () => {}); setInterval(() => {}, 1000); return; }
+if (prompt.includes("HANG_WRAPPER")) {
+  if (process.env.FAKE_PID_DIR) fs.writeFileSync(path.join(process.env.FAKE_PID_DIR, "hang-" + path.basename(promptFile)), String(process.pid));
+  process.on("SIGTERM", () => {}); setInterval(() => {}, 1000); return;
+}
 if (prompt.includes("PIPE_HOLDER")) {
   // Finite, test-owned child keeps the inherited pipe open after the wrapper exits.
-  const child = require("node:child_process").spawn(process.execPath, ["-e", "setTimeout(()=>{},11000)"],
+  const child = require("node:child_process").spawn(process.execPath, ["-e", "setTimeout(()=>{},11000); /* zcode-batch-contract-pipe-holder */"],
     { stdio: ["ignore", process.stdout, process.stderr], detached: true, windowsHide: true });
+  if (process.env.FAKE_PID_DIR) fs.writeFileSync(path.join(process.env.FAKE_PID_DIR, "pipe-holder.pid"), String(child.pid));
   child.unref(); emit(ok()); return;
 }
 if (prompt.includes("CHILD_ERR")) { process.stdout.write("definitely not json"); process.exitCode = 1; return; }
@@ -132,7 +152,7 @@ function runBatch(args, extraEnv = {}) {
   return spawnSync(process.execPath, [batch, ...args], {
     encoding: "utf8", windowsHide: true, shell: false, timeout: 20000,
     env: cleanEnv({ TMPDIR: archiveTmp, TMP: archiveTmp, TEMP: archiveTmp, ...fixtureEnv("zcode", fakeWrapper), FAKE_STATE_DIR: stateDir,
-                    FAKE_ARGS_DUMP: argsDump, FAKE_CONC_LOG: concLog, ZCODE_BATCH_RETRY_MS: "10", ...extraEnv }),
+                    FAKE_PID_DIR: pidDir, FAKE_ARGS_DUMP: argsDump, FAKE_CONC_LOG: concLog, ZCODE_BATCH_RETRY_MS: "10", ...extraEnv }),
   });
 }
 
@@ -425,7 +445,8 @@ test("Phase 2: repeated cancellation preserves completed evidence and prevents q
   const child = spawn(process.execPath, [batch, "--prompt-file", a, "--prompt-file", b, "--prompt-file", c,
     "--concurrency", "1", "--receipt-file", output], { stdio: ["ignore","pipe","pipe"],
     env: cleanEnv({ ...fixtureEnv("zcode", fakeWrapper), FAKE_STATE_DIR: stateDir,
-      TMPDIR: archiveTmp, TMP: archiveTmp, TEMP: archiveTmp }) });
+      FAKE_PID_DIR: pidDir, TMPDIR: archiveTmp, TMP: archiveTmp, TEMP: archiveTmp }) });
+  track(child);
   let stdout = "";
   child.stdout.on("data", chunk => { stdout += chunk; });
   const terminal = new Promise(resolve => child.once("close", (code, signal) => resolve({code, signal})));
@@ -445,7 +466,7 @@ test("Phase 2: repeated cancellation preserves completed evidence and prevents q
     assert.equal(receipt.shards[1].request_state,"UNKNOWN");
     assert.equal(receipt.shards[2].request_state,"NOT_STARTED");
     assert.equal(fs.existsSync(path.join(stateDir,"p2-cancel-c.txt")),false);
-  } finally { if (child.exitCode===null && child.signalCode===null) child.kill("SIGTERM"); }
+  } finally { await stop(child); }
 });
 
 test("Phase 2: contradictory CLI signal or missing truncation is rejected", () => {
@@ -478,7 +499,8 @@ test("Phase 2: abrupt batch crash leaves completed shard and unknown intent",
   const child = spawn(process.execPath,[batch,"--prompt-file",a,"--prompt-file",b,"--prompt-file",c,
     "--concurrency","1","--receipt-file",output], {stdio:["ignore","pipe","pipe"],
     env:cleanEnv({ ...fixtureEnv("zcode", fakeWrapper), FAKE_STATE_DIR:stateDir,
-      TMPDIR:archiveTmp,TMP:archiveTmp,TEMP:archiveTmp })});
+      FAKE_PID_DIR:pidDir,TMPDIR:archiveTmp,TMP:archiveTmp,TEMP:archiveTmp })});
+  track(child);
   child.stdout.resume(); child.stderr.resume();
   const terminal = new Promise(resolve=>child.once("close",(code,signal)=>resolve({code,signal})));
   try {
@@ -499,7 +521,7 @@ test("Phase 2: abrupt batch crash leaves completed shard and unknown intent",
     // The finite synthetic wrapper has no descendants, no provider request and
     // exits by itself after 2.5s; give it time before removing fixture paths.
     await new Promise(resolve=>setTimeout(resolve,2700));
-  } finally { if(child.exitCode===null&&child.signalCode===null) child.kill("SIGKILL"); }
+  } finally { await stop(child); }
 });
 
 // ---------------------------------------------------------------------------
