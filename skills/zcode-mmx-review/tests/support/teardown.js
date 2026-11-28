@@ -8,6 +8,7 @@
 // the pid was reused.
 const { spawnSync } = require("node:child_process");
 const path = require("node:path");
+const fs = require("node:fs");
 
 const TERM_GRACE_MS = 1500;
 const KILL_GRACE_MS = 5000;
@@ -16,7 +17,18 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function track(target) { owned.add(target); return target; }
 function untrack(target) { owned.delete(target); return target; }
-function alive(pid) { try { process.kill(pid, 0); return true; } catch (error) { return error.code === "EPERM"; } }
+function alive(pid) {
+  try { process.kill(pid, 0); } catch (error) { return error.code === "EPERM"; }
+  // kill(0) also succeeds for a zombie: it exists as a reaped-pending entry
+  // and can never run again. On Linux that state is readable directly.
+  if (process.platform === "linux") {
+    try {
+      const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+      return !stat.slice(stat.lastIndexOf(")") + 2).trimStart().startsWith("Z");
+    } catch { return false; }
+  }
+  return true;
+}
 function signal(pid, name) { try { process.kill(pid, name); return true; } catch { return false; } }
 
 function commandLine(pid) {
@@ -51,6 +63,11 @@ async function stop(target) {
   if (closed ? await Promise.race([closed, sleep(TERM_GRACE_MS)]) : !alive(pid)) return "exited";
   signal(pid, "SIGKILL");
   if (closed ? await Promise.race([closed, sleep(KILL_GRACE_MS)]) : !alive(pid)) return "exited";
+  // A pid that still looks alive after SIGKILL is either a zombie waiting to
+  // be reaped (dead, reported by the check above on Linux) or a reused pid
+  // that no longer carries the marker; the original exited either way. Only
+  // a marker-carrying survivor fails the run.
+  if (recorded && !commandLine(pid).includes(target.marker)) return "pid reused; the recorded process exited";
   return "survived";
 }
 

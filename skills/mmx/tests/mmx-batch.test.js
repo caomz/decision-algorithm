@@ -10,7 +10,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { spawnSync, spawn } = require("node:child_process");
-const { cleanEnv, fixtureEnv } = require("./support/env.js");
+const { cleanEnv, fixtureEnv, fixtureCliEnv } = require("./support/env.js");
 const { track, stop, teardown } = require("./support/teardown.js");
 
 const skillRoot = path.resolve(__dirname, "..");
@@ -237,6 +237,7 @@ process.stdout.write(JSON.stringify(reply));
     shardFile("chain-text-max.txt", "CHAIN_TEXT_MAX shard"), shardFile("chain-think-end.txt", "CHAIN_THINK_END shard")];
   const run = runBatch([...files.flatMap(file => ["--prompt-file", file]), "--max-tokens", "128", "--concurrency", "1"], {
     ...fixtureEnv("mmx", path.join(skillRoot, "scripts", "mmx-chat.js")), PATH: `${bin}${path.delimiter}${cleanEnv().PATH}`,
+    ...fixtureCliEnv(path.join(bin, "mmx")),
     TMPDIR: chainTmp, TMP: chainTmp, TEMP: chainTmp, MMX_CONFIG_DIR: path.join(root, "chain-config-absent"),
   });
   const receipt = receiptOf(run);

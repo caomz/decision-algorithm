@@ -168,8 +168,9 @@ test("phase D: acceptance requires the exact approved combination with full valu
 
 // A synthetic mmx-cli package layout with an approved admission config; only
 // metadata and digests are read. Shared by the dry-run and binding tests.
+let acceptanceSeq = 0;
 function approvedLayout() {
-  const base = path.join(root, "acceptance");
+  const base = path.join(root, "acceptance-" + String(++acceptanceSeq));
   const pkg = path.join(base, "node_modules", "mmx-cli");
   fs.mkdirSync(path.join(pkg, "dist"), { recursive: true });
   fs.mkdirSync(path.join(base, "node_modules", "undici"), { recursive: true });
