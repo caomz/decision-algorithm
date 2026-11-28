@@ -11,6 +11,13 @@ const { findMmx } = require("../scripts/mmx-chat.js");
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "mmx-durable-job-"));
 after(() => { try { fs.rmSync(root, { recursive: true, force: true }); } catch {} });
+const fixtureHome = path.join(root, "home");
+fs.mkdirSync(fixtureHome, { mode: 0o700 });
+for (const key of Object.keys(process.env)) {
+  if (/^(?:(?:https?|all|no)_proxy$|minimax_|mmx_|node_options$)/i.test(key)) delete process.env[key];
+}
+process.env.HOME = fixtureHome;
+process.env.USERPROFILE = fixtureHome;
 const prompt = path.join(root, "source.txt");
 const fakeBatch = path.join(root, "fake-batch.cjs");
 const counter = path.join(root, "invocations.log");
@@ -25,8 +32,8 @@ fs.writeFileSync(fakeBatch, [
   'if (!fs.readFileSync(file,"utf8").includes("SYNTHETIC REQUEST A")) throw new Error("prompt not snapshotted");',
   'if (!JSON.parse(fs.readFileSync(profile,"utf8")).format) throw new Error("profile not snapshotted");',
   'fs.appendFileSync(process.env.MMX_JOB_FAKE_COUNTER, "1\\n");',
-  'const done = () => {',
-  '  const result = {status:"ok",gate:"PASS",batch:{shards:1},shards:[{status:"ok",complete:true,truncated:false}]};',
+  'const done = stdinEnded => {',
+  '  const result = {status:"ok",gate:"PASS",batch:{shards:1},shards:[{status:"ok",complete:true,truncated:false}],stdin_ended:stdinEnded};',
   '  fs.writeFileSync(receipt,JSON.stringify(result),{flag:"wx"});',
   '  process.stdout.write(JSON.stringify(result)+"\\n");',
   '};',
@@ -35,12 +42,29 @@ fs.writeFileSync(fakeBatch, [
   '  if (process.env.MMX_JOB_FAKE_READY) fs.writeFileSync(process.env.MMX_JOB_FAKE_READY,String(process.pid));',
   '  setInterval(()=>{},100);',
   '}',
-  'else setTimeout(done,Number(process.env.MMX_JOB_TEST_SLEEP_MS || 25));',
+  'else {',
+  '  let delayElapsed = false, stdinEnded = false, emitted = false;',
+  '  let grace;',
+  '  const finish = () => {',
+  '    if (emitted) return;',
+  '    emitted = true;',
+  '    clearTimeout(grace);',
+  '    done(stdinEnded);',
+  '  };',
+  '  process.stdin.once("end", () => { stdinEnded = true; if (delayElapsed && grace) finish(); });',
+  '  process.stdin.resume();',
+  '  setTimeout(() => {',
+  '    delayElapsed = true;',
+  '    if (stdinEnded) finish();',
+  '    else grace = setTimeout(finish, 2000);',
+  '  }, Number(process.env.MMX_JOB_TEST_SLEEP_MS || 25));',
+  '}',
 ].join("\n") + "\n");
 const script = path.join(__dirname, "../scripts/mmx-job.js");
 process.env.MMX_JOB_FAKE_COUNTER = counter;
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
-async function until(predicate, timeoutMs=6000) {
+// Test harness deadline. The runtime timeouts asserted by these tests are unchanged.
+async function until(predicate, timeoutMs=30000) {
   const stop = Date.now()+timeoutMs;
   while (Date.now()<stop) {
     const value=predicate();
@@ -61,6 +85,7 @@ test("persisted snapshots survive source changes and completed receipt is querya
   assert.equal(finished.execution.reason,"child_exit");
   assert.equal(finished.execution.exit_code,0);
   assert.equal(finished.receipt.gate,"PASS");
+  assert.equal(finished.receipt.stdin_ended,true);
   assert.equal(verify(launched.job_dir).integrity,"match");
   assert.equal(fs.readFileSync(path.join(launched.job_dir,"input/shard-0.txt"),"utf8"),"SYNTHETIC REQUEST A\n");
   fs.writeFileSync(prompt,"SYNTHETIC REQUEST A\n");

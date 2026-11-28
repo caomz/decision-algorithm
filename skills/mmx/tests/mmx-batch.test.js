@@ -17,11 +17,16 @@ const fixturePreload = require.resolve("./fixtures/batch-wrapper-preload.cjs");
 const nativePreload = require.resolve("./fixtures/native-budget-fixture.cjs");
 const fixtureOptions = ['--require', JSON.stringify(nativePreload), '--require', JSON.stringify(fixturePreload)].join(' ');
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "mmx-batch-contract-"));
+const fixtureHome = path.join(root, "home");
+const fixtureEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
+  !/^(?:(?:https?|all|no)_proxy$|minimax_|mmx_|node_options$)/i.test(key)));
+Object.assign(fixtureEnv, { HOME: fixtureHome, USERPROFILE: fixtureHome });
 const fakeWrapper = path.join(root, "fake-wrapper.cjs");
 const argsDump = path.join(root, "args-dump.txt");
 const stateDir = path.join(root, "state");
 
 fs.mkdirSync(stateDir);
+fs.mkdirSync(fixtureHome, { mode: 0o700 });
 after(() => { try { fs.rmSync(root, { recursive: true, force: true }); } catch {} });
 fs.writeFileSync(fakeWrapper, `
 "use strict";
@@ -57,7 +62,7 @@ emit(ok());
 function runBatch(args, extraEnv = {}) {
   return spawnSync(process.execPath, [batch, ...args], {
     encoding: "utf8", windowsHide: true, shell: false,
-    env: { ...process.env, NODE_OPTIONS: fixtureOptions, MMX_TEST_WRAPPER: fakeWrapper, FAKE_STATE_DIR: stateDir,
+    env: { ...fixtureEnv, NODE_OPTIONS: fixtureOptions, MMX_TEST_WRAPPER: fakeWrapper, FAKE_STATE_DIR: stateDir,
            FAKE_ARGS_DUMP: argsDump, MMX_BATCH_QUOTA_RETRY_MS: "10", ...extraEnv },
   });
 }

@@ -123,7 +123,7 @@ function childBudgetMatches(request, parent) {
     request.max_tokens === parent.max_tokens && isDeepStrictEqual(request.native_entries, parent.native_entries);
 }
 
-function inspectPart(dir, expected, shard, plan, parent) {
+function inspectPart(dir, expected, shard, plan, parent, childVerification) {
   realDir(dir);
   assert(read(path.join(dir, "packet.json")).equals(expected), shard.id + ": wrong authorized packet");
   const dispatch = json(path.join(dir, "dispatch.json"));
@@ -138,7 +138,7 @@ function inspectPart(dir, expected, shard, plan, parent) {
     return { ...basic, state: "incomplete" };
   }
   assert(read(path.join(run, "packet.json")).equals(expected), shard.id + ": substituted child packet");
-  const verified = verifyRun(run);
+  const verified = childVerification ?? verifyRun(run);
   assert(verified.exit_code === 0 && verified.replay === "match" && verified.backend === "real",
     shard.id + ": child archive did not replay with the real backend");
   assert(childBudgetMatches(json(path.join(run, "request.json")), parent), shard.id + ": child budget mismatch");
@@ -182,7 +182,7 @@ function aggregate(prepared, parts, stop) {
       : "Whole-document acceptance requires a full-document review. Shard results and complete delivery are recorded independently." };
 }
 
-function replay(dir) {
+function replay(dir, childVerifications = new Map()) {
   dir = realDir(dir);
   const coverageDir = realDir(path.join(dir, "coverage"));
   assert(verifyPlan(coverageDir).integrity === "match", "coverage plan or source material is corrupt");
@@ -197,7 +197,7 @@ function replay(dir) {
   const runs = realDir(path.join(dir, "parts"));
   const names = fs.readdirSync(runs).sort();
   assert(isDeepStrictEqual(names, prepared.plan.shards.slice(0, names.length).map(shard => shard.id)), "unexpected, duplicated or out-of-sequence shard");
-  const parts = names.map((id, i) => inspectPart(path.join(runs, id), prepared.packets[i], prepared.plan.shards[i], prepared.plan, request));
+  const parts = names.map((id, i) => inspectPart(path.join(runs, id), prepared.packets[i], prepared.plan.shards[i], prepared.plan, request, childVerifications.get(id)));
   const stop = json(path.join(dir, "round-end.json"));
   assert(typeof stop.cancelled === "boolean" && stop.dispatched === names.length, "invalid round termination record");
   assert(stop.cancelled || names.length === prepared.shardCount ||
@@ -216,11 +216,44 @@ function topDigests(dir, result) {
 }
 function verifyShardedReview(dir) {
   try {
-    const replayed = replay(dir);
+    dir = realDir(dir);
+    const coverage = realDir(path.join(dir, "coverage"));
+    const partsDir = realDir(path.join(dir, "parts"));
     const saved = json(path.join(dir, "result.json"));
     const manifest = json(path.join(dir, "record-manifest.json"));
-    assert(isDeepStrictEqual(manifest, { format: 3, backend: "real", sharded: true, files: topDigests(dir, replayed) }),
+    const request = json(path.join(dir, "sharded-request.json"));
+    const plan = json(path.join(coverage, "coverage-plan.json"));
+    assert(verifyPlan(coverage, { replay: false }).integrity === "match" && request.packet_sha256 === plan.packet_sha256,
+      "coverage plan or source material is corrupt");
+    const names = fs.readdirSync(partsDir).sort();
+    assert(Array.isArray(saved.shards) && saved.shards.length === names.length &&
+      isDeepStrictEqual(names, plan.shards.slice(0, names.length).map(shard => shard.id)), "unexpected or missing shard");
+    const childVerifications = new Map();
+    const drift = new Set();
+    for (const [i, id] of names.entries()) {
+      const part = saved.shards[i];
+      assert(part?.id === id && ["verified", "incomplete"].includes(part.state), "invalid saved shard state");
+      const partDir = realDir(path.join(partsDir, id));
+      const selectedRun = path.join(partDir, "run");
+      if (fs.existsSync(selectedRun)) realDir(selectedRun);
+      if (part.state === "incomplete") {
+        assert(!fs.existsSync(path.join(selectedRun, "record-manifest.json")), "unexpected child archive");
+        continue;
+      }
+      const child = verifyRun(selectedRun);
+      assert(child.integrity === "ok", id + ": child archive is corrupt");
+      if (child.replay === "version_drift") for (const file of child.drifted) drift.add(file);
+      childVerifications.set(id, child);
+    }
+    assert(isDeepStrictEqual(manifest, { format: 3, backend: "real", sharded: true, files: topDigests(dir, saved) }),
       "sharded manifest or record digest mismatch");
+    for (const [name, hash] of Object.entries(codeHash())) {
+      assert(/^[a-f0-9]{64}$/.test(request.code?.[name]), "missing sharding code fingerprint");
+      if (request.code[name] !== hash) drift.add(name);
+    }
+    if (drift.size) return { integrity: "ok", replay: "version_drift", drifted: Array.from(drift),
+      exit_code: 2, backend: "real", sharded: true };
+    const replayed = replay(dir, childVerifications);
     assert(isDeepStrictEqual(saved, replayed), "sharded verdict differs from verified children");
     return { integrity: "ok", replay: "match", exit_code: 0, backend: "real", sharded: true,
       replayed: { round_status: replayed.round_status, review_gate: replayed.review_gate, cancelled: replayed.cancelled } };

@@ -181,7 +181,7 @@ function writePlan(rawPacketBytes, output, options) {
     shards: plan.shards.length, acceptance_conditions: plan.acceptance_ids.length };
 }
 
-function verifyPlan(directory) {
+function verifyPlan(directory, { replay = true } = {}) {
   try {
     const requestedDir = path.resolve(directory);
     if (!fs.lstatSync(requestedDir).isDirectory()) throw new Error("archive is not a directory");
@@ -196,10 +196,13 @@ function verifyPlan(directory) {
     const plan = strictJson(decodeUtf8(regularBytes(path.join(dir, "coverage-plan.json"))));
     validatePlan(plan);
     const packet = regularBytes(path.join(dir, "packet.json"));
-    const expected = buildCoveragePlan(packet, { chunkBytes: plan.shard_bytes });
-    if (JSON.stringify(plan) !== JSON.stringify(expected.plan)) throw new Error("plan differs from packet");
     const material = regularBytes(path.join(dir, "material.txt"));
-    if (!material.equals(expected.materialBytes)) throw new Error("material differs from packet");
+    if (hash(packet) !== plan.packet_sha256 || hash(material) !== plan.material_sha256) throw new Error("source digest differs");
+    if (replay) {
+      const expected = buildCoveragePlan(packet, { chunkBytes: plan.shard_bytes });
+      if (JSON.stringify(plan) !== JSON.stringify(expected.plan)) throw new Error("plan differs from packet");
+      if (!material.equals(expected.materialBytes)) throw new Error("material differs from packet");
+    }
     const names = fs.readdirSync(path.join(dir, "shards")).sort();
     const planned = plan.shards.map(s => s.file).sort();
     if (JSON.stringify(names) !== JSON.stringify(planned)) throw new Error("missing or unexpected shards");

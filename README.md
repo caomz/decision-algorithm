@@ -25,7 +25,7 @@
 | [`mmx`](skills/mmx/) | MMX CLI 同步文本复核 | 与 ZCode 组成默认双模型交叉验证 |
 | [`zcode-mmx-review`](skills/zcode-mmx-review/) | ZCode/MMX 交叉验证**执行规则**（文档目录，非 skill） | 一轮怎么跑、材料怎么发、结果怎么判、什么时候停 |
 
-规则要点：**持续授权**（2026-11-15 起，交叉验证默认获准，不再逐轮询问）、默认组合 ZCode/MMX、首轮同材料同证据 ID 且互不传结论、默认每方 600 秒、以 `receipt.provider` / `receipt.model` 等原生元数据核验模型独立性（不采信正文自称）、结果记 `COMPLETED` / `NOT_EVALUATED`。
+默认组合为 ZCode/MMX，首轮用相同材料和证据 ID。统一入口默认 ZCode 600 秒、MMX 600/630 秒。独立 ZCode wrapper 默认 1200 秒。结果以原生模型元数据、材料覆盖和回执完整性核验。
 
 完整规则见 [`skills/zcode-mmx-review/README.md`](skills/zcode-mmx-review/README.md)。
 

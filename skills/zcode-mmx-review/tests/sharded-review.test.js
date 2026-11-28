@@ -150,6 +150,26 @@ describe("shard orchestration with isolated native CLI fixtures", {
     assert.equal(verifyShardedReview(box.out).exit_code, 2);
     count(box, ["S-0001", "S-0002"]);
   });
+  test("an intact older sharded archive reports version drift and still rejects content changes", () => {
+    const box = setup();
+    result(box, 0);
+    const requestFile = path.join(box.out, "sharded-request.json");
+    const manifestFile = path.join(box.out, "record-manifest.json");
+    const request = json(requestFile);
+    request.code.sharding = "0".repeat(64);
+    fs.writeFileSync(requestFile, JSON.stringify(request));
+    const manifest = json(manifestFile);
+    manifest.files["sharded-request.json"] = require("node:crypto").createHash("sha256")
+      .update(fs.readFileSync(requestFile)).digest("hex");
+    fs.writeFileSync(manifestFile, JSON.stringify(manifest));
+    const verified = verifyShardedReview(box.out);
+    assert.equal(verified.integrity, "ok");
+    assert.equal(verified.replay, "version_drift");
+    assert.equal(verified.exit_code, 2);
+    fs.appendFileSync(path.join(box.out, "parts/S-0001/run/zcode-stdout.json"), "changed");
+    assert.equal(verifyShardedReview(box.out).integrity, "corrupt");
+    count(box, ["S-0001", "S-0002"]);
+  });
   test("insufficient budget rejects before an output or native attempt exists", () => {
     const box = setup("pass", 1);
     assert.equal(run(box).status, 2);

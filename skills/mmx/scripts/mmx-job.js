@@ -8,10 +8,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { spawn, spawnSync } = require("node:child_process");
 const { parseArgs, collectShardFiles, readProfileBudget } = require("./mmx-batch.js");
-// Reuse the wrapper's own CLI selection (findMmx) and package verification
-// (mmxPackageEntry) so the runtime binding and the child launch agree exactly
-// on what "the CLI" is.
-const { mmxPackageEntry, findMmx } = require("./mmx-chat.js");
+const { mmxPackageEntry, findMmx, resolveLaunch } = require("./mmx-chat.js");
 
 const BATCH = path.join(__dirname, "mmx-batch.js");
 const EXIT_UNKNOWN = 2;
@@ -59,17 +56,18 @@ function matchesFingerprint(file, expected) {
 }
 // Pin the actual local runtime used by the detached job. Do not record keys,
 // model credentials, proxy addresses, or arbitrary environment contents.
-// Identify the CLI execution chain exactly as mmx-chat.js will launch it.
-// findMmx is the single source of truth for launcher selection: the same PATH
-// scan, the same X_OK policy, the same npm shim and package-entry resolution.
-// The text of arbitrary shell scripts is never scanned, so a custom launcher
-// whose inner target cannot be proven by the shared rule stays unresolved and
-// a durable job refuses to launch instead of binding a guess.
-function cliIdentity(envPath = process.env.PATH) {
+// Bind the same audited entry as the single-call wrapper. Preserve the
+// existing PATH package identity for inspection when native preflight fails.
+function cliIdentity(explicitEntry) {
   const unresolved = kind => ({ kind, resolution: "unresolved",
     entry: null, package: null, preload: null, launcher: null });
+  const policy = resolveLaunch(process.env, process.platform, { explicitEntry });
+  if (!policy.ok && (explicitEntry || process.env.MMX_CLI_ENTRY ||
+      policy.resolution?.source === "mac_config" || policy.reason === "invalid_launch_config")) {
+    return unresolved("configured_entry");
+  }
   let mmx;
-  try { mmx = findMmx(process.platform, envPath ?? ""); } catch { mmx = null; }
+  try { mmx = policy.ok ? policy.mmx : findMmx(process.platform, process.env.PATH ?? ""); } catch { mmx = null; }
   if (!mmx) return unresolved("missing");
   if (mmx.unsafe) return unresolved("unsafe");
   if (mmx.argsPrefix.length !== 1) {
@@ -96,13 +94,13 @@ function cliIdentity(envPath = process.env.PATH) {
     return { kind: "package_entry", resolution: "resolved",
       entry: { file: pkg.entry, ...fingerprint(pkg.entry) },
       package: { file: meta, version: data.version, ...fingerprint(meta) },
-      preload, launcher: null };
+      preload, launcher: null, ...(policy.ok ? { audited: true } : {}) };
   } catch {
     return { kind: "package_entry", resolution: "unresolved",
       entry: null, package: null, preload: null, launcher: null };
   }
 }
-function runtimeBinding() {
+function runtimeBinding(explicitEntry = null) {
   const components = [
     path.join(__dirname, "mmx-chat.js"),
     path.join(__dirname, "fetch-timeout-guard.js"),
@@ -116,11 +114,7 @@ function runtimeBinding() {
     node_version:process.version,
     node_executable:fs.realpathSync(process.execPath),
     files,
-    // resolution is explicit: "resolved" only when the wrapper would execute a
-    // verified mmx-cli package entry through findMmx. Any other chain — a
-    // custom launcher, an unsafe cmd path or a missing CLI — is "unresolved"
-    // and a durable job refuses to launch rather than invent an identity.
-    cli:cliIdentity(),
+    cli:cliIdentity(explicitEntry),
   };
 }
 
@@ -146,6 +140,7 @@ function makeBatchArgs(parsed, prompts, profileFile, receiptFile) {
   if (parsed.wrapTimeout !== null) args.push("--wrap-timeout", String(parsed.wrapTimeout));
   if (parsed.allowPaidRetry === true) args.push("--allow-paid-retry");
   if (parsed.retryMaxTokens !== null) args.push("--retry-max-tokens", String(parsed.retryMaxTokens));
+  if (parsed.cliEntry !== null) args.push("--cli-entry", parsed.cliEntry);
   args.push("--profile-file", profileFile, "--receipt-file", receiptFile);
   return args;
 }
@@ -173,7 +168,7 @@ function readRequest(job) {
   // An old request without the runtime contract can still be inspected, but
   // must never be promoted to a new executable request by the worker.
   if (!request.runtime || request.runtime.format !== 1 ||
-      JSON.stringify(request.runtime) !== JSON.stringify(runtimeBinding())) {
+      JSON.stringify(request.runtime) !== JSON.stringify(runtimeBinding(parsed.cliEntry))) {
     throw new Error("Node, wrapper, guard or CLI runtime changed; do not launch");
   }
   // A missing CLI is a recorded runtime state, not a license to execute a
@@ -186,10 +181,11 @@ function start(jobPath, argv, overrides = {}) {
   // A durable job must prove what it will execute before any job state exists.
   // An unprovable CLI startup chain never launches and never creates a job
   // directory, so there is no partial state to preserve or replay.
-  const binding = runtimeBinding();
+  const binding = runtimeBinding(parsed.cliEntry);
   if (!binding.cli || binding.cli.resolution !== "resolved") {
     throw new Error("MMX CLI startup chain is not provable; refusing to start a durable job");
   }
+  if (binding.cli.audited) parsed.cliEntry = binding.cli.entry.file;
   // mkdir without recursive is the idempotency gate. Preserve partial jobs:
   // their absence of a receipt is never permission to launch again.
   fs.mkdirSync(path.resolve(jobPath), { mode: 0o700 });

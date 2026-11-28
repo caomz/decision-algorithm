@@ -90,6 +90,8 @@ if (prompt.includes("AUTH_ERR")) { emit({ status: "auth_error", cli_invoked: fal
 if (prompt.includes("POLICY_ERR")) { emit({ status: "policy_violation", cli_invoked: true, complete: false, review_gate: "NOT_EVALUATED", error: "tool used" }); return; }
 if (prompt.includes("TRUNC")) { emit(ok({ truncated: true, complete: false, stop_reason: "max_tokens", review_gate: "PASS" })); return; }
 if (prompt.includes("QUOTA_ONCE") && invocations === 0) { emit({ status: "quota_error", cli_invoked: true, complete: false, review_gate: "NOT_EVALUATED", error: "rate limited" }); return; }
+if (prompt.includes("QUOTA_RETRY_AFTER")) { emit({ status: "quota_error", provider_failure: { retry_after_present: true, retry_after_seconds: 60 } }); return; }
+if (prompt.includes("QUOTA_UNRETRYABLE")) { emit({ status: "quota_error", provider_failure: { retryable: false } }); return; }
 if (prompt.includes("TIMEOUT_ONCE") && invocations === 0) { emit({ status: "timeout", cli_invoked: true, complete: false, review_gate: "NOT_EVALUATED", error: "timed out" }); return; }
 if (prompt.includes("QUOTA_ALWAYS")) { emit({ status: "quota_error", cli_invoked: true, complete: false, review_gate: "NOT_EVALUATED", error: "rate limited" }); return; }
 emit(ok());
@@ -499,6 +501,19 @@ test("opt-in quota retry: first attempt retained", () => {
   assert.equal(shard.first_attempt.status, "quota_error");
   assert.equal(shard.status, "ok");
   assert.ok(shard.retry_backoff_seconds > 0);
+});
+
+test("paid retry does not override the provider's explicit refusal or longer retry-after", () => {
+  for (const [sentinel, reason] of [["QUOTA_RETRY_AFTER", "provider_retry_after_exceeds_backoff"],
+    ["QUOTA_UNRETRYABLE", "provider_reported_not_retryable"]]) {
+    const name = sentinel + ".txt";
+    const file = shardFile(name, sentinel);
+    const shard = receiptOf(runBatch(["--prompt-file", file, "--allow-paid-retry"])).shards[0];
+    assert.equal(shard.status, "quota_error");
+    assert.equal(shard.retried, false);
+    assert.equal(shard.retry_skipped_reason, reason);
+    assert.equal(fs.readFileSync(path.join(stateDir, name), "utf8"), "1");
+  }
 });
 
 test("timeout never replays, including when a paid quota retry was authorized", () => {

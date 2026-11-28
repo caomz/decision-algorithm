@@ -12,7 +12,7 @@ const path = require("path");
 const { spawn, spawnSync } = require("child_process");
 const { TextDecoder } = require("util");
 
-const VERSION = "2.8.1";
+const VERSION = "2.8.2";
 const FETCH_GUARD = path.join(__dirname, "fetch-timeout-guard.js");
 const PROXY_VARIABLES = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"];
 const FETCH_LIMIT_MS = 300000;
@@ -87,7 +87,7 @@ function isManagedLayout(skillsRoot) {
   });
 }
 
-function validateInstall() {
+function validateInstall(env = process.env) {
   const skillRoot = fs.realpathSync(path.join(__dirname, ".."));
   const skillsRoot = path.dirname(skillRoot);
   const marker = path.join(skillsRoot, RELEASE_MARKER);
@@ -105,17 +105,23 @@ function validateInstall() {
   if (!isObject(release) || release.format !== 1 || release.state !== "active" ||
       typeof release.release_id !== "string" || !/^[a-f0-9]{64}$/.test(release.release_id) ||
       !isObject(release.files)) throw new Error("release marker is invalid");
-  const requiredFiles = ["mmx/scripts/mmx-chat.js", "mmx/scripts/fetch-timeout-guard.js", "mmx/scripts/mmx-native-budget.js", "mmx/profiles/local.json",
-                         "cross-validation/scripts/cross_validate.py"];
-  if (process.env.MMX_GLOBAL_SLOT === "1") requiredFiles.push("mmx/scripts/mmx-provider-slot.js");
+  const requiredFiles = ["mmx/scripts/mmx-chat.js", "mmx/scripts/fetch-timeout-guard.js",
+    "mmx/scripts/mmx-native-budget.js", "mmx/profiles/local.json"];
+  if (env.MMX_GLOBAL_SLOT === "1") requiredFiles.push("mmx/scripts/mmx-provider-slot.js");
   for (const required of requiredFiles) {
     if (!Object.hasOwn(release.files, required)) throw new Error("release manifest is incomplete");
   }
-  for (const [relative, expected] of Object.entries(release.files)) {
+  const entries = Object.keys(release.files).sort().map(name => [name, release.files[name]]);
+  const inventory = JSON.stringify(Object.fromEntries(entries));
+  if (createHash("sha256").update(inventory).digest("hex") !== release.release_id) {
+    throw new Error("release inventory digest differs");
+  }
+  for (const [relative, expected] of entries) {
     const parts = relative.split("/");
     if (!["agy", "mmx", "cross-validation"].includes(parts[0]) || parts.length < 2 ||
         parts.some(part => !/^[A-Za-z0-9_.-]+$/.test(part) || part === "." || part === "..") ||
         typeof expected !== "string" || !/^[a-f0-9]{64}$/.test(expected)) throw new Error("release path or digest is invalid");
+    if (parts[0] !== "mmx") continue;
     let file = skillsRoot;
     for (const [i, part] of parts.entries()) {
       file = path.join(file, part);
@@ -639,28 +645,55 @@ function egressEnvironmentPresent(env, platform) {
   return !/\/v1\/?$/.test(base);
 }
 
+// An owner-selected macOS entry is independent of terminal startup files.
+// Only the entry path is configurable here; the launch inherits proxy settings.
+function configuredMacEntry(env, platform) {
+  if (platform !== "darwin" || env.MMX_REQUIRE_PATH_LAUNCHER === "1" || !path.isAbsolute(env.HOME || "")) return null;
+  const file = path.join(env.HOME, "Library", "Application Support", "Decision Algorithm", "mmx-launch.json");
+  let fd;
+  try {
+    fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    const info = fs.fstatSync(fd);
+    if (!info.isFile() || info.uid !== process.getuid() || (info.mode & 0o077) || info.size > 4096) {
+      throw new Error("unsafe MMX launch configuration");
+    }
+    const data = JSON.parse(fs.readFileSync(fd, "utf8"));
+    if (!isObject(data) || Object.keys(data).length !== 2 || data.format !== 1 ||
+        typeof data.cli_entry !== "string" || !path.isAbsolute(data.cli_entry)) {
+      throw new Error("invalid MMX launch configuration");
+    }
+    return data.cli_entry;
+  } catch (error) {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
 function resolveLaunch(env = process.env, platform = process.platform, options = {}) {
   const pathEnv = env[envKey(env, "PATH", platform)] || "";
   const pathMmx = findMmx(platform, pathEnv);
   const resolution = { source: null, path_launcher: null, audited_entry: null, bypassed: false, roots: [] };
 
-  const explicitValue = options.explicitEntry ?? env.MMX_CLI_ENTRY;
-  if (typeof explicitValue === "string" && explicitValue !== "") {
-    resolution.source = "explicit";
-    const explicit = explicitAuditedEntry(explicitValue);
+  const selectedLaunch = (value, source) => {
+    resolution.source = source;
+    const explicit = explicitAuditedEntry(value);
     if (!explicit) {
-      resolution.audited_entry = explicitValue;
+      resolution.audited_entry = value;
       return { ok: false, reason: "unverified_native_entry", resolution,
-        detail: "The entry given by --cli-entry / MMX_CLI_ENTRY does not exist or is not readable." };
+        detail: "The selected MMX entry does not exist or is not readable." };
     }
     resolution.audited_entry = explicit.entry;
     const verdict = verifyAuditedEntry(explicit);
     if (!verdict.ok) {
       return { ok: false, reason: "unverified_native_entry", resolution,
-        detail: "The entry given by --cli-entry / MMX_CLI_ENTRY is not the audited mmx-cli 1.0.29 package entry." };
+        detail: "The selected MMX entry is not the audited mmx-cli 1.0.29 package entry." };
     }
     return finishLaunch({ cmd: process.execPath, argsPrefix: [verdict.entry], shell: false }, env, verdict, resolution);
-  }
+  };
+  const explicitValue = options.explicitEntry ?? env.MMX_CLI_ENTRY;
+  if (typeof explicitValue === "string" && explicitValue !== "") return selectedLaunch(explicitValue, "explicit");
 
   if (pathMmx && !pathMmx.unsafe && pathMmx.argsPrefix.length === 1) {
     const pkg = mmxPackageEntry(pathMmx.argsPrefix[0]);
@@ -678,6 +711,14 @@ function resolveLaunch(env = process.env, platform = process.platform, options =
         detail: "The mmx-cli package entry on PATH does not match the reviewed SHA-256." };
     }
   }
+
+  let configuredValue;
+  try { configuredValue = configuredMacEntry(env, platform); }
+  catch {
+    return { ok: false, reason: "invalid_launch_config", resolution,
+      detail: "Check the owner-only Decision Algorithm/mmx-launch.json for a valid audited cli_entry." };
+  }
+  if (configuredValue) return selectedLaunch(configuredValue, "mac_config");
 
   resolution.path_launcher = pathMmx ? pathMmx.cmd : null;
   if (env.MMX_REQUIRE_PATH_LAUNCHER === "1") {
@@ -732,6 +773,8 @@ function resolveBudgetLaunch(env, options = {}) {
 }
 
 function preflightRequestBudget(env = process.env, options = {}) {
+  try { validateInstall(env); }
+  catch { return { ok: false, reason: "install_mismatch", detail: "MMX managed files failed verification.", launch_resolution: null }; }
   const result = resolveBudgetLaunch(env, options);
   if (!result.ok) return { ok: false, reason: result.reason, detail: result.detail ?? null, launch_resolution: result.resolution ?? null };
   return { ok: true, reason: null, entry_sha256: result.entry_sha256, cli_version: result.cli_version,
@@ -965,18 +1008,17 @@ async function main() {
     usageError("--native-request-limit accepts only 1.");
   }
 
-  try { validateInstall(); }
-  catch {
-    fail({ status: "install_mismatch", error: "MMX managed release is missing, inactive, or inconsistent. Run cross-validation doctor." });
-    return;
-  }
-
   const explicitEntry = options.get("--cli-entry") ?? null;
   if (preflightOnly) {
     const report = preflightRequestBudget(process.env, { explicitEntry });
     telemetry.launch_resolution = report.launch_resolution ?? null;
     emit({ status: report.ok ? "preflight_ok" : "preflight_failed", ...report });
     process.exitCode = report.ok ? 0 : 1;
+    return;
+  }
+  try { validateInstall(); }
+  catch {
+    fail({ status: "install_mismatch", error: "MMX managed files failed verification. Run mmx-chat.js --preflight." });
     return;
   }
 
@@ -1005,6 +1047,8 @@ async function main() {
   if (requestTimeout > MAX_TIMEOUT_SEC || wrapperTimeout > MAX_TIMEOUT_SEC) {
     usageError(`Effective request and wrapper timeouts must not exceed ${MAX_TIMEOUT_SEC} seconds.`);
   }
+  telemetry.request_timeout_seconds = requestTimeout;
+  telemetry.wrapper_timeout_seconds = wrapperTimeout;
 
   const { raw: promptBytes, text: prompt } = readInput(promptFile, "prompt");
   if (!prompt.length) usageError("prompt file is empty");

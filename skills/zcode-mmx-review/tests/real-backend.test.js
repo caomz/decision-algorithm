@@ -80,6 +80,24 @@ function runCase(scenario, code, gate, status, renderedBytes) {
 describe("real backend through checkout wrappers and local fake native CLIs", {
   skip: process.platform === "win32" && "POSIX executable fixtures; native Windows launchers have a separate contract",
 }, () => {
+  test("runtime doctor validates both local launch chains without starting either CLI", () => {
+    const box = setup({});
+    const prefix = box.args.slice(0, box.args.indexOf(runner));
+    const checked = spawnSync(process.execPath, [...prefix, runner, "doctor", "--runtime", "--json"], {
+      env: box.env, encoding: "utf8", timeout: 30000,
+    });
+    assert.equal(checked.status, 0, checked.stdout + checked.stderr);
+    const report = JSON.parse(checked.stdout);
+    assert.equal(report.mode, "runtime_preflight");
+    assert.deepEqual(report.timeouts.standalone, { zcode: 1200, mmx_request: 600, mmx_wrapper: 630 });
+    assert.deepEqual(report.timeouts.unified, { zcode: 600, mmx_request: 600, mmx_wrapper: 630, parent_seconds: 660 });
+    for (const side of ["zcode", "mmx"]) {
+      const check = report.checks.find(candidate => candidate.name === "runtime:" + side);
+      assert.equal(check.ok, true);
+      assert.equal(check.cli_invoked, false);
+      assert.equal(attempts(box.bin, side).length, 0);
+    }
+  });
   test("both eligible votes match a single packet and replay detects edits", () => {
     const { run, result } = runCase({}, 0, "PASS", "COMPLETED", 24576);
     assert.equal(result.independent, true);

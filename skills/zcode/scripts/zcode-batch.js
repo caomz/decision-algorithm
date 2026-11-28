@@ -19,13 +19,13 @@ const path = require("path");
 const os = require("os");
 const { spawn } = require("child_process");
 const { strictJson, validateReview, validateIds } = require("./review.js");
+const { DEFAULT_TIMEOUT_SECONDS } = require("./zcode-chat.js");
 
 const VERSION = "1.0.0";
 const DEFAULT_WRAPPER = path.join(__dirname, "zcode-chat.js");
 const DEFAULT_CONCURRENCY = 2;
 const MAX_CONCURRENCY = 8;
 const MAX_SHARDS = 32;
-const DEFAULT_TIMEOUT_SECONDS = 1200;
 const MAX_TIMEOUT_SECONDS = 21600;
 const RETRY_DELAY_MS = 30000;
 const STDOUT_CAP_BYTES = 16 * 1024 * 1024;
@@ -291,11 +291,20 @@ function runWrapperOnce(promptFile, fixedArgs) {
 
 async function runShardWithRetries(shard, fixedArgs, allowPaidRetry) {
   const first = await runWrapperOnce(shard.file, fixedArgs);
+  const retryableQuota = RETRYABLE.has(first.receipt.status);
+  const upstream = first.receipt.provider_failure;
+  let skip;
+  if (first.receipt.status === "timeout") skip = "remote_outcome_unknown";
+  else if (retryableQuota && !allowPaidRetry) skip = "paid_retry_not_authorized";
+  else if (retryableQuota && upstream?.retryable === false) skip = "provider_reported_not_retryable";
+  else if (retryableQuota && upstream?.retry_after_present === true &&
+      (!Number.isSafeInteger(upstream.retry_after_seconds) || upstream.retry_after_seconds > RETRY_DELAY_MS / 1000)) {
+    skip = "provider_retry_after_exceeds_backoff";
+  }
   // Local cleanup/timeout never proves the remote provider did not execute.
-  if (!allowPaidRetry || !RETRYABLE.has(first.receipt.status) || cancelled) {
+  if (!retryableQuota || skip || cancelled) {
     return { shard: shard.label, prompt_file: shard.file, retried: false, retry_reason: null,
-      ...(first.receipt.status === "timeout" ? { retry_skipped_reason: "remote_outcome_unknown" } :
-        !allowPaidRetry && RETRYABLE.has(first.receipt.status) ? { retry_skipped_reason: "paid_retry_not_authorized" } : {}),
+      ...(skip ? { retry_skipped_reason: skip } : {}),
       duration_seconds: first.duration, ...first.receipt };
   }
   const retryReason = first.receipt.status;

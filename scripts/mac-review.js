@@ -159,6 +159,7 @@ function report(out) {
   const verdict = verifyReviewArchive(out);
   const lines = [`归档目录 ${display(out)}`, `归档核验 ${verdict.integrity} / ${verdict.replay ?? "未复算"}`];
   if (verdict.exit_code !== 0) {
+    if (verdict.replay === "version_drift") lines.push("文件完整性已核对。用记录中的原版本可复算审核结论。");
     for (const problem of [...(verdict.problems || []), ...(verdict.drifted || [])]) lines.push(display(problem));
   } else {
     const result = JSON.parse(fs.readFileSync(path.join(out, "result.json"), "utf8"));
@@ -173,6 +174,19 @@ function report(out) {
         lines.push("", `${label}　${display(side.model || "模型未知")}　${side.gate || "NOT_EVALUATED"}`);
         if (side.reason) lines.push(display(side.reason));
         if (!side.eligible && side.diagnostic?.receipt_status) lines.push("供应方回执 " + display(side.diagnostic.receipt_status));
+        const details = side.diagnostic?.details;
+        if (details) {
+          lines.push(`退出码 wrapper=${details.wrapper_exit_code ?? "未知"}，CLI=${details.cli_exit_code ?? "未知"}`);
+          if (Number.isFinite(details.request_timeout_seconds)) {
+            lines.push(`生效时限 请求 ${details.request_timeout_seconds} 秒` +
+              (details.wrapper_timeout_seconds ? `，wrapper ${details.wrapper_timeout_seconds} 秒` : ""));
+          }
+          if (Number.isSafeInteger(details.http_status)) {
+            lines.push(`供应方 HTTP ${details.http_status}` +
+              (Number.isSafeInteger(details.provider_error_code) ? `，错误码 ${details.provider_error_code}` : ""));
+          }
+          if (details.review_error) lines.push("回执协议 " + display(details.review_error));
+        }
         if (key === "mmx" && side.diagnostic?.receipt_status === "quota_error") {
           const runDir = result.sharded ? path.join(out, "parts", round.id, "run") : out;
           lines.push(quotaExplanation(runDir));
@@ -211,7 +225,7 @@ async function main() {
     console.log("已取消。"); return 0;
   }
   let selectedMmx = mmxBinDir;
-  const preflight = dir => createRealBackend({ envBase: { PATH: process.env.PATH }, timeoutSeconds: LIMITS.defaultTimeout, mmxBinDir: dir });
+  const preflight = dir => createRealBackend({ envBase: { PATH: process.env.PATH }, timeoutSeconds: timeout, mmxBinDir: dir });
   try {
     preflight(selectedMmx);
   } catch (error) {

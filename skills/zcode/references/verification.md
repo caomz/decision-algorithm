@@ -41,7 +41,9 @@ Review/Challenge 增加 `--mode review` 或 `--mode challenge`，并传 `--evide
 
 **MAC-08 附件传输**：从 v1.5.2 起，wrapper 不区分大小阈值；chat/review/challenge 一律以固定短 `--prompt` + `--attach <私有文件>` 发送完整渲染后的 `buildPrompt`（含原文、审核规则、schema 和 evidence IDs），材料存于 `work/attached-material.txt`（父目录 0700、文件 0600）。`launch.json` 分别保存原材料字节数及 SHA256、完整渲染 prompt 字节数及 SHA256，不保存正文；附件写盘后逐字节复核，失败绝不回退为 argv 正文。官方 `v3.17.1` CLI 源码只证明附件路径经 `app.submitPrompt` 转交；本机打包的 `zcode-runtime 0.17.1` 是否完整解码、截断/分片和实际进入模型输入仍是独立验收项。假 CLI 读取完整文件的离线通过 **不是** 真实模型消费证明，未通过 Mac 真实授权验收前只用非敏感材料。
 
-stdout 恰好一个 JSON 对象，包含 `status`、`cli_invoked`、`exit_code`、`signal`、`complete`、`model`、`stop_reason`、`truncated`、`usage`、`review_gate` 和存在时的 `artifacts_dir`。成功时还包含 `text`、`provider`、`model_identity_source`、session/turn/trace 标识；Review 有 `review`。错误保留未知字段为 `null`，不从退出码 1 推断认证或额度；仅结构化错误码 401/403、429 分别归类。
+stdout 恰好一个 JSON 对象，包含 `status`、`cli_invoked`、`exit_code`、`signal`、`complete`、`model`、`stop_reason`、`truncated`、`usage`、`review_gate` 和存在时的 `artifacts_dir`。成功时还包含 `text`、`provider`、`model_identity_source`、session/turn/trace 标识；Review 有 `review`。解析参数后记录生效的 `timeout_seconds`。
+
+认证和限流依据原生结构化状态。若同一模型请求和终止事件的 session、turn、trace 以及错误码相符，HTTP 429 可与终止码 `1302` 一起识别为 `quota_error`。`provider_failure` 保留数值状态、是否可重试和可解析的 Retry-After 秒数。退出码 1 和 stderr 文本不足以判定限流。
 
 NDJSON 逐行解析并检查唯一末尾 result、匹配的会话/回合和成功 `turn.completed`；模型身份来自 `session.updated` 的实际请求载荷。结束原因来自主回合 `model_complete` 载荷，而不是伪造 MMX 的 `end_turn`。中间 `length` 也保守标记截断；不把自动续写当作完整性证明。未知事件完整保留，非法 JSON、重复 key 和终态后事件拒绝。普通 stdout 成功退出不等于审核通过。
 

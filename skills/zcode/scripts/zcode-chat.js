@@ -8,8 +8,9 @@ const { createHash } = require("node:crypto");
 const { spawn, spawnSync } = require("node:child_process");
 const { buildPrompt, validateReview, validateIds, strictJson } = require("./review.js");
 
-const VERSION = "1.6.2";
+const VERSION = "1.6.3";
 const SUPPORTED_CLI = "0.17.1";
+const DEFAULT_TIMEOUT_SECONDS = 1200;
 // The CLI accepts build/edit/plan/yolo/guarded. This wrapper only ever uses the
 // two read-only modes: macOS keeps the plan mode it was accepted with, Windows
 // keeps the guarded mode it was adapted to. ZCODE_CLI_MODE overrides both.
@@ -251,8 +252,37 @@ function setupMacKeychain(home, platform = process.platform, run = spawnSync) {
   return "existing-default-keychain-link";
 }
 
+function numericCode(value) {
+  const code = typeof value === "string" || typeof value === "number" ? String(value) : "";
+  return /^[0-9]{1,10}$/.test(code) ? Number(code) : null;
+}
+
+function sameTurn(left, right) {
+  return left && ["sessionId", "turnId", "traceId"].every(key =>
+    typeof right[key] === "string" && right[key] !== "" && left[key] === right[key]);
+}
+
+function providerFailure(payload) {
+  const http = numericCode(payload.statusCode);
+  const headers = payload.responseHeaders;
+  const retryHeader = headers && typeof headers === "object" && !Array.isArray(headers)
+    ? Object.entries(headers).find(([key]) => key.toLowerCase() === "retry-after") : undefined;
+  return {
+    http_status: http >= 100 && http <= 599 ? http : null,
+    provider_error_code: numericCode(payload.providerErrorCode),
+    rate_limited: payload.errorCode === "model_rate_limited",
+    retryable: typeof payload.retryable === "boolean" ? payload.retryable : null,
+    retry_after_present: Boolean(retryHeader),
+    retry_after_seconds: numericCode(retryHeader?.[1]),
+  };
+}
+
 class EventParser {
-  constructor() { this.events = []; this.result = null; this.completeTurn = null; this.models = []; this.reasons = []; this.requests = 0; }
+  constructor() {
+    this.events = []; this.result = null; this.completeTurn = null;
+    this.models = []; this.reasons = []; this.requests = 0;
+    this.modelRequest = null; this.failedRequest = null; this.providerFailure = null;
+  }
   accept(line) {
     if (!line.trim()) return;
     const event = strictJson(line);
@@ -260,8 +290,16 @@ class EventParser {
     const payload = event.payload || {};
     if (event.type === "tool.updated" || event.type.startsWith("permission.") || event.type.startsWith("workflow.")) fail("policy_violation");
     if (event.type === "turn.failed") {
-      const code = payload.error?.code ?? payload.code;
-      fail([401, 403].includes(code) ? "auth_error" : code === 429 ? "quota_error" : "cli_error");
+      const code = numericCode(payload.error?.code ?? payload.code);
+      const directHttp = [401, 403, 429].includes(code) ? code : null;
+      const prior = sameTurn(this.failedRequest?.event, event) ? this.failedRequest.failure : null;
+      // A terminal code can be provider-specific. Treat it as corroboration
+      // only when it matches the same model request's structured failure.
+      const bound = prior && (code === null || code === prior.provider_error_code ||
+        (directHttp !== null && directHttp === prior.http_status)) ? prior : null;
+      const http = directHttp ?? bound?.http_status ?? null;
+      if (http !== null || bound) this.providerFailure = { ...bound, http_status: http, terminal_error_code: code };
+      fail([401, 403].includes(http) ? "auth_error" : http === 429 ? "quota_error" : "cli_error");
     }
     // ModelRequest and ModelNetworkStatus share session.updated and model IDs.
     // Only ModelRequest carries messageCount/iteration; network events have no toolCount.
@@ -271,6 +309,12 @@ class EventParser {
       this.requests++;
       if (this.requests > 1) fail("request_budget_exceeded");
       this.models.push({ provider: payload.providerId, model: payload.modelId });
+      this.modelRequest = event;
+    }
+    if (event.type === "session.updated" && payload.type === "model_request_failed" &&
+        payload.querySource === "main_turn" && sameTurn(this.modelRequest, event) &&
+        payload.providerId === this.modelRequest.payload.providerId && payload.modelId === this.modelRequest.payload.modelId) {
+      this.failedRequest = { event, failure: providerFailure(payload) };
     }
     if (event.type === "session.updated" && payload.querySource === "main_turn" && typeof payload.stopReason === "string") {
       if (payload.toolCallCount !== 0) fail("policy_violation");
@@ -340,7 +384,7 @@ function resolveMode(env = process.env, platform = process.platform) {
 }
 
 function parseArgs(argv) {
-  const args = { mode: "chat", timeout: 1200, maxOutputTokens: 524288 };
+  const args = { mode: "chat", timeout: DEFAULT_TIMEOUT_SECONDS, maxOutputTokens: 524288 };
   const names = { "--prompt-file": "prompt", "--mode": "mode", "--evidence-ids-file": "ids", "--cli-path": "cli", "--output-dir": "output", "--timeout-seconds": "timeout", "--observed-input-file": "observed", "--max-output-tokens": "maxOutputTokens" };
   const seen = new Set();
   for (let i = 0; i < argv.length; i++) {
@@ -358,7 +402,7 @@ function parseArgs(argv) {
 
 async function main(argv, deps = {}) {
   if (argv.length === 1 && argv[0] === "--version") return { status: "version", version: VERSION };
-  if (!argv.length || (argv.length === 1 && argv[0] === "--help")) return { status: "usage", usage: "node zcode-chat.js --prompt-file FILE [--mode chat|review|challenge --evidence-ids-file FILE] [--output-dir NEW_DIR] [--timeout-seconds 1200] [--max-output-tokens N] [--cli-path EXECUTABLE]" };
+  if (!argv.length || (argv.length === 1 && argv[0] === "--help")) return { status: "usage", usage: `node zcode-chat.js --prompt-file FILE [--mode chat|review|challenge --evidence-ids-file FILE] [--output-dir NEW_DIR] [--timeout-seconds ${DEFAULT_TIMEOUT_SECONDS}] [--max-output-tokens N] [--cli-path EXECUTABLE]` };
   const receipt = { status: "input_error", cli_invoked: false, exit_code: null, signal: null, complete: false, model: null, stop_reason: null, truncated: null, usage: null, review_gate: "NOT_EVALUATED" };
   let child;
   let directory;
@@ -370,6 +414,7 @@ async function main(argv, deps = {}) {
   try {
     try { checkInstall(); } catch { fail("install_mismatch"); }
     const args = parseArgs(argv);
+    receipt.timeout_seconds = args.timeout;
     const sealed = await readSealedJobInputs(args);
     const rawMaterial = sealed ? sealed.materialBuffer : fs.readFileSync(args.prompt);
     const material = sealed ? sealed.material : decodeInputBytes(rawMaterial);
@@ -504,9 +549,9 @@ async function main(argv, deps = {}) {
     const blockedReason = budget.observation(budgetDir, budgetPolicy, parser.requests).blocked_reason;
     if (blockedReason) fail(blockedReason);
     if (problem) fail(problem);
-    if (result.code !== 0 || result.signal) fail("cli_error");
     pending += decoder.decode();
     if (pending.trim()) parser.accept(pending);
+    if (result.code !== 0 || result.signal) fail("cli_error");
     Object.assign(receipt, parser.finish());
     const observedBudget = budget.observation(budgetDir, budgetPolicy, parser.requests);
     if (!observedBudget.verified || observedBudget.attempts !== 1 || observedBudget.blocked || !observedBudget.output_limit_verified) fail("request_budget_unverified");
@@ -528,6 +573,7 @@ async function main(argv, deps = {}) {
     receipt.review_gate = "NOT_EVALUATED";
     if (child?.pid && child.exitCode === null && child.signalCode === null) receipt.cleanup_confirmed = await terminateTree(child);
   }
+  if (parser?.providerFailure) receipt.provider_failure = parser.providerFailure;
   if (budgetDir) receipt.native_request_budget = require("./request-budget.js").observation(budgetDir, budgetPolicy, parser?.requests ?? 0);
   if (directory) {
     try {
@@ -546,4 +592,4 @@ if (require.main === module) main(process.argv.slice(2)).then(result => {
   process.exitCode = ["ok", "usage", "version"].includes(result.status) ? 0 : 1;
 }).catch(() => { process.stdout.write('{"status":"internal_error","complete":false}\n'); process.exitCode = 1; });
 
-module.exports = { EventParser, resolveLaunch, preflightRequestBudget, isolatedEnv, setupMacKeychain, DENIED_TOOLS, RUNTIME_CONFIG, CLI_MODES, checkInstall, parseArgs, resolveMode, main };
+module.exports = { EventParser, resolveLaunch, preflightRequestBudget, isolatedEnv, setupMacKeychain, DENIED_TOOLS, RUNTIME_CONFIG, CLI_MODES, DEFAULT_TIMEOUT_SECONDS, checkInstall, parseArgs, resolveMode, main };

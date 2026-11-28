@@ -14,6 +14,8 @@
 ```bash
 # 预检（只查本地清单一致性与文件齐全，不启动任何 CLI）
 node scripts/review-run.js doctor --offline [--json]
+# 核对本机实际入口、代理 guard 与生效时限；两侧模型请求均为零
+node scripts/review-run.js doctor --runtime --json
 
 # 使用已脱敏的审核包和全新输出目录。Mac 需能通过 PATH 找到已登录的 zcode 和 mmx。
 node scripts/review-run.js run --backend real --packet "$PACKET" --out "$NEW_RUN_DIR"
@@ -48,7 +50,7 @@ fixture 后端只用 `tests/fixtures/backends/` 下的固定假 wrapper 与场�
 
 取消的轮次返回 `NOT_EVALUATED`。其余轮次中，任一有效 `FAIL` 优先；两票均有效、模型族已知且不同、两方均给出 `PASS` 时返回 `PASS`，其他情形返回 `NOT_EVALUATED`。`round_status=COMPLETED` 表示双侧已完成有效复核。退出码分别为 `PASS=0`、`FAIL=1`、`NOT_EVALUATED=2`。结果包含实际选用的 `backend`。
 
-`--timeout-seconds`（1..3570，默认 600）同时传给两侧：ZCode 收到 `--timeout-seconds T`，MMX 收到 `--timeout T` 与 `--wrap-timeout T+30`；`--max-tokens` 只约束 MMX。fixture 父进程对每个假 wrapper 的截止时间固定为 30 秒。material 上限 192 KiB（v2 补丁另限 128 KiB），超限提示改用 batch 入口按分片手工处理。
+`--timeout-seconds`（1..3570，默认 600）同时传给两侧。ZCode 收到 T 秒，MMX 的请求时限为 T，wrapper 时限为 T 加 profile 的 30 秒余量。独立 ZCode wrapper 默认 1200 秒，独立 MMX 使用 600/630 秒。真实入口的 `--max-tokens` 约束两侧各自的一次模型请求。fixture 父进程等待每个假 wrapper 最多 30 秒。
 
 ### 记录与 verify
 
@@ -56,7 +58,7 @@ fixture 后端只用 `tests/fixtures/backends/` 下的固定假 wrapper 与场�
 
 每次 run 在 `--out` 下留下完整档案：输入组原字节（`packet.json`、`material.txt`、`evidence-ids.json`、`prompt.txt`）、`request.json`（预计哈希、两侧 argv、判定代码与溯源文件的 sha256）、每侧的 `*-execution.json`、`*-observed-input.json`（实收 argv/环境键名/原字节 Base64；未捕获记 `unobserved`）、stdout/stderr 原样、`result.json`，最后写 `record-manifest.json`。
 
-`verify --run` 先核完整性（清单、路径、文件类型、必需字段、内容摘要），再在**判定代码集**（review-run.js、review.js、review-v1.schema.json）与记录一致时从归档重算绑定、资格、票和结果并比对，报 `replay=match|mismatch`；判定代码不一致时只报 `version_drift`，不声称已复判。`integrity=ok` 且 `replay=match` 才退出 0。这只是**相对本地记录的自洽核查**：不证明上游真的收到，也不能防篡改。
+`verify --run` 先核对归档完整性，再用匹配的判定代码重算材料绑定、投票资格和结果。旧单包与分片归档在文件完整、代码指纹变化时报告 `integrity=ok`、`replay=version_drift`，退出 2；可用归档对应版本复算。只有 `replay=match` 且完整性通过才退出 0。回执诊断包含 wrapper 和原生 CLI 的退出码、生效时限、协议错误及可核验的供应方状态。
 
 ### 材料合同
 
@@ -67,7 +69,7 @@ DIFFSTAT 的补丁解析规则：同一文件段内文本 hunk 与二进制标�
 ### 限制
 
 - 只在本 checkout 内有效：入口跨目录 require `../zcode/scripts/review.js` 等文件，不解析已安装的同名 skill（`doctor --offline` 会检查这一点）。
-- 不替代 Mac 正本的持久 job、排队和重试合同；`mmx-run.js` 的多片合同仍以正本为准。
+- 持久批次用 MMX 的 `mmx-job.js`；其快照、排队和恢复策略见 MMX skill。
 - fixture 的 material 上限为 192 KiB。real 每片按完整渲染后附件的 UTF-8 字节数计算，上限 24 KiB。通过 `--max-shards N` 显式授权多片，支持 1..32。整包先规划，超预算在派发前报错。每侧每片最多一次；`--max-tokens` 为每次模型请求的输出 Token 授权上限。可用 `--mmx-bin-dir ABS_DIR` 显式为 MMX 选择可验证的 npm 原生入口。
 - Mac 上的取消由两侧 wrapper 清理各自启动的 CLI。MMX 在回执中记录实际的 `fetch_timeout_guard`；代理和原生 CLI 的长请求能力按对应环境单独验收。
 
@@ -87,7 +89,7 @@ DIFFSTAT 的补丁解析规则：同一文件段内文本 hunk 与二进制标�
 - **持续授权**：2026-11-15 用户明确授权「进行交叉验证时，无论什么情况都默认授权」。供应方调用、材料外发、额度使用、追加复核与合理重试均视为持续获准，**不再逐轮询问**。本文优先于 skill 中较早的逐次授权要求。
 - **默认组合**：ZCode / MMX。两方首轮用相同材料和稳定证据 ID，彼此不接收对方结论。
 - **调用方式**：ZCode 单片用 `zcode-run.js start` 的持久 job、多分片用 `zcode-batch.js` 整批并行（Review 模式配证据 ID）；MMX 单片用 `mmx-chat.js --prompt-file` 的同步入口、多分片用 `mmx-batch.js` 整批并行。两方可独立并发。
-- **默认时限**：每方 600 秒。ZCode 监督器留 45 秒清理余量；MMX 可用 `MMX_CHAT_REQ_TIMEOUT=600`、`MMX_CHAT_WRAP_TIMEOUT=630`。
+- **默认时限**：独立 ZCode 1200 秒，监督器留 45 秒清理余量。独立 MMX 600/630 秒。统一入口默认 ZCode 600 秒、MMX 600/630 秒。
 - **结果判定**：`COMPLETED` 只表示两方有效完整返回、材料覆盖相同、模型身份可核验且相互独立（当前 GLM 与 MiniMax）。传输/超时/结构校验失败、截断、模型未知或同族时为 `NOT_EVALUATED`。
 - **独立性**：以原生传输元数据为准（`receipt.provider` / `receipt.model` / `model_identity_source`），**不采信审核正文里的自称**。不同 CLI 名字不等于模型独立。
 - **默认一轮**：有新修改、证据缺口或可修复失败时自行判断补验次数，不再设「超过次数须重新授权」。

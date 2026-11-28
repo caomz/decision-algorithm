@@ -62,7 +62,7 @@ if (module.parent?.id === "internal/preload") {
     if (name !== "./mmx-native-budget.js") return exported;
     return { ...exported, supportedEntry(entry, root) {
       const digest = crypto.createHash("sha256").update(fs.readFileSync(entry)).digest("hex");
-      if (digest !== fixtureDigest) return exported.supportedEntry(entry, root);
+      if (digest !== fixtureDigest) return false;
       return fs.readFileSync(path.join(root, "node_modules/undici/index.js"), "utf8") === undiciText;
     } };
   };

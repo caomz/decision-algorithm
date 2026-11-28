@@ -181,6 +181,27 @@ test("native network status frames sharing model IDs are not misclassified as Mo
   assert.equal(receipt.model, "GLM-test");
   assert.equal(receipt.tool_requests, 0);
 });
+test("a same-turn native 429 with terminal code 1302 keeps only structured quota details", () => {
+  for (const scenario of ["provider_quota", "provider_quota_unterminated"]) {
+    const { result, receipt } = run(scenario);
+    assert.equal(result.status, 1);
+    assert.equal(receipt.status, "quota_error");
+    assert.equal(receipt.review_gate, "NOT_EVALUATED");
+    assert.equal(receipt.timeout_seconds, 1200);
+    assert.deepEqual(receipt.provider_failure, {
+      http_status: 429, provider_error_code: 1302, rate_limited: true, retryable: false,
+      retry_after_present: true, retry_after_seconds: 60, terminal_error_code: 1302,
+    });
+    assert.doesNotMatch(JSON.stringify(receipt), /synthetic-private/);
+  }
+});
+test("a provider code alone or a different turn cannot turn a CLI failure into quota", () => {
+  for (const scenario of ["provider_quota_other_turn", "provider_code_alone"]) {
+    const { receipt } = run(scenario);
+    assert.equal(receipt.status, "cli_error");
+    assert.equal(receipt.provider_failure, undefined);
+  }
+});
 test("invalid input is rejected before CLI invocation", () => {
   for (const bytes of [Buffer.from([0xff]), Buffer.from("a\0b"), Buffer.alloc(0)]) {
     const { receipt } = run("ok", { bytes });

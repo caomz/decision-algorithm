@@ -1,7 +1,7 @@
 ---
 name: mmx
 description: Use MiniMax through the MMX CLI for text-only chat, review, challenge, or an explicitly authorized second opinion, and for the full MiniMax CLI surface (images, video, speech, transcription, web search). Applies to asks such as "/mmx", "用 MMX 问一下", "用 MiniMax 交叉验证", "生成图片/视频/语音", "MiniMax 搜索" and approved review workflows that name MMX. Cross-validation runs through the synchronous text wrapper; media and search go through the bundled CLI reference.
-version: 2.8.1
+version: 2.8.2
 ---
 
 # /mmx — MiniMax 文本复核
@@ -48,9 +48,12 @@ prompt 和 system 只经文件传递。按当前平台使用[调用与验证参�
 | 输入 | 效果 |
 | --- | --- |
 | `--cli-entry` / `MMX_CLI_ENTRY` | 覆盖一切；值不可用即 fail closed，不回退 |
-| PATH 上的已审计包入口 | 次之 |
-| 已审计包的全局 npm 根回退（旁路启动脚本） | 再次；`MMX_REQUIRE_PATH_LAUNCHER=1` 禁止这一级 |
+| PATH 上的已审计包入口 | 未指定入口时直接使用 |
+| Mac 私有入口配置 | PATH 未命中已审计包时使用，记录为 `mac_config`。文件无效时停止 |
+| 已审计包的全局 npm 根回退（旁路启动脚本） | `MMX_REQUIRE_PATH_LAUNCHER=1` 仅允许经 PATH 解析的包，跳过私有配置和回退 |
 | `MMX_ALLOW_LAUNCHER_BYPASS=1` | 承认旁路带来的环境差异，见下 |
+
+Mac 可在 `~/Library/Application Support/Decision Algorithm/mmx-launch.json` 保存一个宿主专用入口。文件权限为 `0600`，内容形如 `{"format":1,"cli_entry":"/absolute/path/to/mmx-cli/dist/mmx.mjs"}`。包装器核对 CLI 指纹，并保留调用进程的代理配置。可用 `--preflight` 核对 `mac_config`、`preflight_ok` 和 `cli_invoked=false`。
 
 **旁路与原启动脚本的差异（须知）**：旁路后跑的是 skill 自己的子进程环境——启动脚本自己做的环境清理（例如摘除 `HTTP_PROXY` 等代理变量）和注入的默认参数**不会**被复现；wrapper 始终显式传 `--max-tokens` / `--timeout`，所以以 wrapper 的为准。当父环境里存在代理变量或非 `/v1` 结尾的 `MINIMAX_BASE_URL` 时，这个差异会改变出站路由，wrapper 因此默认拒绝旁路（`launcher_environment_differs`），需要显式 `MMX_ALLOW_LAUNCHER_BYPASS=1` 才放行。**被执行的入口仍然必须匹配已审 SHA-256**，guard、请求预算与凭据边界不变。
 

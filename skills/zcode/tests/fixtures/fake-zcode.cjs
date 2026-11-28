@@ -84,6 +84,20 @@ exports.run = scenario => {
   if (scenario === "permission") output += emit("permission.requested", {});
   if (scenario === "auth") output += emit("turn.failed", { error: { code: 401 } });
   if (scenario === "quota") output += emit("turn.failed", { error: { code: 429 } });
+  if (["provider_quota", "provider_quota_other_turn", "provider_code_alone", "provider_quota_unterminated"].includes(scenario)) {
+    if (scenario !== "provider_code_alone") {
+      const line = emit("session.updated", {
+        type: "model_request_failed", querySource: "main_turn", modelId: "GLM-test", providerId: "fake-provider",
+        statusCode: 429, errorCode: "model_rate_limited", providerErrorCode: "1302", retryable: false,
+        responseHeaders: { "Retry-After": "60", "Authorization": "synthetic-private-header" },
+      });
+      output += scenario === "provider_quota_other_turn" ? line.replace('"turnId":"turn_fake"', '"turnId":"other"') : line;
+    }
+    output += emit("turn.failed", { error: { code: "1302", message: "synthetic-private-error" } });
+    process.stdout.write(scenario === "provider_quota_unterminated" ? output.trimEnd() : output);
+    process.exitCode = 1;
+    return;
+  }
   if (scenario !== "missing_stop") output += emit("session.updated", { querySource: "main_turn", stopReason: scenario === "truncated" ? "length" : "stop", toolCallCount: 0 });
   const completed = emit("turn.completed", { response: text, resultType: scenario === "cancelled" ? "cancelled" : "success", toolCallCount: 0 });
   if (scenario !== "missing_turn") output += completed;

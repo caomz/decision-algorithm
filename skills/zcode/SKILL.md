@@ -1,7 +1,7 @@
 ---
 name: zcode
 description: Use the ZCode CLI for text-only chat, review, challenge, or an explicitly requested second opinion. Applies to "/zcode", "用 ZCode 问一下", "通过 zcode cli 交叉验证" and review workflows that name ZCode.
-version: 1.6.2
+version: 1.6.3
 ---
 
 # /zcode — ZCode 文本复核
@@ -9,6 +9,8 @@ version: 1.6.2
 参考 MMX 的单次同步文本模式，使用 ZCode 当前默认模型。通过当前加载的本文件真实路径确定 skill 根目录。具体 CLI 契约和平台限制见[调用与验证参考](references/verification.md)。
 
 ## 用法
+
+1.6.3 从同一轮的原生结构化事件识别 HTTP 429，并在 `provider_failure` 保留数值状态、供应方码和重试信息。审核提示内含 `review-v1` 样板。
 
 1.6.1 支持原生选项映射适配器生成的 Fetch Request。包装器在通过审核的模型端点读取私有副本，校验完整 UTF-8 JSON，再把相同字节用于传输。Request 快照限 4 MiB、8192 个数据块和 5 秒，超过任一上限即在发送前停止。`native_request_budget.blocked_detail` 为核验失败保留类别，帮助区分端点、字段和正文形态。
 
@@ -53,7 +55,7 @@ node <ZCODE_SKILL_DIR>/scripts/zcode-batch.js --prompt-file <f1> [--prompt-file 
 - 每片仍是一次完整 `zcode-chat.js` 调用（guarded 权限、独立 HOME/cwd、零工具校验、每片独立 `zcode-text-*` 证据目录原样继承）。**不要给批量传 `--output-dir`**：每片及每次重试由 wrapper 自建目录，全部证据保留。
 - 批级回执含每片完整回执与**双 gate**：`transport_gate`（全片 `status=ok`、`complete` 且未截断）与内容 `gate`（任一片 `review_gate=FAIL` → FAIL，即使他片传输失败也保留确定发现；全 PASS → PASS；其余 NOT_EVALUATED；chat 模式恒 NOT_EVALUATED）。
 - `status=ok` 时退出 0，即使内容 gate 为 `FAIL`（P1 发现是有效审核结果，与单片一致）；传输或批处理失败退出 1。
-- 重试：仅明确授权并指定 `--allow-paid-retry` 的 `quota_error` 可退避 30 秒重发一次；超时、断线、取消和未知状态保留原请求，`first_attempt` 完整保留；auth/policy/schema 类错误与内容 FAIL 不重试。
+- 重试：仅明确授权并指定 `--allow-paid-retry` 的 `quota_error` 可退避 30 秒重发一次。供应方标为不可重试或要求等待更久时保留原回执。超时、断线、取消和未知状态保留原请求。
 - `--concurrency` 默认 2（上限 8，不声称已标定账号限流阈值）；分片目录按 `pN.txt` 自然序整批读取。外层工具超时按 `ceil(片数/并发) × (2×(timeout-seconds+45s) + 30s) + 60s` 预留（两次尝试 + 每试监督余量 + 退避 + 批级余量）。
 - 单片或易断线场景仍用上面的 `zcode-run.js` 持久 job；批量入口面向持续会话的一次宿主工具调用，不宣称自身具备跨终端持久恢复能力。
 
@@ -66,7 +68,7 @@ node <ZCODE_SKILL_DIR>/scripts/zcode-batch.js --prompt-file <f1> [--prompt-file 
 
 ## 执行与结果
 
-默认运行时限 1200 秒（与 MMX `local.json` 1200/1260 对齐）；`--timeout-seconds` 可在本次授权内调整，更大的评审事实包建议显式放宽。宿主前台同步调用仍受宿主工具时限约束，评审规模请求走持久后台 job 或 batch 入口。`--output-dir` 指向一个尚不存在的目录，用于保存输入、完整原始运行流、stderr、启动指纹与 `receipt.json`；省略时在系统临时目录创建并保留私有目录。
+独立 ZCode wrapper 默认 1200 秒，回执记录生效的 `timeout_seconds`。统一 Mac 入口默认给 ZCode 600 秒，给 MMX 请求和 wrapper 分别 600 秒与 630 秒。评审规模请求可用持久后台 job 或 batch。`--output-dir` 指向尚不存在的目录，用于保存输入、原始运行流、stderr、启动指纹和 `receipt.json`。省略时创建私有临时目录。
 
 每次请求在启动和首个模型请求时原子更新 `progress.json`，记录 wrapper/CLI PID、阶段及观察到的模型；只有最终有效回执才可作为完成依据。监督器另给 wrapper 预检与清理 45 秒余量，超出后终止本任务进程组并保留真实退出记录。
 

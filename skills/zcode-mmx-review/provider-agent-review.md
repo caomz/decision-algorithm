@@ -76,7 +76,7 @@ python3 -B /Users/mingtian/.agents/harness/providers/agy/project_review.py prepa
 
 ## MMX 常规单轮审核
 
-按 [MMX skill](../mmx/SKILL.md) 选择 Review 或 Challenge。通过已安装的 wrapper 发送一份获准材料，验证完整响应和结构化发现，保存原文回执。使用本机配置的模型预算和超时，按既有规则处理失败和重试。多分片评审用 `mmx-batch.js` 一次送整批（并行执行、预算自愈），不逐片串行，也不绕过 wrapper 裸调 CLI（默认 4096 预算必截断）。
+按 [MMX skill](../mmx/SKILL.md) 通过包装器发送获准材料，验证完整响应、终态和结构化发现。先运行 `--preflight` 查看已审计入口和代理 guard。多分片用 `mmx-batch.js`，默认每片一次。
 
 ## ZCode 文本交叉验证
 
@@ -84,7 +84,7 @@ python3 -B /Users/mingtian/.agents/harness/providers/agy/project_review.py prepa
 
 优先使用 `zcode-run.js start` 创建一次私有 job，再用同一 job 的 `status` 跟踪。观察超时或 `unknown` 时继续核对原进程；`finished` 只表示外层进程退出。实际接受需同时核对退出码/信号、wrapper 完整性、运行事件中的模型和零工具边界、review-v1 结构化发现及本地处置。失败保留原始回执；wrapper 单次调用与外层有依据的追加调用分开记录，后者按持续授权自行执行。
 
-多分片评审用 `zcode-batch.js` 一次送整批：每片仍是完整单片调用（guarded/零工具/独立证据目录），批级回执带 `transport_gate` 与内容 `gate`（任一片 review_gate=FAIL 即 FAIL，不被传输失败掩盖）；仅 quota/timeout 退避重试一次；外层工具超时按 `ceil(片数/并发)×(2×(timeout-seconds+45s)+30s)+60s` 预留。不逐片串行，也不绕过 wrapper 裸调 CLI。
+多片用 `zcode-batch.js`。批级分别保留传输和审核判定。已确认限流时，只有显式选择 `--allow-paid-retry` 且符合供应方退避信息才可追加一次。超时、取消或断线时保留原请求和回执。
 
 入口验收匹配时复用上表证据；本次任务的审核结论仍以本轮实际回执为准。自动调用的触发、授权和次数以双模型合同为准。
 

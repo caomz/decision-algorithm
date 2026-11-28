@@ -74,5 +74,11 @@ jobs:
       - name: Finder and terminal launcher
         if: runner.os == 'macOS'
         run: node --test tests/mac-review-launcher.test.js
+      - name: Mac MMX lifecycle with host proxy variables
+        if: runner.os == 'macOS'
+        env:
+          HTTPS_PROXY: http://proxy.invalid:8080
+          MINIMAX_BASE_URL: https://model.invalid/v1
+        run: node --test --test-name-pattern='launcher|preflight|private entry' skills/mmx/tests/mmx-chat.test.js
       - name: Unified runner offline doctor
         run: node skills/zcode-mmx-review/scripts/review-run.js doctor --offline --json

@@ -11,9 +11,12 @@ const path = require("node:path");
 const { createHash } = require("node:crypto");
 const { spawn, spawnSync } = require("node:child_process");
 const { buildPrompt, validateReview, validateIds, strictJson } = require("../../zcode/scripts/review.js");
+const mmxProfile = require("../../mmx/profiles/local.json");
+const { DEFAULT_TIMEOUT_SECONDS: zcodeDefaultTimeout } = require("../../zcode/scripts/zcode-chat.js");
 
-const ENTRY_VERSION = "0.3.0";
+const ENTRY_VERSION = "0.3.1";
 const SKILLS = path.resolve(__dirname, "../.."); // <repo>/skills
+const mmxWrapperMargin = mmxProfile.wrapper_timeout_seconds - mmxProfile.request_timeout_seconds;
 const LIMITS = Object.freeze({
   materialMaxBytes: 192 * 1024,
   realAttachmentMaxBytes: 24 * 1024, // 单次零工具审核的附件预算，包括渲染指令和 schema
@@ -22,8 +25,8 @@ const LIMITS = Object.freeze({
   fakeProcessMs: 30000,   // fixture 父进程对每个假 wrapper 的截止时间
   cancelGraceMs: 5000,    // SIGTERM 后最多等 5 秒再 SIGKILL
   timeoutMin: 1,
-  timeoutMax: 3570,
-  defaultTimeout: 600,
+  timeoutMax: 3600 - mmxWrapperMargin,
+  defaultTimeout: mmxProfile.request_timeout_seconds,
   defaultMaxTokens: 524288,
 });
 const ZCODE_WRAPPER = path.join(__dirname, "../tests/fixtures/backends/zcode-fake-wrapper.cjs");
@@ -43,7 +46,7 @@ const PROVENANCE_FILES = Object.freeze({
   "mmx-fake-wrapper.cjs": MMX_WRAPPER,
 });
 
-const USAGE = "usage: review-run.js doctor --offline [--json]\n" +
+const USAGE = "usage: review-run.js doctor [--offline | --runtime [--mmx-bin-dir ABS_DIR]] [--json]\n" +
   "       review-run.js run --backend real --packet FILE --out NEW_DIR [--max-shards 1..32] [--mmx-bin-dir ABS_DIR] [--timeout-seconds 1..3570] [--max-tokens N]\n" +
   "       review-run.js run --backend fixture --scenario NAME --packet FILE --out NEW_DIR [--timeout-seconds 1..3570] [--max-tokens N]\n" +
   "       review-run.js verify --run DIR\n" +
@@ -624,7 +627,7 @@ function verifyReviewArchive(directory) {
 function assembleInputs({ materialPath, idsPath, promptPath, timeoutSeconds, maxTokens, zcodeOutputDir, realOut }) {
   const zcodeArgv = ["--prompt-file", materialPath, "--mode", "review", "--evidence-ids-file", idsPath, "--timeout-seconds", String(timeoutSeconds)];
   if (zcodeOutputDir) zcodeArgv.push("--output-dir", zcodeOutputDir);
-  const mmxArgv = ["--prompt-file", promptPath, "--timeout", String(timeoutSeconds), "--wrap-timeout", String(timeoutSeconds + 30), "--max-tokens", String(maxTokens)];
+  const mmxArgv = ["--prompt-file", promptPath, "--timeout", String(timeoutSeconds), "--wrap-timeout", String(timeoutSeconds + mmxWrapperMargin), "--max-tokens", String(maxTokens)];
   if (realOut) {
     zcodeArgv.push("--observed-input-file", path.join(realOut, "zcode-observed-input.json"), "--max-output-tokens", String(maxTokens));
     mmxArgv.push("--observed-input-file", path.join(realOut, "mmx-observed-input.json"), "--native-request-limit", "1");
@@ -657,6 +660,16 @@ function evaluateSideCore(side, { execution, stdoutBytes, observed, expected }) 
     diagnostic.receipt_status = typeof receipt?.status === "string" ? receipt.status : null;
     diagnostic.text = typeof receipt?.text === "string" ? receipt.text : null;
     try { diagnostic.gate = validateReview(receipt.text, expected.ids).review_gate; } catch { diagnostic.gate = null; }
+    diagnostic.details = {
+      wrapper_exit_code: execution.exit_code,
+      cli_exit_code: Number.isSafeInteger(receipt.exit_code) ? receipt.exit_code : null,
+      review_error: typeof receipt.review_error === "string" ? receipt.review_error.slice(0, 300) : null,
+      http_status: receipt.provider_failure?.http_status ?? receipt.http_status ?? null,
+      provider_error_code: receipt.provider_failure?.provider_error_code ?? null,
+      retryable: receipt.provider_failure?.retryable ?? null,
+      request_timeout_seconds: receipt.request_timeout_seconds ?? receipt.timeout_seconds ?? null,
+      wrapper_timeout_seconds: receipt.wrapper_timeout_seconds ?? null,
+    };
   };
   if (execution.state !== "completed") return { eligible: false, gate: null, reason: `execution:${execution.state}`, model: null, model_family: null, material_bound: false, review: null, diagnostic };
   let receipt;
@@ -1284,6 +1297,7 @@ function verifyRun(directory) {
       if (JSON.stringify(recorded.diagnostic?.text ?? null) !== JSON.stringify(replayed.diagnostic?.text ?? null)) replayProblems.push(`${side}: diagnostic.text disagrees with the archived receipt`);
       if ((recorded.diagnostic?.gate ?? null) !== (replayed.diagnostic?.gate ?? null)) replayProblems.push(`${side}: diagnostic.gate ${recorded.diagnostic?.gate} != replayed ${replayed.diagnostic?.gate}`);
       if ((recorded.diagnostic?.receipt_status ?? null) !== (replayed.diagnostic?.receipt_status ?? null)) replayProblems.push(`${side}: diagnostic.receipt_status ${recorded.diagnostic?.receipt_status} != replayed ${replayed.diagnostic?.receipt_status}`);
+      if (JSON.stringify(recorded.diagnostic?.details ?? null) !== JSON.stringify(replayed.diagnostic?.details ?? null)) replayProblems.push(`${side}: diagnostic.details disagrees with the archived receipt`);
       if ((recorded.coverage_declared ?? null) !== (replayed.coverage_declared ?? null)) replayProblems.push(`${side}: coverage_declared ${JSON.stringify(recorded.coverage_declared)} != replayed ${JSON.stringify(replayed.coverage_declared)}`);
       if (recorded.model !== replayed.model) replayProblems.push(`${side}: model ${JSON.stringify(recorded.model)} != replayed ${JSON.stringify(replayed.model)}`);
       if (JSON.stringify(recorded.review ?? null) !== JSON.stringify(replayed.review ?? null)) replayProblems.push(`${side}: review content disagrees with the replayed adjudication`);
@@ -1479,7 +1493,7 @@ function argsFrom(argv) {
   if (!["doctor", "run", "verify", "pack"].includes(action)) fail(USAGE);
   if (action === "pack") return parsePackArgs(argv);
   const args = { action, timeout: LIMITS.defaultTimeout, maxTokens: LIMITS.defaultMaxTokens, maxShards: 1 };
-  const allowed = action === "doctor" ? ["--offline", "--json"]
+  const allowed = action === "doctor" ? ["--offline", "--runtime", "--json", "--mmx-bin-dir"]
     : action === "verify" ? ["--run"]
     : ["--backend", "--scenario", "--packet", "--out", "--timeout-seconds", "--max-tokens", "--max-shards", "--mmx-bin-dir"];
   const names = { "--packet": "packet", "--out": "out", "--run": "run", "--backend": "backend", "--scenario": "scenario", "--timeout-seconds": "timeout", "--max-tokens": "maxTokens", "--max-shards": "maxShards", "--mmx-bin-dir": "mmxBinDir" };
@@ -1488,7 +1502,7 @@ function argsFrom(argv) {
     const flag = argv[i];
     if (!allowed.includes(flag) || seen.has(flag)) fail(`unknown or duplicate option: ${flag}`);
     seen.add(flag);
-    if (flag === "--offline" || flag === "--json") args[flag.slice(2)] = true;
+    if (["--offline", "--runtime", "--json"].includes(flag)) args[flag.slice(2)] = true;
     else {
       if (!argv[i + 1] || argv[i + 1].startsWith("--")) fail(`${flag} requires exactly one value`);
       args[names[flag] ?? flag.slice(2)] = argv[++i];
@@ -1509,6 +1523,8 @@ function argsFrom(argv) {
     if (!Number.isSafeInteger(args.maxTokens) || args.maxTokens < 1) fail("--max-tokens must be a positive safe integer");
     if (args.backend === "real" && args.maxTokens > LIMITS.defaultMaxTokens) fail(`--max-tokens exceeds the supported ceiling of ${LIMITS.defaultMaxTokens}`);
   }
+  if (action === "doctor" && ((args.runtime && args.offline) ||
+      (args.mmxBinDir && (!args.runtime || !path.isAbsolute(args.mmxBinDir))))) fail("doctor --mmx-bin-dir requires --runtime and an absolute directory");
   if (action === "verify" && !args.run) fail("verify requires --run");
   return args;
 }
@@ -1517,10 +1533,32 @@ async function main(argv) {
   const args = argsFrom(argv);
   if (args.action === "doctor") {
     const report = doctorOffline();
+    if (args.runtime) {
+      const available = (proof) => proof.ok && /^[a-f0-9]{64}$/.test(proof.entry_sha256);
+      try {
+        const { proofs, deadlineMs } = require("./real-round.js").inspectRealBackend({
+          timeoutSeconds: LIMITS.defaultTimeout, envBase: { PATH: process.env.PATH }, mmxBinDir: args.mmxBinDir,
+        });
+        report.checks = report.checks.filter(check => check.name !== "cli");
+        for (const [side, proof] of Object.entries(proofs)) {
+          report.checks.push({ name: `runtime:${side}`, ...proof, ok: available(proof), cli_invoked: false });
+        }
+        report.timeouts = {
+          standalone: { zcode: zcodeDefaultTimeout, mmx_request: mmxProfile.request_timeout_seconds, mmx_wrapper: mmxProfile.wrapper_timeout_seconds },
+          unified: { zcode: LIMITS.defaultTimeout, mmx_request: LIMITS.defaultTimeout,
+            mmx_wrapper: LIMITS.defaultTimeout + mmxWrapperMargin, parent_seconds: deadlineMs / 1000 },
+        };
+      } catch {
+        report.checks.push({ name: "runtime", ok: false, reason: "invalid_runtime_selection", cli_invoked: false });
+      }
+      report.mode = "runtime_preflight";
+      report.status = report.checks.every(check => check.ok) ? "ok" : "failed";
+      report.note = "Verifies local launch and request-budget prerequisites without invoking either provider CLI.";
+    }
     if (args.json) process.stdout.write(JSON.stringify(report) + "\n");
     else {
       for (const check of report.checks) process.stdout.write(`${check.ok ? "ok" : "FAIL"}  ${check.name}${check.ok === false ? `  (${JSON.stringify(check).slice(0, 160)})` : ""}\n`);
-      process.stdout.write(`doctor: ${report.status} (offline)\n`);
+      process.stdout.write(`doctor: ${report.status} (${report.mode})\n`);
     }
     return report.status === "ok" ? 0 : 1;
   }

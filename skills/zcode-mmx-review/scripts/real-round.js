@@ -20,7 +20,7 @@ function selectEnvironment(pattern) {
   return Object.fromEntries(Object.entries(process.env).filter(([key]) => pattern.test(key)));
 }
 
-function createRealBackend({ timeoutSeconds, envBase, mmxBinDir }) {
+function inspectRealBackend({ timeoutSeconds, envBase, mmxBinDir }) {
   const host = {
     ...envBase,
     ...selectEnvironment(/^(HOME|USERPROFILE|USER|LOGNAME|SYSTEMROOT|WINDIR|COMSPEC|PATHEXT|LC_CTYPE|TERM|SSL_CERT_FILE|SSL_CERT_DIR|NODE_EXTRA_CA_CERTS)$/i),
@@ -32,31 +32,36 @@ function createRealBackend({ timeoutSeconds, envBase, mmxBinDir }) {
   };
   const mmx = {
     ...host,
-    ...selectEnvironment(/^(MINIMAX_(BASE_URL|API_KEY|GROUP_ID)|MMX_(CONFIG_DIR|API_KEY|GLOBAL_SLOT|KEEP_PROXY)|HTTPS?_PROXY|ALL_PROXY|NO_PROXY|XDG_CONFIG_HOME)$/i),
+    ...selectEnvironment(/^(MINIMAX_(BASE_URL|API_KEY|GROUP_ID)|MMX_(CONFIG_DIR|API_KEY|GLOBAL_SLOT|KEEP_PROXY|CLI_ENTRY|REQUIRE_PATH_LAUNCHER|NPM_GLOBAL_ROOT)|HTTPS?_PROXY|ALL_PROXY|NO_PROXY|XDG_CONFIG_HOME)$/i),
   };
   if (mmxBinDir !== undefined) {
     if (!path.isAbsolute(mmxBinDir)) throw new Error("--mmx-bin-dir requires an absolute directory");
     const executable = process.platform === "win32" ? "mmx.cmd" : "mmx";
     fs.accessSync(path.join(mmxBinDir, executable), fs.constants.X_OK);
     mmx.PATH = [fs.realpathSync(mmxBinDir), host.PATH].filter(Boolean).join(path.delimiter);
+    delete mmx.MMX_CLI_ENTRY;
+    mmx.MMX_REQUIRE_PATH_LAUNCHER = "1";
   }
   // ZCode may spend 10s each discovering its runtime and keychain. MMX has a
   // 30s wrapper margin and, if enabled, a separate 120s global-slot wait.
   const margin = mmx.MMX_GLOBAL_SLOT === "1" ? 180 : 60;
   const wrappers = { zcode: wrapper("zcode"), mmx: wrapper("mmx") };
   const env = { zcode, mmx };
+  const proofs = Object.fromEntries(Object.keys(wrappers).map(side =>
+    [side, require(wrappers[side]).preflightRequestBudget(env[side])]));
+  return { wrappers, env, proofs, deadlineMs: (timeoutSeconds + margin) * 1000 };
+}
+
+function createRealBackend(options) {
+  const { proofs, ...runtime } = inspectRealBackend(options);
   const nativeEntries = {};
-  // Verify both launch chains before either side can spend the first request.
-  for (const side of Object.keys(wrappers)) {
-    const proof = require(wrappers[side]).preflightRequestBudget(env[side]);
+  for (const [side, proof] of Object.entries(proofs)) {
     if (!proof.ok || !/^[a-f0-9]{64}$/.test(proof.entry_sha256)) {
       throw Object.assign(new Error(`${side}: cannot enforce a single native request (${proof.reason || "missing entry fingerprint"}). No model request dispatched.`), { side });
     }
     nativeEntries[side] = proof.entry_sha256;
   }
-  return {
-    wrappers, env, nativeEntries, deadlineMs: (timeoutSeconds + margin) * 1000,
-  };
+  return { ...runtime, nativeEntries };
 }
 
-module.exports = { createRealBackend };
+module.exports = { createRealBackend, inspectRealBackend };

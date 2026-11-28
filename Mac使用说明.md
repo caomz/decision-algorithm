@@ -24,7 +24,7 @@ Markdown 或 TXT 可以直接写要核对的问题和原始材料。JSON 文件�
 
 两片最多派发四次模型请求。每个请求在原生传输中领取一次许可，并核对上游请求的输出 Token 上限；模型无法接受该上限或启动器无法验证时，审核可能提前终止。输入字节、输出 Token 和请求数是客户端能核验的预算；实际账单按供应商账户计价。需要限制金额时，使用可核验的供应商账户额度。
 
-Mac 上自定义 MMX shell 启动器如果无法证明实际执行链，程序会在派发前停止。可以仅为这轮选择已安装、已核验的 npm CLI，例如追加 `--mmx-bin-dir "$HOME/.npm-global/bin"`。此操作只为 MMX 子进程选择路径。使用前核对你的代理和账户路线；Finder 也会在切换前询问。
+Mac 可以在 `~/Library/Application Support/Decision Algorithm/mmx-launch.json` 保存已审计的 npm CLI 入口。它供 Finder 和终端共用，并保留调用进程的代理。也可以只在当前轮追加 `--mmx-bin-dir "$HOME/.npm-global/bin"` 覆盖该选择。派发前用下文的 `doctor --runtime` 查看实际入口、预算和代理 guard。
 
 第一条在本地检查材料，第二条会发起一轮真实审核。也可以传入其他文件的绝对路径。使用 `--results-dir "/路径/到目录"` 可选择归档位置，默认保存在 `~/Library/Application Support/Decision Algorithm/Reviews` 下。每次真实运行都会创建新的结果目录。
 
@@ -50,4 +50,5 @@ Mac 上自定义 MMX shell 启动器如果无法证明实际执行链，程序�
 
 ```bash
 node skills/zcode-mmx-review/scripts/review-run.js doctor --offline --json
+node skills/zcode-mmx-review/scripts/review-run.js doctor --runtime --json
 ```

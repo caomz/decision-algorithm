@@ -27,6 +27,10 @@ const childPidPath = path.join(root, "child.pid");
 const fakeJsPath = path.join(root, "fake-mmx.cjs");
 // Never created: keeps the wrapper away from the real ~/.mmx/config.json.
 const absentConfigDir = path.join(root, "mmx-config-absent");
+const fixtureHome = path.join(root, "home");
+const fixtureEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
+  !/^(?:(?:https?|all|no)_proxy$|minimax_|mmx_|node_options$)/i.test(key)));
+Object.assign(fixtureEnv, { HOME: fixtureHome, USERPROFILE: fixtureHome });
 const fakeMmxPath = path.join(binDir, process.platform === "win32" ? "mmx.cmd" : "mmx");
 
 fs.mkdirSync(binDir);
@@ -141,7 +145,7 @@ function writeInputs(prompt = "hello", system = null) {
 function runWrapper(args = [], extraEnv = {}, includeFake = true) {
   fs.writeFileSync(invocationLog, "");
   const env = {
-    ...process.env,
+    ...fixtureEnv,
     PATH: includeFake ? `${binDir}${path.delimiter}${process.env.PATH || ""}` : "",
     TMPDIR: wrapperTmp,
     TMP: wrapperTmp,
@@ -188,7 +192,7 @@ after(() => {
 test("version remains a plain-text compatibility exception", () => {
   const run = runWrapper(["--version"]);
   assert.equal(run.status, 0);
-  assert.equal(run.stdout, "mmx-chat 2.8.1\n");
+  assert.equal(run.stdout, "mmx-chat 2.8.2\n");
 });
 
 test("the version constant and the SKILL.md frontmatter stay in sync", () => {
@@ -208,6 +212,7 @@ test("success preserves the public JSON schema and skips auth status", () => {
     status: "ok", exit_code: 0, requested_model: null, cli_invoked: true, text: "MMX_OK", model: "MiniMax-M3",
     model_identity_source: "response.model", stop_reason: "end_turn", complete: true,
     input_tokens: 12, output_tokens: 3, truncated: false,
+    request_timeout_seconds: 600, wrapper_timeout_seconds: 630,
     native_request_budget: {
       scope: "native_fetch", limit: 1, attempts: 1, blocked: false, verified: true,
       max_output_tokens: 524288, output_limit_verified: true, cli_version: "1.0.29",
@@ -667,6 +672,37 @@ test("--preflight reports the resolved entry without invoking the CLI", () => {
   fs.unlinkSync(launcher.file); fs.rmdirSync(launcher.dir);
 });
 
+test("Mac private entry selection preserves the proxy and fails closed on an unsafe config", { skip: process.platform !== "darwin" }, () => {
+  const home = fs.mkdtempSync(path.join(root, "configured-home-"));
+  const config = path.join(home, "Library/Application Support/Decision Algorithm/mmx-launch.json");
+  fs.mkdirSync(path.dirname(config), { recursive: true, mode: 0o700 });
+  const entry = path.join(binDir, "node_modules/mmx-cli/dist/mmx.mjs");
+  const proxy = "http://proxy.invalid:8080";
+  const env = { HOME: home, PATH: "", HTTPS_PROXY: proxy, MINIMAX_BASE_URL: "https://model.invalid/v1" };
+  fs.writeFileSync(config, JSON.stringify({ format: 1, cli_entry: entry }), { mode: 0o600 });
+  const report = jsonResult(runWrapper(["--preflight"], env));
+  assert.equal(report.status, "preflight_ok");
+  assert.equal(report.cli_invoked, false);
+  assert.equal(report.launch_resolution.source, "mac_config");
+  assert.equal(report.fetch_timeout_guard, "proxy_limited");
+  assert.equal(report.base_url_env, "stripped_v1");
+  assert.equal(jsonResult(runWrapper(["--preflight"], { ...env, PATH: binDir })).launch_resolution.source, "path");
+  assert.equal(jsonResult(runWrapper(["--preflight"], { ...env, HTTPS_PROXY: undefined })).fetch_timeout_guard, "preloaded");
+  assert.equal(jsonResult(runWrapper(["--preflight"], { ...env, MMX_REQUIRE_PATH_LAUNCHER: "1" })).reason, "unverified_launcher");
+  const dump = path.join(home, "child-env.json");
+  const replied = jsonResult(runChat([], { ...env, FAKE_ENV_DUMP: dump }));
+  assert.equal(replied.status, "ok");
+  assert.equal(replied.request_timeout_seconds, 600);
+  assert.equal(replied.wrapper_timeout_seconds, 630);
+  assert.equal(JSON.parse(fs.readFileSync(dump)).https_proxy_set, true);
+
+  fs.chmodSync(config, 0o644);
+  const blocked = jsonResult(runWrapper(["--preflight"], env));
+  assert.equal(blocked.reason, "invalid_launch_config");
+  assert.equal(blocked.cli_invoked, false);
+  assert.equal(jsonResult(runWrapper(["--preflight", "--cli-entry", entry], env)).launch_resolution.source, "explicit");
+});
+
 test("--preflight reports a missing runtime instead of spending a request", () => {
   const run = runWrapper(["--preflight"], { PATH: "", MMX_NPM_GLOBAL_ROOT: path.join(root, "no-such-root") });
   const result = jsonResult(run);
@@ -742,7 +778,7 @@ test("SIGTERM cancellation yields one final JSON object", async () => {
   if (process.platform === "win32") return;
   writeInputs("cancel");
   unlinkKnown(argsDumpPath);
-  const env = { ...process.env, PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`,
+  const env = { ...fixtureEnv, PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`,
     TMPDIR: wrapperTmp, TMP: wrapperTmp, TEMP: wrapperTmp, FAKE_MODE: "hang",
     FAKE_ARGS_DUMP: argsDumpPath, FAKE_MESSAGES_DUMP: messagesDumpPath };
   const child = spawn(process.execPath, ["--require", fixturePreload, wrapper, "--prompt-file", promptPath], { env, stdio: ["ignore", "pipe", "pipe"] });
@@ -820,7 +856,8 @@ test("managed release rejects mixed or interrupted installation before launching
   };
   const hash = bytes => createHash("sha256").update(bytes).digest("hex");
   const digests = {};
-  for (const [name, bytes] of Object.entries(files)) {
+  for (const name of Object.keys(files).sort()) {
+    const bytes = files[name];
     const file = path.join(managed, name);
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, bytes);
@@ -831,7 +868,7 @@ test("managed release rejects mixed or interrupted installation before launching
   function run(extraEnv = {}) {
     fs.writeFileSync(invocationLog, "");
     return jsonResult(spawnSync(process.execPath, ["--require", fixturePreload, installedWrapper, "--prompt-file", promptPath], {
-      env: { ...process.env, PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`, TMPDIR: wrapperTmp,
+      env: { ...fixtureEnv, PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`, TMPDIR: wrapperTmp,
         TMP: wrapperTmp, TEMP: wrapperTmp, FAKE_INVOCATIONS: invocationLog, ...extraEnv },
       encoding: "utf8", timeout: 15000,
     }));
@@ -839,6 +876,8 @@ test("managed release rejects mixed or interrupted installation before launching
   writeInputs("release fixture");
   fs.writeFileSync(marker, JSON.stringify(manifest));
   assert.equal(run().status, "ok");
+  fs.writeFileSync(path.join(managed, "agy/scripts/agy_runner.py"), "# unrelated edit");
+  assert.equal(run().status, "ok", "MMX startup checks its own files");
   const slotHome = path.join(root, "managed-slot-home");
   fs.mkdirSync(slotHome, { recursive: true });
   const slotEnv = { MMX_GLOBAL_SLOT: "1", HOME: slotHome, USERPROFILE: slotHome };
@@ -888,7 +927,7 @@ test("a managed layout without a release marker fails closed before the CLI runs
   fs.writeFileSync(invocationLog, "");
   const run = spawnSync(process.execPath, [path.join(managed, "mmx", "scripts", "mmx-chat.js"),
     "--prompt-file", promptPath], {
-    env: { ...process.env, PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`, TMPDIR: wrapperTmp,
+    env: { ...fixtureEnv, PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`, TMPDIR: wrapperTmp,
       TMP: wrapperTmp, TEMP: wrapperTmp, FAKE_INVOCATIONS: invocationLog },
     encoding: "utf8", timeout: 15000,
   });
@@ -919,7 +958,7 @@ test("a plain install without siblings and without a marker is not treated as ma
   fs.writeFileSync(invocationLog, "");
   const run = spawnSync(process.execPath, ["--require", fixturePreload, path.join(plain, "mmx", "scripts", "mmx-chat.js"),
     "--prompt-file", promptPath], {
-    env: { ...process.env, PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`, TMPDIR: wrapperTmp,
+    env: { ...fixtureEnv, PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`, TMPDIR: wrapperTmp,
       TMP: wrapperTmp, TEMP: wrapperTmp, FAKE_INVOCATIONS: invocationLog },
     encoding: "utf8", timeout: 15000,
   });
