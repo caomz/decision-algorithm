@@ -1,0 +1,7 @@
+interface:
+  display_name: "AGY Cross-Validation"
+  short_description: "Validate code, plans, and tutorials with AGY"
+  default_prompt: "Use $agy to independently verify this tutorial and report evidence-backed findings."
+
+policy:
+  allow_implicit_invocation: false

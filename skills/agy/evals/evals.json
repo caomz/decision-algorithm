@@ -1,0 +1,69 @@
+{
+  "skill_name": "agy",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "/agy review 重点看权限提升与数据丢失风险",
+      "expected_output": "在 Git 仓库根目录运行，跑 agy_runner.py + review.schema.json，按 P1/P2 给出 gate 与完整 AGY 原文；不调用写工具、不读 /skills/。",
+      "files": [],
+      "expectations": [
+        "prompt 必须以 AGY_READ_ONLY_BOUNDARY_V1 开头，否则 runner 报 BOUNDARY_ERROR",
+        "使用 --schema references/review.schema.json，runner 自动解析到 references/ 下",
+        "finding.severity 必须是 P1 或 P2，否则 PROTOCOL_ERROR",
+        "存在任何 P1 finding 即 GATE: FAIL；无 P1 即 GATE: PASS；runner 失败/协议错误即 GATE: ERROR",
+        "完整呈现 AGY 原文，不截断、不改写"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "/agy challenge 这个并发队列实现",
+      "expected_output": "复用 review 数据通路，但要求对抗性寻找生产失败模式：竞态、资源耗尽、兼容性破坏、静默腐化；按可利用影响排序。",
+      "files": [],
+      "expectations": [
+        "Review 数据通路与 schema 不变（references/review.schema.json）",
+        "提示词明确要求安全/数据丢失/竞态/资源/兼容性/腐化六类失败模式",
+        "存在同类对比时给出 overlap / AGY-only / 宿主-only / 显式分歧四类归并",
+        "不为风格偏好编造 finding，按可利用影响排序"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "/agy consult 我应该选哪个 Postgres 客户端连接池",
+      "expected_output": "自由问答模式，无 JSON schema；按 cwd 生成 state 文件，支持 resume；完整呈现 AGY 原文，再给宿主自己的推荐与分歧点。",
+      "files": [],
+      "expectations": [
+        "不传 --schema",
+        "state 文件路径 = $XDG_STATE_HOME/agy-skill/<cwd-hash>-consult.json，路径必须在 state root 内",
+        "成功调用后用 --save-state 写文件；续接用 --resume-state，且 cwd 必须一致",
+        "失败时不删除 state，给出具体手工恢复步骤",
+        "AGY 原文必须原样呈现，再追加宿主评估"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "/agy tutorial docs/setup-agy.md",
+      "expected_output": "读入本地教程与官方文档，逐项核对事实/命令/版本/平台/前置/安全/可复现性，按 references/tutorial.schema.json 输出 verdict。",
+      "files": [
+        "docs/setup-agy.md"
+      ],
+      "expectations": [
+        "使用 --schema references/tutorial.schema.json",
+        "verdict 仅在 PASS / WARN / FAIL / ERROR 之间",
+        "MODEL_INFERENCE 不能独立支持 PASS；UNVERIFIED claim 必须显式标注",
+        "findings 必填 severity / category / tutorial_anchor / claim / evidence_level / evidence / source_ref / fix",
+        "不读 /skills/ 或 SKILL.md，不调用浏览器/网络/写工具"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "/agy",
+      "expected_output": "无参数时不发起 AGY 调用。展示当前 diff 与上次 consult state，询问用户是 review / challenge / 续接 consult / 验证 tutorial / 开新 consult。",
+      "files": [],
+      "expectations": [
+        "不调用 agy_runner.py，不消耗 quota",
+        "显式呈现 base branch 与 diff 摘要",
+        "如存在 STATE_FILE，仅读 conversation_id / cwd / updated_at，再询问续接或新开会话"
+      ]
+    }
+  ]
+}

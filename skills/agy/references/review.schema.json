@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AGY code review result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["summary", "findings", "recommendation", "confidence"],
+  "properties": {
+    "summary": {"type": "string", "minLength": 1},
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["severity", "title", "location", "evidence", "impact", "recommendation"],
+        "properties": {
+          "severity": {"type": "string", "enum": ["P1", "P2"]},
+          "title": {"type": "string", "minLength": 1},
+          "location": {"type": "string", "minLength": 1},
+          "evidence": {"type": "string", "minLength": 1},
+          "impact": {"type": "string", "minLength": 1},
+          "recommendation": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "recommendation": {"type": "string", "minLength": 1},
+    "confidence": {"type": "string", "enum": ["high", "medium", "low"]}
+  }
+}

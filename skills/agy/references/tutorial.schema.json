@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AGY tutorial verification result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdict", "summary", "evidence_summary", "findings", "test_plan", "corrected_steps", "recommendation"],
+  "properties": {
+    "verdict": {"type": "string", "enum": ["PASS", "WARN", "FAIL"]},
+    "summary": {"type": "string", "minLength": 1},
+    "evidence_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["OFFICIAL", "LOCAL_HELP", "RUNTIME", "MODEL_INFERENCE", "UNVERIFIED"],
+      "properties": {
+        "OFFICIAL": {"type": "integer", "minimum": 0},
+        "LOCAL_HELP": {"type": "integer", "minimum": 0},
+        "RUNTIME": {"type": "integer", "minimum": 0},
+        "MODEL_INFERENCE": {"type": "integer", "minimum": 0},
+        "UNVERIFIED": {"type": "integer", "minimum": 0}
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["severity", "category", "tutorial_anchor", "claim", "evidence_level", "evidence", "source_ref", "fix"],
+        "properties": {
+          "severity": {"type": "string", "enum": ["BLOCKER", "MAJOR", "MINOR"]},
+          "category": {"type": "string", "enum": ["fact", "command", "version", "platform", "prerequisite", "safety", "reproducibility", "source"]},
+          "tutorial_anchor": {"type": "string", "minLength": 1},
+          "claim": {"type": "string", "minLength": 1},
+          "evidence_level": {"type": "string", "enum": ["OFFICIAL", "LOCAL_HELP", "RUNTIME", "MODEL_INFERENCE", "UNVERIFIED"]},
+          "evidence": {"type": "string"},
+          "source_ref": {"type": "string"},
+          "fix": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "test_plan": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "command", "cwd", "purpose", "risk", "expected_result", "runnable"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "command": {"type": "string", "minLength": 1},
+          "cwd": {"type": "string", "minLength": 1},
+          "purpose": {"type": "string", "minLength": 1},
+          "risk": {"type": "string", "enum": ["read_only", "workspace_write", "network", "global_system", "credential_or_quota"]},
+          "expected_result": {"type": "string", "minLength": 1},
+          "runnable": {"type": "boolean"}
+        }
+      }
+    },
+    "corrected_steps": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "recommendation": {"type": "string", "minLength": 1}
+  }
+}
