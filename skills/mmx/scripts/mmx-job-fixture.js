@@ -16,11 +16,13 @@ fs.writeFileSync(path.join(path.dirname(promptFile), "fixture-start.json"),
   JSON.stringify({ started_ms: Date.now(), pid: process.pid, stdin_ended: false }), { flag: "wx", mode: 0o600 });
 const delay = Number(process.env.MMX_DURABLE_FIXTURE_DELAY_MS);
 if (!Number.isSafeInteger(delay) || delay < 0 || delay > 120000) throw new Error("invalid fixture delay");
+const failed = bytes.toString("utf8").startsWith("FIXTURE_TRANSPORT_FAIL");
 let stdinEnded = false;
-process.stdin.on("end", () => { stdinEnded = true; });
-process.stdin.resume();
-setTimeout(() => {
-  const failed = bytes.toString("utf8").startsWith("FIXTURE_TRANSPORT_FAIL");
+let delayElapsed = false;
+let emitted = false;
+const emit = () => {
+  if (emitted) return;
+  emitted = true;
   const receipt = { status: failed ? "api_error" : "ok", backend: "fixture", synthetic: true,
     // These protocol fields simulate a child CLI; they are never real evidence.
     cli_invoked: true, text: "SYNTHETIC_MMX_REVIEW", model: "offline-fixture",
@@ -32,4 +34,17 @@ setTimeout(() => {
     { flag: "wx", mode: 0o600 });
   process.stdout.write(JSON.stringify(receipt) + "\n");
   process.exitCode = failed ? 1 : 0;
+};
+// The batch ends this fixture's stdin. The receipt waits for the simulated
+// transport time AND records whether the EOF was observed: on a loaded host
+// the first timer tick can fire before the stdin end event, so emitting in
+// the timer alone reported ended=false for a stdin the batch did close. The
+// EOF gets a bounded 2 s grace past the delay; a batch that never ends stdin
+// is still reported as ended=false when the grace expires.
+process.stdin.on("end", () => { stdinEnded = true; if (delayElapsed) emit(); });
+process.stdin.resume();
+setTimeout(() => {
+  delayElapsed = true;
+  setTimeout(emit, 2000);
+  if (stdinEnded) emit();
 }, delay);
