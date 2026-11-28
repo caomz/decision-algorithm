@@ -52,3 +52,5 @@
 - 真实供应方评审、默认持久任务、real backend。
 - 规则正本同步（`07-owner-sync.md`，OWNER_ACTION_REQUIRED）。
 - 托管 runner 的可验证网络隔离（`H-full`）。
+
+> V2.2.1 增量（六项审核缺陷专项收尾）的验收记录见 `08-v221-acceptance.md`；本文件以上内容保持历史原样。
