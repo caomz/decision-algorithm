@@ -20,7 +20,18 @@ function setup(text = "SYNTHETIC REQUEST A\n") {
   return { dir, prompt, options };
 }
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
-async function until(predicate, maxMs = 6000) {
+// How long a test waits for the durable worker to reach a state. It is the
+// test's patience, not a property under test: every until() returns the
+// moment its condition holds, so passing runs are not slowed, and no
+// assertion is weakened by a larger bound. The original 6 s bound was
+// exceeded on a loaded host (five F02 cases at once); even 15 s was exceeded
+// when the whole cross-review suite ran concurrently, because the worker's
+// per-record fsyncs are slow on Windows while a real-time scanner walks the
+// same files. 30 s is ~10x the unloaded duration and ~3x the observed loaded
+// duration. Timeouts that ARE under test (slot waits, fixture delays,
+// supervisor deadlines) are separate production-side values.
+const FIXTURE_DEADLINE_MS = 30000;
+async function until(predicate, maxMs = FIXTURE_DEADLINE_MS) {
   const stop = performance.now() + maxMs;
   while (performance.now() < stop) {
     const value = predicate(); if (value) return value; await pause(20);
@@ -362,7 +373,7 @@ for (const [name, mutate] of tampers) {
     assert.equal(verify(job).integrity, "match");
     // Let the worker finish its own release bookkeeping first: a tamper must
     // not race with it. On Windows no release happens at all.
-    if (process.platform !== "win32") await until(() => status(job).execution?.slot_released === true, 8000);
+    if (process.platform !== "win32") await until(() => status(job).execution?.slot_released === true);
     mutate(job);
     const slotRoot = path.join(c.dir, "slots"), slotsBefore = archiveEntries(slotRoot), archiveBefore = archiveEntries(shardsOf(job));
     assert.equal(verify(job).integrity, "corrupt", name);
@@ -380,7 +391,7 @@ test("F02: a raw receipt swapped in from another material is rejected", async ()
   const prompt = path.join(c.dir, "other.txt"); fs.writeFileSync(prompt, "SYNTHETIC REQUEST B\n");
   const other = start(path.join(c.dir, "other"), ["--backend", "fixture", "--prompt-file", prompt, "--slot-root", path.join(c.dir, "slots-other")]).job_dir;
   await finished(other);
-  if (process.platform !== "win32") await until(() => status(job).execution?.slot_released === true, 8000);
+  if (process.platform !== "win32") await until(() => status(job).execution?.slot_released === true);
   fs.copyFileSync(path.join(shardsOf(other), "000.raw.json"), path.join(shardsOf(job), "000.raw.json"));
   assert.equal(verify(job).integrity, "corrupt");
   assert.equal(status(job).status, "unknown");
