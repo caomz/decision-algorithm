@@ -54,28 +54,40 @@ function commandLine(pid) {
 
 // target: a ChildProcess this test spawned, or { pid, marker } for a
 // descendant a fixture recorded. Returns exited, "pid reused; the recorded
-// process exited" or survived.
+// process exited" or survived. ESRCH from a signal means the owned process
+// is gone - whatever the pid belongs to afterwards is not ours - so it
+// always reads as exited.
 async function stop(target) {
   const pid = Number(target.pid);
   if (!Number.isSafeInteger(pid) || pid <= 0) return "exited";
   const recorded = typeof target.marker === "string" && target.marker.length > 0;
   if (!recorded && (target.exitCode !== null || target.signalCode !== null)) return "exited";
-  if (!alive(pid)) return "exited";
   if (recorded) {
+    if (!alive(pid)) return "exited";
     const line = commandLine(pid);
     if (!line.includes(target.marker)) return `pid reused; the recorded process exited (cmdline=${JSON.stringify(line.slice(0, 120))})`;
   }
   const closed = typeof target.once === "function" ? new Promise(resolve => target.once("close", resolve)) : null;
+  const gone = async () => (closed
+    ? await Promise.race([closed.then(() => true), sleep(100).then(() => false)])
+    : !alive(pid));
   const termErr = signal(pid, "SIGTERM");
-  if (closed ? await Promise.race([closed, sleep(TERM_GRACE_MS)]) : !alive(pid)) return "exited";
-  const killErr = signal(pid, "SIGKILL");
-  if (closed ? await Promise.race([closed, sleep(KILL_GRACE_MS)]) : !alive(pid)) return "exited";
-  // A pid that still looks alive after SIGKILL is either a zombie waiting to
-  // be reaped (dead, reported by the check above on Linux) or a reused pid
-  // that no longer carries the marker; the original exited either way. Only
-  // a marker-carrying survivor fails the run, with the delivery errors shown.
+  if (termErr === "ESRCH") return "exited";
+  const began = performance.now();
+  let killErr = "";
+  let escalated = false;
+  while (performance.now() - began < TERM_GRACE_MS + KILL_GRACE_MS) {
+    if (await gone()) return "exited";
+    if (!escalated && performance.now() - began >= TERM_GRACE_MS) {
+      escalated = true;
+      killErr = signal(pid, "SIGKILL");
+      if (killErr === "ESRCH") return "exited";
+    }
+    await sleep(100);
+  }
+  if (await gone()) return "exited";
   if (recorded && !commandLine(pid).includes(target.marker)) return "pid reused; the recorded process exited";
-  return `survived (alive after SIGKILL; termErr=${termErr || "none"} killErr=${killErr || "none"})`;
+  return `survived (alive after SIGKILL; termErr=${termErr || "none"} killErr=${escalated ? (killErr || "none") : "not_sent"})`;
 }
 
 // Stops everything still tracked. A process that outlived both signals fails
