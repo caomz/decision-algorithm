@@ -18,7 +18,7 @@
     "tests/review-golden.test.js": "e36ffebea6e6456f6b3c6362eab3429e43fa4beac9cf91e61e9155792ce6d04e",
     "tests/support/env.js": "0cbc3be42190e5609642d7902e78943e7e399fd87d91eacf5e8d56986948e50f",
     "tests/support/offline-test.js": "1c0421f4b04997dd5965f41c64b3212f9988cb5294d00bd03656180c91233f91",
-    "tests/support/teardown.js": "21b8d5d69cf057a6558531d8aae20c52eb74d655fe5579ea13f55a33eda6de90",
+    "tests/support/teardown.js": "8f7cf09cdf65a3bb1586d1ea454c26018891088a7b80b19d87943a91d7d95ed2",
     "tests/zcode-batch.test.js": "89620307e3bd06bf9ee1ed619d7d7858a78bae0431689be1fc7e9e3f325dfadf",
     "tests/zcode-chat.test.js": "5a0003a2f9d9aecb46cdaba7f223aad6219a538ff0e4a2d3b3143d52c8b6d478"
   },

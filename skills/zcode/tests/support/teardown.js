@@ -29,7 +29,11 @@ function alive(pid) {
   }
   return true;
 }
-function signal(pid, name) { try { process.kill(pid, name); return true; } catch { return false; } }
+function signal(pid, name) {
+  // Returns the empty string on success, otherwise the errno code: stop()
+  // surfaces it so a real survivor is diagnosable instead of silent.
+  try { process.kill(pid, name); return ""; } catch (error) { return error.code || "ERR"; }
+}
 
 function commandLine(pid) {
   // One retry: a query that comes back empty during process death must not
@@ -57,18 +61,21 @@ async function stop(target) {
   const recorded = typeof target.marker === "string" && target.marker.length > 0;
   if (!recorded && (target.exitCode !== null || target.signalCode !== null)) return "exited";
   if (!alive(pid)) return "exited";
-  if (recorded && !commandLine(pid).includes(target.marker)) return "pid reused; the recorded process exited";
+  if (recorded) {
+    const line = commandLine(pid);
+    if (!line.includes(target.marker)) return `pid reused; the recorded process exited (cmdline=${JSON.stringify(line.slice(0, 120))})`;
+  }
   const closed = typeof target.once === "function" ? new Promise(resolve => target.once("close", resolve)) : null;
-  signal(pid, "SIGTERM");
+  const termErr = signal(pid, "SIGTERM");
   if (closed ? await Promise.race([closed, sleep(TERM_GRACE_MS)]) : !alive(pid)) return "exited";
-  signal(pid, "SIGKILL");
+  const killErr = signal(pid, "SIGKILL");
   if (closed ? await Promise.race([closed, sleep(KILL_GRACE_MS)]) : !alive(pid)) return "exited";
   // A pid that still looks alive after SIGKILL is either a zombie waiting to
   // be reaped (dead, reported by the check above on Linux) or a reused pid
   // that no longer carries the marker; the original exited either way. Only
-  // a marker-carrying survivor fails the run.
+  // a marker-carrying survivor fails the run, with the delivery errors shown.
   if (recorded && !commandLine(pid).includes(target.marker)) return "pid reused; the recorded process exited";
-  return "survived";
+  return `survived (alive after SIGKILL; termErr=${termErr || "none"} killErr=${killErr || "none"})`;
 }
 
 // Stops everything still tracked. A process that outlived both signals fails

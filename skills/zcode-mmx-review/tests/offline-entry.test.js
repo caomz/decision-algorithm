@@ -84,8 +84,10 @@ test("V2.2.1 S0: a missing, unbound or unusable fake CLI never falls through to 
 test("V2.2.1 S0: a bound fixture CLI is the only launcher a fixture-mode wrapper starts", { skip: win && "covered by the zcode suite through --cli-path" }, () => {
   const prompt = path.join(root, "c.txt"); fs.writeFileSync(prompt, "Return FIXED_REPLY");
   const dir = path.join(root, "ok-bin"); fs.mkdirSync(dir);
-  // A node shebang so resolveLaunch runs the launcher with this Node.
-  fs.writeFileSync(path.join(dir, "zcode"), "#!/usr/bin/env node\n" + fs.readFileSync(path.join(skill("zcode"), "tests/fixtures/fake-zcode.cjs"), "utf8"), { mode: 0o755 });
+  // A node shebang so resolveLaunch runs the launcher with this Node, and a
+  // run("ok") entry because the fixture is a module: the wrapper probes
+  // --version first, which the raw module would leave empty.
+  fs.writeFileSync(path.join(dir, "zcode"), "#!/usr/bin/env node\nrequire(" + JSON.stringify(path.join(skill("zcode"), "tests/fixtures/fake-zcode.cjs")) + ').run("ok");', { mode: 0o755 });
   const out = spawnSync(process.execPath, [path.join(skill("zcode"), "scripts/zcode-chat.js"), "--prompt-file", prompt],
     { encoding: "utf8", shell: false, timeout: 20000, env: cleanEnv({ PATH: dir, ...fixtureCliEnv(path.join(dir, "zcode")) }) });
   assert.equal(lastJson(out).cli_invoked, true, out.stdout + out.stderr);

@@ -28,8 +28,10 @@ test("V2.2.1 D6: a recorded pid carrying the marker is stopped; one without it i
   assert.equal(await stop({ pid: child.pid, marker: "teardown-recorded" }), "exited");
   await ended;
   // The test runner itself is alive but carries no fixture marker: it must be
-  // reported as reused rather than signalled or failed.
-  assert.equal(await stop({ pid: process.pid, marker: "no-such-marker" }), "pid reused; the recorded process exited");
+  // reported as reused rather than signalled or failed. The diagnostic suffix
+  // names the foreign command line; only the prefix is contractual.
+  const unprovable = await stop({ pid: process.pid, marker: "no-such-marker" });
+  assert.ok(unprovable.startsWith("pid reused; the recorded process exited"), unprovable);
 });
 
 test("V2.2.1 D6: teardown leaves an unprovable pid alone and confirms everything else", { timeout: 30000 }, async () => {
