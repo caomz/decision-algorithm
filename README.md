@@ -247,9 +247,9 @@ python3 -m pytest tests -q
 node --test "skills/get-biji/tests/**/*.test.cjs"
 
 # ZCode / MMX：离线测试（不触网、不消耗额度）
-node --test "skills/zcode/tests/**/*.test.js"
-node --test "skills/mmx/tests/**/*.test.js"
-node --test "skills/zcode-mmx-review/tests/**/*.test.js"
+node skills/zcode/tests/support/offline-test.js "skills/zcode/tests/**/*.test.js"
+node skills/mmx/tests/support/offline-test.js "skills/mmx/tests/**/*.test.js"
+node skills/zcode-mmx-review/tests/support/offline-test.js "skills/zcode-mmx-review/tests/**/*.test.js"
 
 # 决策算法：SKILL.md 校验 + 版本列表（只读）
 python3 skills/decision-algorithm/tools/skill_writer.py --action validate --skill skills/decision-algorithm

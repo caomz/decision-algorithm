@@ -8,7 +8,7 @@ const { spawnSync } = require("node:child_process");
 const { createHash } = require("node:crypto");
 const { resolveLaunch, isolatedEnv, setupMacKeychain, resolveMode, DENIED_TOOLS } = require("../scripts/zcode-chat.js");
 const { validateReview, strictJson } = require("../scripts/review.js");
-const { cleanEnv } = require("./support/env.js");
+const { cleanEnv, fixtureCliEnv } = require("./support/env.js");
 
 const wrapper = path.resolve(__dirname, "../scripts/zcode-chat.js");
 const fixture = path.resolve(__dirname, "fixtures/fake-zcode.cjs");
@@ -35,7 +35,7 @@ function run(scenario = "ok", options = {}) {
   }
   if (options.timeout) args.push("--timeout-seconds", String(options.timeout));
   const result = spawnSync(process.execPath, args, {
-    env: cleanEnv({ ZCODE_MODEL: "must-not-reach-child", FAKE_UNTRUSTED: "must-not-reach-child" }),
+    env: cleanEnv({ ZCODE_MODEL: "must-not-reach-child", FAKE_UNTRUSTED: "must-not-reach-child", ...fixtureCliEnv(cli) }),
     encoding: "utf8", timeout: 15000, maxBuffer: 8 * 1024 * 1024,
   });
   assert.equal(result.stderr, "");
@@ -52,7 +52,7 @@ test("UTF-8, literal shell syntax and slash commands remain data; isolation is e
   assert.equal(receipt.stop_reason, "stop");
   assert.equal(receipt.text, "中文🌟 `literal` $(do-not-run) /logout\n--model remains data");
   assert.equal(receipt.complete, true);
-  assert.equal(receipt.cleanup_confirmed, true);
+  assert.equal(receipt.cleanup_confirmed, process.platform === "win32" ? null : true);
   assert.deepEqual(receipt.usage, { inputTokens: 12, outputTokens: 4 });
   for (const name of ["stdout.ndjson", "stderr.log", "receipt.json", "prompt.txt", "launch.json", "progress.json"]) {
     assert.ok(fs.existsSync(path.join(output, name)));
@@ -126,14 +126,14 @@ test("existing output directories remain untouched", () => {
   fs.writeFileSync(prompt, "question");
   const cli = path.join(root, "existing-fake.cjs");
   fs.writeFileSync(cli, `require(${JSON.stringify(fixture)}).run("ok");`);
-  const result = spawnSync(process.execPath, [wrapper, "--prompt-file", prompt, "--cli-path", cli, "--output-dir", directory], { encoding: "utf8", env: cleanEnv() });
+  const result = spawnSync(process.execPath, [wrapper, "--prompt-file", prompt, "--cli-path", cli, "--output-dir", directory], { encoding: "utf8", env: cleanEnv({ ...fixtureCliEnv(cli) }) });
   assert.equal(result.status, 1);
   assert.equal(JSON.parse(result.stdout).cli_invoked, false);
   assert.deepEqual(fs.readdirSync(directory), []);
 });
 test("installed manifest mismatch blocks model invocation", () => {
   const directory = path.join(root, "install-fixture");
-  const names = ["SKILL.md", "scripts/zcode-chat.js", "scripts/zcode-run.js", "scripts/zcode-batch.js", "scripts/review.js", "references/review-v1.schema.json"];
+  const names = ["SKILL.md", "scripts/zcode-chat.js", "scripts/zcode-run.js", "scripts/zcode-batch.js", "scripts/batch-safety.js", "scripts/review.js", "references/review-v1.schema.json"];
   const files = {};
   for (const name of names) {
     const target = path.join(directory, name);
@@ -170,6 +170,7 @@ test("one manifest verifies both a CRLF and an LF copy of the same file", () => 
   fs.writeFileSync(path.join(directory, "scripts/review.js"), reviewSource);
   fs.writeFileSync(path.join(directory, "scripts/zcode-run.js"), "module.exports = {};\n");
   fs.writeFileSync(path.join(directory, "scripts/zcode-batch.js"), "module.exports = {};\n");
+  fs.writeFileSync(path.join(directory, "scripts/batch-safety.js"), "module.exports = {};\n");
   fs.writeFileSync(path.join(directory, "references/review-v1.schema.json"), schemaSource);
   const digest = data => createHash("sha256").update(data.toString("utf8").replace(/\r\n/g, "\n"), "utf8").digest("hex");
   fs.writeFileSync(path.join(directory, ".zcode-release.json"), JSON.stringify({
@@ -179,6 +180,7 @@ test("one manifest verifies both a CRLF and an LF copy of the same file", () => 
       "scripts/zcode-chat.js": digest(wrapperSource),
       "scripts/zcode-run.js": digest(Buffer.from("module.exports = {};\n", "utf8")),
       "scripts/zcode-batch.js": digest(Buffer.from("module.exports = {};\n", "utf8")),
+      "scripts/batch-safety.js": digest(Buffer.from("module.exports = {};\n", "utf8")),
       "scripts/review.js": digest(reviewSource),
       "references/review-v1.schema.json": digest(schemaSource),
     },
@@ -193,7 +195,7 @@ test("timeout terminates the child process group", () => {
   const { receipt } = run("hang", { timeout: 0.2 });
   assert.equal(receipt.status, "timeout");
   assert.equal(receipt.complete, false);
-  assert.equal(receipt.cleanup_confirmed, true);
+  assert.equal(receipt.cleanup_confirmed, process.platform === "win32" ? null : true);
 });
 test("timeout also kills a descendant ignoring SIGTERM", { skip: process.platform === "win32" }, () => {
   const { receipt, output } = run("tree", { timeout: 0.4 });
@@ -314,7 +316,13 @@ async function runSupervised(scenario, timeout = 2) {
   fs.writeFileSync(cli, `require(${JSON.stringify(fixture)}).run(${JSON.stringify(scenario)});`);
   fs.writeFileSync(prompt, "supervised question");
   const job = path.join(directory, "job");
-  const launch = supervisor.start(job, ["--prompt-file", prompt, "--cli-path", cli, "--timeout-seconds", String(timeout)], { wrapperPath: driver });
+  // zcode-run passes the caller environment to its children by design, so the
+  // CLI fixture contract for this run travels through process.env.
+  Object.assign(process.env, fixtureCliEnv(cli));
+  let launch;
+  try {
+    launch = supervisor.start(job, ["--prompt-file", prompt, "--cli-path", cli, "--timeout-seconds", String(timeout)], { wrapperPath: driver });
+  } finally { delete process.env.ZMX_FIXTURE_CLI_ROOT; delete process.env.ZMX_FIXTURE_CLI_SHA256; }
   assert.ok(Number.isSafeInteger(launch.supervisor_pid));
   const deadline = Date.now() + 10000;
   let result;
@@ -337,7 +345,7 @@ test("supervisor preserves nonzero timeout and child cleanup evidence", async ()
   assert.equal(result.status, "finished");
   assert.equal(result.execution.exit_code, 1);
   assert.equal(result.receipt.status, "timeout");
-  assert.equal(result.receipt.cleanup_confirmed, true);
+  assert.equal(result.receipt.cleanup_confirmed, process.platform === "win32" ? null : true);
 });
 test("abrupt wrapper death leaves startup state and independently captured signal", { skip: process.platform === "win32" }, async () => {
   const { result, job } = await runSupervised("kill_wrapper");

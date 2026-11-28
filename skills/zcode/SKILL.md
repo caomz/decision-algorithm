@@ -17,7 +17,7 @@ version: 1.5.1
 
 调用前核对本次材料的外发授权。将 prompt 写入私有 UTF-8 文件，不把正文拼接成 shell 命令：
 
-宿主可能断开终端或需要跨工具调用等待时，优先使用持久后台入口：
+ZMX V2.1 候选默认使用持续会话中的同步 wrapper，并在主侧完成后立即交付。原生生命周期与固定真实传输栈验证完成前，不默认启用持久任务。以下是已有的显式后台入口合同（不是本候选的默认启用）：
 
 ```text
 node <ZCODE_SKILL_DIR>/scripts/zcode-run.js start <NEW_JOB_DIR> --prompt-file <file> [--mode review --evidence-ids-file <ids.json>]
@@ -38,22 +38,22 @@ Review/Challenge 为材料分配稳定 ID（例如 `E1`、`E2`），在材料中
 
 ## 分片批量
 
-多分片评审不要逐片串行调用：一次工具调用送整批，`zcode-batch.js` 经有界并发池并行执行每片 `zcode-chat.js`，合并回执并聚合双 gate：
+多分片评审一次工具调用送整批，`zcode-batch.js` 默认并发 1，经有界队列执行每片 `zcode-chat.js`，合并回执并聚合双 gate：
 
 ```text
-node <ZCODE_SKILL_DIR>/scripts/zcode-batch.js --prompt-file <f1> [--prompt-file <f2> ...] | --prompts-dir <dir> [--concurrency 2] [--mode chat|review|challenge --evidence-ids-file <ids.json>] [--timeout-seconds 1200] [--cli-path <exe>] [--receipt-file <path>]
+node <ZCODE_SKILL_DIR>/scripts/zcode-batch.js --prompt-file <f1> [--prompt-file <f2> ...] | --prompts-dir <dir> [--concurrency 1] [--mode chat|review|challenge --evidence-ids-file <ids.json>] [--timeout-seconds 1200] [--cli-path <exe>] [--receipt-file <path>]
 ```
 
-- 每片仍是一次完整 `zcode-chat.js` 调用（guarded 权限、独立 HOME/cwd、零工具校验、每片独立 `zcode-text-*` 证据目录原样继承）。**不要给批量传 `--output-dir`**：每片及每次重试由 wrapper 自建目录，全部证据保留。
+- 每片仍是一次完整 `zcode-chat.js` 调用（guarded 权限、独立 HOME/cwd、零工具校验、每片独立 `zcode-text-*` 证据目录原样继承）。**不要给批量传 `--output-dir`**：每片由 wrapper 自建目录，全部证据保留。
 - 批级回执含每片完整回执与**双 gate**：`transport_gate`（全片 `status=ok`、`complete` 且未截断）与内容 `gate`（任一片 `review_gate=FAIL` → FAIL，即使他片传输失败也保留确定发现；全 PASS → PASS；其余 NOT_EVALUATED；chat 模式恒 NOT_EVALUATED）。
 - `status=ok` 时退出 0，即使内容 gate 为 `FAIL`（P1 发现是有效审核结果，与单片一致）；传输或批处理失败退出 1。
-- 重试：仅 `quota_error` / `timeout` 退避 30 秒重发一次，`first_attempt` 完整保留；auth/policy/schema 类错误与内容 FAIL 不重试。
-- `--concurrency` 默认 2（上限 8，不声称已标定账号限流阈值）；分片目录按 `pN.txt` 自然序整批读取。外层工具超时按 `ceil(片数/并发) × (2×(timeout-seconds+45s) + 30s) + 60s` 预留（两次尝试 + 每试监督余量 + 退避 + 批级余量）。
-- 单片或易断线场景仍用上面的 `zcode-run.js` 持久 job；批量入口面向持续会话的一次宿主工具调用，不宣称自身具备跨终端持久恢复能力。
+- **重试边界**：额度、超时、网络失败、未知终态和其他失败均不自动重发；内容 FAIL 是有效评审结果，不是传输失败。
+- **监督时限**：单片默认 请求时限 + 45 秒；批次默认按片数与并发计算、上限 86400 秒。可显式使用 `--supervisor-timeout-seconds` / `--batch-timeout-seconds`（1–86400 秒）；另有 8 秒监督清理预算，超时不自动重发。
+- 已有 `zcode-run.js` 持久 job 保留为显式入口，本候选未完成上述验收前不默认启用；批量入口面向持续会话的一次宿主工具调用，不宣称自身具备跨终端持久恢复能力。
 
 ## 执行与结果
 
-默认运行时限 1200 秒（与 MMX `local.json` 1200/1260 对齐）；`--timeout-seconds` 可在本次授权内调整，更大的评审事实包建议显式放宽。宿主前台同步调用仍受宿主工具时限约束，评审规模请求走持久后台 job 或 batch 入口。`--output-dir` 指向一个尚不存在的目录，用于保存输入、完整原始运行流、stderr、启动指纹与 `receipt.json`；省略时在系统临时目录创建并保留私有目录。
+独立 wrapper 默认运行时限仍为 1200 秒；ZMX 配对入口显式传 600 秒，MMX 的请求/wrapper/supervisor 为 600/630/650 秒。`--timeout-seconds` 可在本次授权内调整，先排查传输原因并按逻辑分片，不以延长超时掩盖问题。宿主前台同步调用仍受宿主工具时限约束；评审规模请求优先按逻辑分片走 batch 入口，持久后台 job 在原生生命周期验收完成前不作为默认建议。`--output-dir` 指向一个尚不存在的目录，用于保存输入、完整原始运行流、stderr、启动指纹与 `receipt.json`；省略时在系统临时目录创建并保留私有目录。
 
 每次请求在启动和首个模型请求时原子更新 `progress.json`，记录 wrapper/CLI PID、阶段及观察到的模型；只有最终有效回执才可作为完成依据。监督器另给 wrapper 预检与清理 45 秒余量，超出后终止本任务进程组并保留真实退出记录。
 
@@ -64,3 +64,6 @@ node <ZCODE_SKILL_DIR>/scripts/zcode-batch.js --prompt-file <f1> [--prompt-file 
 - 截断、未知终态、工具违规、超时、认证/额度错误或协议错误如实报告，原始流留在私有目录。失败不自动重试。stderr 不原样复制到公开错误提示。
 
 当前适配 ZCode `0.17.1`（本机 `zcode --version` 输出两行，取其中的 `zcode-runtime` 版本）。真实验收结论以对应完整回执为准。其他版本先按参考文档重新验收，不降级权限继续调用。独立安装清单存在时调用前核对文件哈希；清单按 LF 归一化内容计算，Mac 与 Windows 共用同一份。安装到新会话后，Codex 使用 `$zcode`，Claude 使用 `/zcode`。
+
+### V2 Phase 2 安全边界
+每批默认并发 1，所有分片先保存输入快照和请求意图，逐片保留独立回执。`--receipt-file` 必须是新路径；未指定时建立私有临时证据目录。单分片监督上限沿用请求时限 + 45 秒，批次上限 86400 秒。批级回执分别报告 `transport_gate`、`lifecycle_gate` 与内容 `gate`，任何一方都不能代替两方独立统一评审。仅本地退出/管道关闭不能证明远端停止或未计费；未知分片禁止重放。供应方 CLI/SDK 内部重试尚未完成真实固定版本传输栈验证；zcode 的持久后台入口（`zcode-run.js`）、MMX 的 `mmx-job.js` 与统一入口 real backend 在该验收完成前不得用于付费调用。

@@ -16,25 +16,18 @@
 
 const fs = require("fs");
 const path = require("path");
-const { spawn } = require("child_process");
+const { createBatch, limitSeconds, sourceBytes, resolveWrapper } = require("./batch-safety.js");
+const { validateReview, strictJson } = require("./review.js");
 
 const VERSION = "1.0.0";
 const DEFAULT_WRAPPER = path.join(__dirname, "zcode-chat.js");
-const DEFAULT_CONCURRENCY = 2;
+const DEFAULT_CONCURRENCY = 1;
 const MAX_CONCURRENCY = 8;
 const MAX_SHARDS = 32;
 const DEFAULT_TIMEOUT_SECONDS = 1200;
 const MAX_TIMEOUT_SECONDS = 21600;
-// Test hook only: a production run never overrides the quota/timeout backoff.
-const RETRY_DELAY_MS = (() => {
-  const raw = process.env.ZCODE_BATCH_RETRY_MS;
-  if (raw === undefined) return 30000;
-  if (!/^\d+$/.test(raw) || Number(raw) > 30000) return 30000;
-  return Number(raw);
-})();
-const STDOUT_CAP_BYTES = 16 * 1024 * 1024;
 const MODES = ["chat", "review", "challenge"];
-const RETRYABLE = new Set(["quota_error", "timeout"]);
+const RETRYABLE = new Set(); // legacy export; no automatic replay
 
 // ---------------------------------------------------------------------------
 // Emission — exactly ONE JSON object on stdout (same contract as zcode-chat.js).
@@ -66,7 +59,7 @@ function positiveInteger(value) {
 
 function parseArgs(argv) {
   const out = { promptFiles: [], promptsDir: null, concurrency: null, mode: "chat",
-    evidenceIdsFile: null, cliPath: null, timeout: null, receiptFile: null };
+    evidenceIdsFile: null, cliPath: null, timeout: null, receiptFile: null, supervisorTimeout: null, batchTimeout: null };
   const seen = new Set();
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -100,6 +93,13 @@ function parseArgs(argv) {
         break;
       }
       case "--receipt-file": out.receiptFile = path.resolve(next()); break;
+      case "--supervisor-timeout-seconds":
+      case "--batch-timeout-seconds": {
+        const value = next();
+        if (!/^\d+$/.test(value) || !limitSeconds(Number(value))) usageError("supervisor/batch timeout must be 1..86400 seconds");
+        out[arg === "--supervisor-timeout-seconds" ? "supervisorTimeout" : "batchTimeout"] = Number(value);
+        break;
+      }
       default: usageError(`Unknown flag: ${arg}`);
     }
   }
@@ -165,106 +165,33 @@ function collectShardFiles(args) {
 // CLI process tree directly.
 // ---------------------------------------------------------------------------
 
-const liveChildren = new Set();
 let cancelled = false;
-
-function runWrapperOnce(promptFile, fixedArgs) {
-  return new Promise(resolve => {
-    const wrapperPath = process.env.ZCODE_BATCH_WRAPPER || DEFAULT_WRAPPER;
-    const args = [wrapperPath, "--prompt-file", promptFile, ...fixedArgs];
-    let child;
-    try {
-      child = spawn(process.execPath, args, {
-        stdio: ["ignore", "pipe", "pipe"], shell: false, windowsHide: true,
-      });
-    } catch (err) {
-      resolve({ receipt: { status: "child_error", error: `could not spawn wrapper: ${err.code || err.message}` }, duration: 0 });
-      return;
-    }
-    liveChildren.add(child);
-    const stdout = [];
-    let stdoutBytes = 0;
-    let overflow = false;
-    const started = Date.now();
-    child.stdout.on("data", chunk => {
-      if (stdoutBytes >= STDOUT_CAP_BYTES) { overflow = true; return; }
-      const take = Math.min(chunk.length, STDOUT_CAP_BYTES - stdoutBytes);
-      stdout.push(take === chunk.length ? chunk : chunk.subarray(0, take));
-      stdoutBytes += take;
-    });
-    // stderr is drained but deliberately NOT captured or echoed: the wrapper
-    // keeps its own scrubbing boundary and the shard evidence dirs hold detail.
-    child.stderr.on("data", () => {});
-    child.on("error", err => {
-      liveChildren.delete(child);
-      resolve({ receipt: { status: "child_error", error: `wrapper spawn failed: ${err.code || err.message}` }, duration: 0 });
-    });
-    child.on("close", code => {
-      liveChildren.delete(child);
-      const duration = (Date.now() - started) / 1000;
-      if (cancelled) {
-        resolve({ receipt: { status: "cancelled", exit_code: code }, duration });
-        return;
-      }
-      const outText = Buffer.concat(stdout).toString("utf8").trim();
-      if (!outText) {
-        resolve({ receipt: { status: "child_error", exit_code: code, error: "wrapper produced no stdout envelope" }, duration });
-        return;
-      }
-      if (overflow) {
-        resolve({ receipt: { status: "child_error", exit_code: code, error: "wrapper stdout exceeded the batch capture cap" }, duration });
-        return;
-      }
-      let receipt;
-      try { receipt = JSON.parse(outText); }
-      catch {
-        resolve({ receipt: { status: "child_error", exit_code: code, error: "wrapper stdout was not valid JSON" }, duration });
-        return;
-      }
-      if (receipt === null || typeof receipt !== "object" || Array.isArray(receipt) ||
-          typeof receipt.status !== "string") {
-        resolve({ receipt: { status: "child_error", exit_code: code, error: "wrapper envelope is not a JSON object with a status" }, duration });
-        return;
-      }
-      resolve({ receipt, duration });
-    });
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Retry policy — one explicit retry for clearly terminated transport failures
-// (quota/timeout) with backoff; both receipts kept. Auth, policy, schema and
-// content-level FAIL are never retried.
-// ---------------------------------------------------------------------------
-
-async function runShardWithRetries(shard, fixedArgs) {
-  const first = await runWrapperOnce(shard.file, fixedArgs);
-  if (!RETRYABLE.has(first.receipt.status) || cancelled) {
-    return { shard: shard.label, prompt_file: shard.file, retried: false, retry_reason: null,
-      duration_seconds: first.duration, ...first.receipt };
-  }
-  const retryReason = first.receipt.status;
-  await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
-  // A cancellation during the backoff must not spawn a new child.
-  if (cancelled) {
-    return { shard: shard.label, prompt_file: shard.file, retried: false, retry_reason: retryReason,
-      retry_backoff_seconds: RETRY_DELAY_MS / 1000,
-      duration_seconds: first.duration + RETRY_DELAY_MS / 1000,
-      first_attempt: first.receipt, status: "cancelled", complete: false };
-  }
-  const second = await runWrapperOnce(shard.file, fixedArgs);
-  return {
-    shard: shard.label, prompt_file: shard.file, retried: true, retry_reason: retryReason,
-    retry_backoff_seconds: RETRY_DELAY_MS / 1000,
-    duration_seconds: first.duration + second.duration + RETRY_DELAY_MS / 1000,
-    first_attempt: first.receipt,
-    ...second.receipt,
-  };
-}
+let controller = null;
 
 // ---------------------------------------------------------------------------
 // Gates — transport usability and content review_gate are separate verdicts.
 // ---------------------------------------------------------------------------
+
+function verifiedReviewVote(receipt, evidenceIds) {
+  if (!Array.isArray(evidenceIds) || evidenceIds.length === 0 ||
+      receipt.status !== "ok" || receipt.binding_status !== "VERIFIED_LOCAL" || receipt.transport_validation !== "PASS" || receipt.cli_invoked !== true ||
+      receipt.wrapper_exit_code !== 0 || receipt.wrapper_signal !== null ||
+      receipt.exit_code !== 0 || receipt.signal !== null ||
+      receipt.complete !== true || receipt.truncated !== false ||
+      receipt.local_cleanup !== "confirmed" ||
+      typeof receipt.model !== "string" || !/^glm(?:[-_.]|$)/i.test(receipt.model) ||
+      typeof receipt.provider !== "string" || !receipt.provider.trim() ||
+      receipt.model_identity_source !== "runtime.model_request" ||
+      receipt.tool_calls !== 0 || receipt.tool_requests !== 0 ||
+      !["stop", "end_turn", "stop_sequence"].includes(receipt.stop_reason) ||
+      typeof receipt.text !== "string" || !receipt.text.trim()) return null;
+  try {
+    const checked = validateReview(receipt.text, evidenceIds);
+    if (receipt.review_gate !== checked.review_gate ||
+        JSON.stringify(receipt.review) !== JSON.stringify(checked.review)) return null;
+    return checked.review_gate;
+  } catch { return null; }
+}
 
 function aggregate(results, shards, args, started) {
   let okCount = 0;
@@ -274,16 +201,19 @@ function aggregate(results, shards, args, started) {
   let reviewPass = 0;
   let reviewFail = 0;
   let reviewNotEvaluated = 0;
+  let lifecycleOkCount = 0;
   for (const result of results) {
     if (!result) continue; // A cancelled batch may leave unscheduled shards empty.
+    if (result.lifecycle_validation === "PASS") lifecycleOkCount++;
     if (result.status === "ok") {
       okCount++;
-      if (result.complete === true && result.truncated !== true) {
+      if (result.transport_validation === "PASS") {
         transportOkCount++;
         // Only a fully delivered shard may contribute to the content gate: a
         // truncated reply must not vote on the review verdict.
-        if (result.review_gate === "PASS") reviewPass++;
-        else if (result.review_gate === "FAIL") reviewFail++;
+        const vote = verifiedReviewVote(result, args.validatedIds);
+        if (vote === "PASS") reviewPass++;
+        else if (vote === "FAIL") reviewFail++;
         else reviewNotEvaluated++;
       } else truncatedCount++;
     }
@@ -293,17 +223,20 @@ function aggregate(results, shards, args, started) {
   let gate;
   if (args.mode === "chat") gate = "NOT_EVALUATED";
   else if (reviewFail > 0) gate = "FAIL"; // A confirmed finding outranks transport noise.
-  else if (reviewPass === shards.length) gate = "PASS";
+  // A complete content PASS also needs every shard's local cleanup confirmed.
+  else if (reviewPass === shards.length && lifecycleOkCount === shards.length) gate = "PASS";
   else gate = "NOT_EVALUATED";
   const batchStatus = transportOkCount === shards.length ? "ok" : (transportOkCount > 0 ? "partial" : "failed");
   return {
     status: batchStatus,
     gate,
     transport_gate: transportGate,
+    lifecycle_gate: lifecycleOkCount === shards.length ? "PASS" : "NOT_EVALUATED",
     batch: {
       shards: shards.length, ok: okCount, transport_ok: transportOkCount,
       truncated_or_incomplete: truncatedCount, retried: retriedCount,
       review_pass: reviewPass, review_fail: reviewFail, review_not_evaluated: reviewNotEvaluated,
+      lifecycle_ok: lifecycleOkCount,
       mode: args.mode,
       concurrency: args.concurrency ?? DEFAULT_CONCURRENCY,
       wall_seconds: Number(((Date.now() - started) / 1000).toFixed(1)),
@@ -322,16 +255,17 @@ async function main() {
     return;
   }
   if (argv.length === 1 && argv[0] === "--help") {
-    process.stdout.write(JSON.stringify({ status: "usage", usage: "node zcode-batch.js --prompt-file FILE [--prompt-file FILE ...] | --prompts-dir DIR [--concurrency 2] [--mode chat|review|challenge --evidence-ids-file FILE] [--timeout-seconds 1200] [--cli-path EXECUTABLE] [--receipt-file FILE]" }) + "\n");
+    process.stdout.write(JSON.stringify({ status: "usage", usage: "node zcode-batch.js --prompt-file FILE [--prompt-file FILE ...] | --prompts-dir DIR [--concurrency 1] [--mode chat|review|challenge --evidence-ids-file FILE] [--timeout-seconds 1200] [--cli-path EXECUTABLE] [--receipt-file FILE] [--supervisor-timeout-seconds SEC] [--batch-timeout-seconds SEC]" }) + "\n");
     return;
   }
 
   const args = parseArgs(argv);
+  let idsBytes = null;
   if (args.evidenceIdsFile !== null) {
     // Fail fast at the batch level instead of letting every shard spawn a
     // wrapper that dies with input_error on the same malformed ids file.
     let raw;
-    try { raw = fs.readFileSync(args.evidenceIdsFile); }
+    try { raw = sourceBytes(args.evidenceIdsFile); idsBytes = raw; }
     catch { usageError(`--evidence-ids-file is not readable: ${args.evidenceIdsFile}`); }
     let parsed;
     try { parsed = JSON.parse(raw.toString("utf8")); }
@@ -339,60 +273,45 @@ async function main() {
     // The upstream validator owns the exact id rules; reuse it so the batch
     // gate cannot drift from the single-shot contract.
     const { validateIds } = require("./review.js");
-    try { validateIds(parsed); }
+    try { args.validatedIds = validateIds(parsed); }
     catch { usageError("--evidence-ids-file must be a nonempty unique array of plain id strings."); }
   }
   const shards = collectShardFiles(args);
   const timeout = args.timeout ?? DEFAULT_TIMEOUT_SECONDS;
 
   const fixedArgs = ["--mode", args.mode, "--timeout-seconds", String(timeout)];
-  if (args.evidenceIdsFile !== null) fixedArgs.push("--evidence-ids-file", args.evidenceIdsFile);
   if (args.cliPath !== null) fixedArgs.push("--cli-path", args.cliPath);
 
-  const concurrency = args.concurrency ?? DEFAULT_CONCURRENCY;
   const started = Date.now();
-  const results = new Array(shards.length);
-  let nextIndex = 0;
-
-  async function worker() {
-    while (!cancelled) {
-      const index = nextIndex++;
-      if (index >= shards.length) return;
-      results[index] = await runShardWithRetries(shards[index], fixedArgs);
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(concurrency, shards.length) }, worker));
+  const supervisorSeconds = args.supervisorTimeout ?? timeout + 45;
+  // Resolve the per-shard wrapper before any evidence directory is reserved.
+  let wrapper;
+  try { wrapper = resolveWrapper(process.env, "zcode", DEFAULT_WRAPPER); }
+  catch (error) { fail({ status: "usage_error", gate: "NOT_EVALUATED", transport_gate: "NOT_EVALUATED", error: error.message }); return; }
+  try { controller = createBatch({ side: "zcode", args, shards, fixedArgs,
+    configFiles: idsBytes === null ? [] : [{ flag: "--evidence-ids-file", bytes: idsBytes, name: "evidence.json" }],
+    supervisorSeconds, parseReceipt: strictJson }); }
+  catch { fail({ status: "archive_error", gate: "NOT_EVALUATED", transport_gate: "NOT_EVALUATED", error: "could not reserve or snapshot batch evidence" }); return; }
+  await new Promise(resolve => setImmediate(resolve));
+  if (cancelled) controller.stop("cancelled");
+  const results = await controller.run(wrapper);
 
   const envelope = { ...aggregate(results, shards, args, started), shards: results };
-  if (args.receiptFile !== null) {
-    envelope.receipt_file = args.receiptFile;
-    try {
-      fs.writeFileSync(args.receiptFile, JSON.stringify(envelope, null, 2) + "\n", { mode: 0o600 });
-    } catch (err) {
-      delete envelope.receipt_file;
-      envelope.receipt_file_write_error = `could not write receipt file: ${err.code || err.message}`;
-    }
-  }
+  controller.finalize(envelope);
   if (envelope.status === "ok") emit(envelope);
   else fail(envelope);
 }
 
-function onSignal(code) {
-  if (emitted) process.exit(code);
+function onSignal() {
+  if (emitted || cancelled) return;
   cancelled = true;
-  // Ask each wrapper to stop; the wrapper owns CLI cleanup and receipt writes.
-  for (const child of liveChildren) { try { child.kill("SIGTERM"); } catch {} }
-  fail({ status: "cancelled", transport_gate: "NOT_EVALUATED", gate: "NOT_EVALUATED",
-    note: "batch interrupted; shard receipts up to this point are lost" });
+  controller?.stop("cancelled");
 }
-process.on("SIGTERM", () => onSignal(143));
-process.on("SIGINT", () => onSignal(130));
-process.on("SIGHUP", () => onSignal(129));
-
 if (require.main === module) {
+  for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) process.on(signal, onSignal);
   main().catch(error => {
     fail(error.envelope ?? { status: "batch_error", error: "zcode-batch failed locally." });
   });
 } else {
-  module.exports = { parseArgs, collectShardFiles, aggregate, MODES, RETRYABLE };
+  module.exports = { parseArgs, collectShardFiles, aggregate, verifiedReviewVote, MODES, RETRYABLE };
 }

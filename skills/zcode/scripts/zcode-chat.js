@@ -64,7 +64,7 @@ function checkInstall() {
   if (!fs.existsSync(marker)) return;
   if (fs.lstatSync(marker).isSymbolicLink()) fail("install_mismatch");
   const manifest = strictJson(fs.readFileSync(marker, "utf8"));
-  const required = ["SKILL.md", "scripts/zcode-chat.js", "scripts/zcode-run.js", "scripts/zcode-batch.js", "scripts/review.js", "references/review-v1.schema.json"];
+  const required = ["SKILL.md", "scripts/zcode-chat.js", "scripts/zcode-run.js", "scripts/zcode-batch.js", "scripts/batch-safety.js", "scripts/review.js", "references/review-v1.schema.json"];
   if (manifest.format !== 1 || !manifest.files || !required.every(name => Object.hasOwn(manifest.files, name))) fail("install_mismatch");
   for (const [relative, digest] of Object.entries(manifest.files)) {
     const parts = relative.split("/");
@@ -76,7 +76,10 @@ function checkInstall() {
 }
 
 function findCli(explicit, env = process.env) {
-  if (explicit) return fs.realpathSync(explicit);
+  const fixture = env.ZMX_OFFLINE_FIXTURE === "1";
+  const bind = file => { if (fixture) fixtureCli(file, env); return fs.realpathSync(file); };
+  if (explicit) return bind(explicit);
+  let unusable = null;
   for (const directory of (env.PATH || "").split(path.delimiter)) {
     if (!directory) continue;
     for (const name of process.platform === "win32" ? ["zcode.exe", "zcode.cmd", "zcode"] : ["zcode"]) {
@@ -87,11 +90,30 @@ function findCli(explicit, env = process.env) {
         // accept it because a directory is also "executable".
         if (!fs.statSync(file).isFile()) continue;
         fs.accessSync(file, fs.constants.X_OK);
-        return fs.realpathSync(file);
-      } catch {}
+        return bind(file);
+      } catch { if (fixture && unusable === null) unusable = file; }
     }
   }
+  // In fixture mode a launcher that exists but cannot run is refused: the
+  // search never continues to the next directory, so a missing or unusable
+  // fake can never fall through to an installed CLI.
+  if (unusable !== null) fail("fixture_contract");
   fail("cli_missing");
+}
+
+// Offline fixture contract for the CLI. In fixture mode the launcher must be a
+// regular file inside the declared root with the declared digest.
+function fixtureCli(file, env) {
+  const root = env.ZMX_FIXTURE_CLI_ROOT, expected = env.ZMX_FIXTURE_CLI_SHA256;
+  if (typeof root !== "string" || !path.isAbsolute(root) ||
+      typeof expected !== "string" || !/^[a-f0-9]{64}$/.test(expected)) fail("fixture_contract");
+  let stat;
+  try { stat = fs.lstatSync(file); } catch { fail("fixture_contract"); }
+  if (stat.isSymbolicLink() || !stat.isFile()) fail("fixture_contract");
+  const real = fs.realpathSync(file);
+  if (!real.startsWith(fs.realpathSync(root) + path.sep)) fail("fixture_contract");
+  if (createHash("sha256").update(fs.readFileSync(real)).digest("hex") !== expected) fail("fixture_contract");
+  return real;
 }
 
 function resolveLaunch(cli, originalHome = os.homedir()) {
@@ -241,14 +263,10 @@ class EventParser {
 async function terminateTree(child) {
   if (!child.pid) return true;
   if (process.platform === "win32") {
-    // A process that already exited cannot be killed and taskkill reports it as
-    // not found. Probe first so a normally finished request is recorded as
-    // confirmed cleanup rather than an unresolved cleanup gap.
-    try { process.kill(child.pid, 0); } catch (error) { if (error.code === "ESRCH") return true; }
-    const result = spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { encoding: "utf8", shell: false, stdio: ["ignore", "pipe", "pipe"] });
-    if (result.status === 0) return true;
-    const output = `${result.stdout || ""}${result.stderr || ""}`;
-    if (/could not be found|not found/i.test(output)) return true;
+    // An exited root or a successful taskkill does not prove descendants gone.
+    if (child.exitCode !== null || child.signalCode !== null) return null;
+    try { spawnSync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"],
+      { stdio: "ignore", shell: false, windowsHide: true, timeout: 2000 }); } catch {}
     return null;
   }
   try { process.kill(-child.pid, "SIGTERM"); } catch (error) { return error.code === "ESRCH"; }
@@ -291,11 +309,30 @@ async function main(argv, deps = {}) {
   const receipt = { status: "input_error", cli_invoked: false, exit_code: null, signal: null, complete: false, model: null, stop_reason: null, truncated: null, usage: null, review_gate: "NOT_EVALUATED" };
   let child;
   let directory;
+  let signalCancelled = false;
+  const onEarlySignal = () => { signalCancelled = true; };
+  process.on("SIGINT", onEarlySignal); process.on("SIGTERM", onEarlySignal);
   try {
     try { checkInstall(); } catch { fail("install_mismatch"); }
     const args = parseArgs(argv);
-    const material = readUtf8(args.prompt);
-    const ids = args.ids ? validateIds(strictJson(readUtf8(args.ids))) : null;
+    const materialBytes = fs.readFileSync(args.prompt);
+    const idsBytes = args.ids ? fs.readFileSync(args.ids) : null;
+    const decode = bytes => {
+      if (!bytes.length || bytes.includes(0)) fail("input_error");
+      return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    };
+    const material = decode(materialBytes);
+    const ids = idsBytes ? validateIds(strictJson(decode(idsBytes))) : null;
+    if (process.env.ZMX_BATCH_ATTEMPT_ID) {
+      receipt.batch_attempt_id = process.env.ZMX_BATCH_ATTEMPT_ID;
+      receipt.batch_material_sha256 = createHash("sha256").update(materialBytes).digest("hex");
+      receipt.batch_config_sha256 = idsBytes ? createHash("sha256").update(idsBytes).digest("hex") : "";
+      if (!/^[a-f0-9-]{36}$/.test(receipt.batch_attempt_id) ||
+          receipt.batch_material_sha256 !== process.env.ZMX_BATCH_MATERIAL_SHA256 ||
+          receipt.batch_config_sha256 !== process.env.ZMX_BATCH_CONFIG_SHA256) fail("input_error");
+    }
+    const batchCancelled = () => signalCancelled || Boolean(process.env.ZMX_BATCH_CANCEL_FILE && fs.existsSync(process.env.ZMX_BATCH_CANCEL_FILE));
+    if (batchCancelled()) fail("cancelled");
     const prompt = buildPrompt(material, args.mode, ids);
     const cli = findCli(args.cli);
     const launch = resolveLaunch(cli);
@@ -306,6 +343,8 @@ async function main(argv, deps = {}) {
     // the supported contract is the runtime version, which may be on the second line.
     const runtimeVersion = typeof receipt.cli_version === "string" ? receipt.cli_version.match(/(?:^|\n)zcode-runtime\s+(\S+)/)?.[1] : null;
     if (runtimeVersion) receipt.cli_version = runtimeVersion;
+    await new Promise(resolve => setImmediate(resolve));
+    if (batchCancelled()) fail("cancelled");
     if (version.status !== 0 || receipt.cli_version !== SUPPORTED_CLI) fail("unsupported_cli");
     if (args.output) {
       const candidate = path.resolve(args.output);
@@ -343,12 +382,28 @@ async function main(argv, deps = {}) {
     const cliArgs = promptBytes > ARGV_PROMPT_LIMIT
       ? [...launch.prefix, "--prompt", ATTACHED_PROMPT, "--attach", attachedFile, "--cwd", work, "--mode", mode, "--output-format", "stream-json", "--workflow-mode", "disabled", "--toolsearch-mode", "off", "--disallowed-tools", DENIED_TOOLS.join(","), "--no-color"]
       : [...launch.prefix, "--prompt", prompt, "--cwd", work, "--mode", mode, "--output-format", "stream-json", "--workflow-mode", "disabled", "--toolsearch-mode", "off", "--disallowed-tools", DENIED_TOOLS.join(","), "--no-color"];
+    if (batchCancelled()) fail("cancelled");
     child = spawn(launch.command, cliArgs, { cwd: work, env: isolatedEnv(home), shell: false, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });    receipt.cli_invoked = Boolean(child.pid);
     progress("running");
-    const stop = status => { if (!problem) { problem = status; termination = terminateTree(child); } };
+    let cleanupDeadline, finishClose;
+    const closed = new Promise(resolve => {
+      finishClose = resolve;
+      child.once("close", (code, signal) => resolve({ code, signal }));
+    });
+    const stop = status => {
+      if (problem) return;
+      problem = status;
+      cleanupDeadline = setTimeout(() => {
+        child.stdout.destroy(); child.stderr.destroy(); child.unref();
+        finishClose({ code: child.exitCode, signal: child.signalCode, cleanup_deadline: true });
+      }, 4000);
+      termination = terminateTree(child);
+    };
     const timeout = setTimeout(() => stop("timeout"), args.timeout * 1000);
     const onSignal = () => stop("cancelled");
-    process.once("SIGINT", onSignal); process.once("SIGTERM", onSignal);
+    process.on("SIGINT", onSignal); process.on("SIGTERM", onSignal);
+    const cancelPoll = process.env.ZMX_BATCH_CANCEL_FILE ? setInterval(() => { if (batchCancelled()) onSignal(); }, 75) : null;
+    if (batchCancelled()) onSignal();
     child.stdout.on("data", data => {
       try {
         fs.writeSync(stdoutFd, data); bytes += data.length;
@@ -367,15 +422,18 @@ async function main(argv, deps = {}) {
       try { fs.writeSync(stderrFd, data); bytes += data.length; if (bytes > MAX_BYTES) stop("output_limit"); }
       catch { stop("io_error"); }
     });
-    const result = await new Promise(resolve => {
-      child.once("error", () => { stop("cli_error"); });
-      child.once("close", (code, signal) => resolve({ code, signal }));
-    });
+    child.once("error", () => { stop("cli_error"); });
+    const result = await closed;
+    if (cancelPoll) clearInterval(cancelPoll);
+    clearTimeout(cleanupDeadline);
+    if (batchCancelled() && !problem) problem = "cancelled";
     clearTimeout(timeout);
     process.removeListener("SIGINT", onSignal); process.removeListener("SIGTERM", onSignal);
     fs.closeSync(stdoutFd); fs.closeSync(stderrFd);
     receipt.exit_code = result.code; receipt.signal = result.signal;
-    receipt.cleanup_confirmed = await (termination || terminateTree(child));
+    receipt.cleanup_confirmed = result.cleanup_deadline ? null : await (termination || terminateTree(child));
+    receipt.cleanup_scope = process.platform === "win32" ? "descendants_unverified" : "posix_process_group_only";
+    if (problem) receipt.provider_remote_state = "UNKNOWN";
     const identities = [...new Set(parser.models.map(model => JSON.stringify(model)))];
     if (identities.length === 1) Object.assign(receipt, JSON.parse(identities[0]), { model_identity_source: "runtime.model_request" });
     else { receipt.model = null; receipt.model_identity_source = null; }
@@ -414,6 +472,7 @@ async function main(argv, deps = {}) {
     }
     catch { receipt.status = "io_error"; receipt.complete = false; receipt.review_gate = "NOT_EVALUATED"; }
   }
+  process.removeListener("SIGINT", onEarlySignal); process.removeListener("SIGTERM", onEarlySignal);
   return receipt;
 }
 

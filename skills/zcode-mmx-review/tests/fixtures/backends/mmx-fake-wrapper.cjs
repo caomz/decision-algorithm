@@ -55,7 +55,13 @@ function writeObserved() {
   fs.writeFileSync(path.join(runDir, "mmx-observed-input.json"), JSON.stringify(observed, null, 2) + "\n", { mode: 0o600, flag: "wx" });
 }
 
-if (config.behavior === "hang") {
+if (config.behavior === "delayed-success") {
+  writeObserved();
+  setTimeout(() => {
+    process.stdout.write(JSON.stringify(buildReceipt()) + "\n");
+    process.exitCode = config.exit;
+  }, config.exitMs);
+} else if (config.behavior === "hang") {
   // 信号处理器必须先于 observed 安装：取消用例在 observed 文件出现的瞬间就会发
   // 信号；若处理器尚未就位，默认行为会立即杀死 wrapper，取消语义失去确定性。
   process.on("SIGTERM", () => process.exit(143));

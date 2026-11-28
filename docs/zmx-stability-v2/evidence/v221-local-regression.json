@@ -1,0 +1,241 @@
+{
+  "format": 1,
+  "baseline": "6396f0ed282ce524b1f4342312a7d04276f84137",
+  "host": {
+    "os": "win32 (Windows native)",
+    "node": "v22.22.2",
+    "worktree": "D:/python_code/github_my/decision-algorithm-zmx-v221"
+  },
+  "baseline_tests": {
+    "zcode": {
+      "tests": 94,
+      "pass": 88,
+      "fail": 0,
+      "skipped": 6
+    },
+    "mmx": {
+      "tests": 157,
+      "pass": 141,
+      "fail": 0,
+      "skipped": 16
+    },
+    "zcode-mmx-review": {
+      "tests": 268,
+      "pass": 260,
+      "fail": 0,
+      "skipped": 8
+    },
+    "note": "zcode and mmx were recorded before any edit. The first cross-review run was polluted by a concurrent edit to skills/zcode/tests/zcode-batch.test.js (5 failures from a stale zcode release manifest: install_mismatch and doctor offline) and was rerun clean with the working tree stashed: 268 = 260 pass / 0 fail / 8 skipped. The clean totals match the Windows-native record in PR #39 (519 = 489/0/30)."
+  },
+  "defects": [
+    {
+      "id": "D1",
+      "title": "ZCode batch-safety ignored the wrapper's cleanup_confirmed / cleanup_scope",
+      "changed": [
+        "skills/zcode/scripts/batch-safety.js",
+        "skills/zcode/scripts/zcode-batch.js",
+        "skills/zcode/tests/zcode-batch.test.js",
+        "skills/zcode/.zcode-release.json",
+        "skills/zcode-mmx-review/tests/phase2-http-count.test.js"
+      ],
+      "semantics": "Only cleanup_confirmed === true (boolean) with a known cleanup_scope is evidence. false, null, a missing field, another type, a missing or unknown scope and descendants_unverified all leave the cleanup unconfirmed, and a shard with unconfirmed cleanup is never followed by a new launch. A business failure with confirmed cleanup keeps later shards running. On Windows the real wrapper reports cleanup_confirmed:null with descendants_unverified, so a real zcode batch stops after the first shard (decision A, recorded as a boundary).",
+      "reproduced": {
+        "command": "node --test skills/zcode/tests/zcode-batch.test.js",
+        "failed_tests": 7,
+        "observed": "every CLEANUP_* variant left shard.local_cleanup 'confirmed' and started the next shard; in review mode a missing cleanup_scope still produced gate 'PASS'. The vote test first ran in chat mode where votes are always null and could not discriminate; it was corrected to review mode and then reproduced gate 'PASS' on the unmodified code.",
+        "guard_tests_passing_before_fix": [
+          "a business failure with confirmed cleanup does not stop later shards"
+        ]
+      },
+      "after": {
+        "zcode": {
+          "command": "node --test \"skills/zcode/tests/**/*.test.js\"",
+          "tests": 103,
+          "pass": 97,
+          "fail": 0,
+          "skipped": 6
+        },
+        "zcode-mmx-review": {
+          "command": "node --test \"skills/zcode-mmx-review/tests/**/*.test.js\"",
+          "tests": 268,
+          "pass": 260,
+          "fail": 0,
+          "skipped": 8
+        },
+        "note": "phase2-http-count T06 needed its fixture receipt aligned with the real wrapper's cleanup contract (a business failure with confirmed cleanup keeps later shards running); its HTTP-count purpose is unchanged. The mmx suite is untouched by this change and is re-run in the final full pass."
+      }
+    },
+    {
+      "id": "S0",
+      "title": "Test isolation: forced offline entry, whitelisted child environment, and a CLI fixture contract",
+      "changed": [
+        "skills/zcode/tests/support/env.js",
+        "skills/mmx/tests/support/env.js",
+        "skills/zcode-mmx-review/tests/support/env.js",
+        "skills/zcode/tests/support/offline-test.js (new)",
+        "skills/mmx/tests/support/offline-test.js (new)",
+        "skills/zcode-mmx-review/tests/support/offline-test.js (new)",
+        "skills/zcode-mmx-review/tests/offline-entry.test.js (new)",
+        "skills/zcode/scripts/zcode-chat.js",
+        "skills/mmx/scripts/mmx-chat.js",
+        "skills/mmx/tests/mmx-chat.test.js",
+        "skills/mmx/tests/mmx-job.test.js",
+        "skills/mmx/tests/mmx-provider-slot.test.js",
+        "skills/mmx/tests/mmx-timeout-experiment.test.js",
+        "skills/mmx/tests/mmx-observation.test.js",
+        "skills/zcode/tests/zcode-chat.test.js",
+        "skills/zcode-mmx-review/tests/delivery-zcode.test.js",
+        "skills/zcode-mmx-review/tests/delivery-mmx.test.js",
+        "skills/zcode-mmx-review/tests/offline-guard.test.js",
+        "skills/zcode-mmx-review/tests/review-run.test.js",
+        "skills/zcode/.zcode-release.json",
+        ".github/workflows/ci.yml",
+        "README.md",
+        "skills/zcode/README.md",
+        "skills/zcode/references/verification.md",
+        "skills/mmx/README.md",
+        "skills/mmx/references/verification.md"
+      ],
+      "mechanism": "Three layers. (1) tests/support/offline-test.js is the only supported entry: it whitelists the test runner environment, marks it ZMX_OFFLINE_TEST=1 and audits the Node directory for provider launchers; cleanEnv refuses to build an environment outside it. (2) cleanEnv always forces ZMX_OFFLINE_FIXTURE=1 (an omitted wrapper fixture is refused, never defaulted to the production wrapper) and treats a provided PATH as additions prepended to the whitelisted base directories, each entry validated as a temp-sandbox directory; a host PATH cannot be attached. (3) In fixture mode the chat wrappers launch only a launcher inside the declared root with the declared digest, and a hit that does not satisfy the contract is refused instead of continuing the PATH search; production behaviour without the flag is unchanged.",
+      "reproduced": {
+        "command": "node skills/zcode-mmx-review/tests/support/offline-test.js skills/zcode-mmx-review/tests/offline-entry.test.js",
+        "observed": "Before the migration the source-scan test named the unisolated spawn sites (mmx-chat.test.js PATH inheritance, mmx-job/mmx-provider-slot inherited environments); the omitted-fixture case reserved an archive and ran the production wrapper; an unbound fake launcher could be started. Two written tests were corrected during reproduction: the PATH test premise (under the forced entry the runner PATH is already the whitelist, so a foreign directory stands in for a host PATH) and the scan window (the environment may be built a few lines before the spawn call)."
+      },
+      "after": {
+        "zcode": {
+          "command": "node skills/zcode/tests/support/offline-test.js \"skills/zcode/tests/**/*.test.js\"",
+          "tests": 103,
+          "pass": 97,
+          "fail": 0,
+          "skipped": 6
+        },
+        "mmx": {
+          "command": "node skills/mmx/tests/support/offline-test.js \"skills/mmx/tests/**/*.test.js\"",
+          "tests": 157,
+          "pass": 141,
+          "fail": 0,
+          "skipped": 16
+        },
+        "zcode-mmx-review": {
+          "command": "node skills/zcode-mmx-review/tests/support/offline-test.js \"skills/zcode-mmx-review/tests/**/*.test.js\"",
+          "tests": 275,
+          "pass": 265,
+          "fail": 0,
+          "skipped": 10
+        }
+      },
+      "notes": [
+        "The two new skips are the two new POSIX-only offline-entry tests (executable-bit semantics); the skip counts of every pre-existing suite are unchanged (6/16/8).",
+        "During migration a real defect was found and fixed in the environment strategy itself: a test-provided PATH replaced the base directories entirely, so the wrapper lost System32 and taskkill.exe failed with ENOENT (the tree_hang descendant-leak test caught it). The strategy now prepends additions and always keeps the whitelisted base directories.",
+        "skills/mmx/references/test-matrix.md keeps its historical run records untouched; the authoritative commands live in the README and verification.md files, and CI runs the forced entry.",
+        "Windows runs the sentinel case (same-name zcode/mmx launchers on PATH) through the batch entries; the chat-wrapper sentinel cases are POSIX-skipped and covered on CI Linux."
+      ]
+    },
+    {
+      "id": "D3",
+      "title": "result.json and record-manifest.json are published exclusively and atomically",
+      "changed": [
+        "skills/zcode-mmx-review/scripts/review-run.js",
+        "skills/zcode-mmx-review/tests/review-run.test.js",
+        "skills/zcode-mmx-review/tests/staged-review.test.js"
+      ],
+      "mechanism": "publishExclusive writes a complete, fsynced temporary file in the same directory and links it to the final name. link never replaces an existing record and at no instant does a partial file carry the final name; a caught failure removes its temporary; a crash between fsync and unlink leaves a temporary that verifyRun reports as a problem. The manifest is published first and result.json last, so a visible result always belongs to a complete verified archive.",
+      "reproduced": {
+        "command": "node skills/zcode-mmx-review/tests/support/offline-test.js --test-name-pattern \"V2.2.1 D3\" skills/zcode-mmx-review/tests/review-run.test.js",
+        "observed": "The ENOSPC injection left an empty result.json under the final name (the old saveNew created the file, then wrote). The two in-process tests (existing result.json never replaced, no temporary on a clean publication) passed on the unmodified code and are regression guards, marked as such. Two fault-injection matchers were corrected during reproduction: the descriptor regex must span pid.uuid (dot included) and the kill matcher must compare the basename, or it fires on primary-result.json first."
+      },
+      "after": {
+        "zcode-mmx-review": {
+          "command": "node skills/zcode-mmx-review/tests/support/offline-test.js \"skills/zcode-mmx-review/tests/**/*.test.js\"",
+          "tests": 279,
+          "pass": 269,
+          "fail": 0,
+          "skipped": 10
+        },
+        "note": "Four new tests: ENOSPC (child process, injected through a preload with two branches matching the old and the new write path), process interruption at the link (child process, SIGKILL before the link completes), an existing result.json never replaced, and a clean publication leaving no temporary. The ENOSPC case additionally proves the launch-time P1 stays published in primary-result.json, bound to the request material_version."
+      }
+    },
+    {
+      "id": "D4",
+      "title": "The acceptance approval is bound to the CLI the runner actually launches",
+      "changed": [
+        "skills/mmx/scripts/mmx-timeout-experiment.js",
+        "skills/mmx/scripts/acceptance-profile.js",
+        "skills/mmx/tests/mmx-timeout-experiment.test.js",
+        "skills/mmx/tests/mmx-observation.test.js"
+      ],
+      "mechanism": "acceptance-profile.js hands the verified identity (node.version, cli.package, cli.version, cli.entry_sha256, undici.version) to the entry in ZMX_ACCEPTANCE_BINDING. The real-CLI suite re-derives the identity of what --cli-root actually resolves (package, version, entry digest, undici version, running Node) and compares every field before the network namespace is checked, before the output directory exists and before any process starts. The suite also refuses to run without a binding at all, so direct invocation cannot bypass admission.",
+      "reproduced": {
+        "command": "node skills/mmx/tests/support/offline-test.js --test-name-pattern \"V2.2.1 D4\" skills/mmx/tests/mmx-timeout-experiment.test.js",
+        "observed": "The A/B counterexample failed on the unmodified code at the isolation check: with an approval for package A and --cli-root naming package B, the runner never compared anything and would have launched B on an isolated Linux host. checkBinding was not exported."
+      },
+      "after": {
+        "mmx": {
+          "command": "node skills/mmx/tests/support/offline-test.js \"skills/mmx/tests/**/*.test.js\"",
+          "tests": 160,
+          "pass": 144,
+          "fail": 0,
+          "skipped": 16
+        },
+        "note": "Three new tests: the A/B refusal (B never launched, no output directory, refusal names cli.entry_sha256 and undici.version), the checkBinding field table including a missing binding, and the profile handing the admitted identity to the entry it runs (probe). The existing zero-request synthetic-CLI case now runs WITH a matching binding and doubles as the positive admission path on CI Linux."
+      }
+    },
+    {
+      "id": "D5",
+      "title": "HTTP observation is judged per socket, and verdicts use only complete model requests",
+      "changed": [
+        "skills/mmx/scripts/mmx-timeout-experiment.js",
+        "skills/mmx/tests/mmx-observation.test.js"
+      ],
+      "mechanism": "observe() follows every socket on its own: a socket that closes or stays open without ever delivering a request head is counted (headless_connections plus an open_headless live count), so the aggregate comparison connections > request_heads can no longer be defeated by a keep-alive connection that carried several requests. checkContinue/checkExpectation/upgrade/connect also mark their socket as headed. summarize() extracts the report verdicts: real_mmx_transport and provider_internal_retry now require, per case, a fully observed connection set and a complete request to the model endpoint; requests to other endpoints, aborted or in-flight bodies, client errors and headless connections are unknown, not zero. The raw any-endpoint repeat count is kept for diagnosis.",
+      "reproduced": {
+        "command": "node skills/mmx/tests/support/offline-test.js --test-name-pattern \"V2.2.1 D5\" skills/mmx/tests/mmx-observation.test.js",
+        "observed": "With two requests over one keep-alive connection plus one headless connection (connections 2, request heads 2) the observation stayed complete forever (deadline exceeded); summarize did not exist. The reproduction also exposed a test-hygiene defect: the until deadline threw before close(srv), leaving the server with open keep-alive sockets; the test now closes in a finally."
+      },
+      "after": {
+        "mmx": {
+          "command": "node skills/mmx/tests/support/offline-test.js \"skills/mmx/tests/**/*.test.js\"",
+          "tests": 162,
+          "pass": 146,
+          "fail": 0,
+          "skipped": 16
+        },
+        "note": "Two new tests: the keep-alive masking case (headless connection seen, unknown with connections_without_request_head) and the verdict table (other-endpoint-only is NOT_EVALUATED with the case unobserved; mixed is INCOMPLETE_LOCAL_ONLY; an unknown case cannot verify internal retry; fully observed single-request cases are OBSERVED_LOCAL_SCENARIOS; node-fetch stays NOT_EVALUATED). The existing layered-counting expectation gained headless_connections: 0."
+      }
+    },
+    {
+      "id": "D6",
+      "title": "Test teardown stops owned processes within a bound and verifies their exit",
+      "changed": [
+        "skills/zcode/tests/support/teardown.js (new)",
+        "skills/mmx/tests/support/teardown.js (new)",
+        "skills/zcode-mmx-review/tests/support/teardown.js (new)",
+        "skills/zcode-mmx-review/tests/teardown.test.js (new)",
+        "skills/zcode/tests/zcode-batch.test.js",
+        "skills/mmx/tests/mmx-batch.test.js",
+        "skills/mmx/tests/batch-cleanup.test.js",
+        "skills/zcode-mmx-review/tests/review-run.test.js",
+        "skills/zcode-mmx-review/tests/staged-review.test.js",
+        "skills/mmx/tests/mmx-chat.test.js",
+        "skills/zcode-mmx-review/tests/offline-entry.test.js",
+        "skills/zcode/.zcode-release.json"
+      ],
+      "mechanism": "tests/support/teardown.js tracks (a) ChildProcess objects the test spawned and (b) pids that fixtures record together with a marker this run placed into the command line. stop() is bounded: SIGTERM, 1.5 s, SIGKILL, 5 s, then the exit is verified; a survivor fails the run by name. A live pid whose command line lacks the marker is never signalled - for a recorded pid that proves the original process exited and the pid was reused. Ownership is proven through an owned probe (command-line query with one retry; the Windows command-line launcher is resolved absolutely because it lives outside the directories CreateProcess searches and is unreachable from the whitelisted test PATH).",
+      "reproduced": {
+        "command": "node scripts/tmp-teardown-probe.cjs (removed after the run)",
+        "observed": "The old pattern (finally { if alive child.kill(SIGTERM) }, no wait, no verification) leaves the real leak shape alive: the PIPE_HOLDER fixture's detached descendant survived the killed parent (parent dead: true, detached descendant alive: true); the recorded marker was proven through the command line and the bounded stop verified the exit (alive: false). On Windows the direct-child SIGTERM case does not leak (kill is unconditional there); the POSIX deaf-wrapper leak is covered by the teardown tests and CI."
+      },
+      "after": {
+        "zcode": { "tests": 103, "pass": 97, "fail": 0, "skipped": 6 },
+        "mmx": { "tests": 162, "pass": 146, "fail": 0, "skipped": 16 },
+        "zcode-mmx-review": { "tests": 282, "pass": 272, "fail": 0, "skipped": 10 },
+        "note": "Three new teardown tests (deaf child stopped within a bound with verified exit; recorded pid with marker stopped, unprovable pid untouched; teardown leaves an unprovable pid alone and confirms the rest). Fixture descendants and SIGTERM-deaf wrappers now record pids with file-unique markers; the survived branch of stop() is defensive and unreachable while SIGKILL works."
+      }
+    }
+  ],
+  "status": {
+    "DURABLE_DEFAULT": "DISABLED",
+    "REAL_BACKEND": "DISABLED",
+    "REAL_PROVIDER": "NOT_EVALUATED"
+  }
+}

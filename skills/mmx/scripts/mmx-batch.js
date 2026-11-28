@@ -4,9 +4,7 @@
 //   1. budget: every shard goes through mmx-chat.js, so the wrapper/profile
 //      output budget (524288) always applies. The bare `mmx text chat` CLI
 //      default of 4096 tokens cannot silently truncate a review any more.
-//      A shard that still exhausts its budget (caller passed a small
-//      --max-tokens) is retried once at the profile budget, both receipts
-//      kept — never hidden.
+//      Budget exhaustion is reported without automatic replay.
 //   2. concurrency: shards execute through a bounded parallel pool instead
 //      of N sequential host tool calls, so wall time is ~ceil(N/concurrency)
 //      shard durations, not their sum.
@@ -18,24 +16,16 @@
 
 const fs = require("fs");
 const path = require("path");
-const { spawn } = require("child_process");
-const { terminateChildTree } = require("./mmx-chat.js");
+const { createBatch, limitSeconds, sourceBytes, resolveWrapper } = require("./batch-safety.js");
 
 const VERSION = "1.0.0";
 const DEFAULT_PROFILE = path.join(__dirname, "..", "profiles", "local.json");
 const DEFAULT_WRAPPER = path.join(__dirname, "mmx-chat.js");
-const DEFAULT_CONCURRENCY = 2;
+const DEFAULT_CONCURRENCY = 1;
 const MAX_CONCURRENCY = 8;
 const MAX_SHARDS = 32;
-// Test hook only: a production run never overrides the quota backoff.
-const QUOTA_RETRY_DELAY_MS = (() => {
-  const raw = process.env.MMX_BATCH_QUOTA_RETRY_MS;
-  if (raw === undefined) return 30000;
-  if (!/^\d+$/.test(raw) || Number(raw) > 30000) return 30000;
-  return Number(raw);
-})();
-const STDOUT_CAP_BYTES = 16 * 1024 * 1024;
-const STDERR_CAP_BYTES = 64 * 1024;
+const DEFAULT_SHARD_MAX_BYTES = 16 * 1024;
+const SHARD_TARGET_BYTES = 12 * 1024;
 const MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 // Gate enum literals live in named constants: the scanner password rule
 // misreads a bare ternary of the two literals as a credential assignment,
@@ -99,7 +89,7 @@ function readProfileBudget(file) {
 
 function parseArgs(argv) {
   const out = { promptFiles: [], promptsDir: null, concurrency: null, model: null,
-    maxTokens: null, timeout: null, wrapTimeout: null, profileFile: null, receiptFile: null };
+    maxTokens: null, timeout: null, wrapTimeout: null, profileFile: null, receiptFile: null, supervisorTimeout: null, batchTimeout: null, shardMaxBytes: DEFAULT_SHARD_MAX_BYTES, expectedCliVersion: null };
   const seen = new Set();
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -118,6 +108,17 @@ function parseArgs(argv) {
         const value = next();
         if (!/^\d+$/.test(value)) usageError("--concurrency must be a positive integer.");
         out.concurrency = Number(value);
+        break;
+      }
+      case "--shard-max-bytes": {
+        const value = next();
+        if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) < 8192 || Number(value) > 16384) usageError("--shard-max-bytes must be 8192..16384 bytes (experimental logical-shard limit).");
+        out.shardMaxBytes = Number(value);
+        break;
+      }
+      case "--expected-cli-version": {
+        out.expectedCliVersion = next();
+        if (!/^\d+\.\d+\.\d+$/.test(out.expectedCliVersion)) usageError("--expected-cli-version must be an exact numeric semver.");
         break;
       }
       case "--model": out.model = next(); break;
@@ -147,6 +148,13 @@ function parseArgs(argv) {
       }
       case "--profile-file": out.profileFile = path.resolve(next()); break;
       case "--receipt-file": out.receiptFile = path.resolve(next()); break;
+      case "--supervisor-timeout-seconds":
+      case "--batch-timeout-seconds": {
+        const value = next();
+        if (!/^\d+$/.test(value) || !limitSeconds(Number(value))) usageError("supervisor/batch timeout must be 1..86400 seconds");
+        out[arg === "--supervisor-timeout-seconds" ? "supervisorTimeout" : "batchTimeout"] = Number(value);
+        break;
+      }
       default: usageError(`Unknown flag: ${arg}`);
     }
   }
@@ -195,7 +203,12 @@ function collectShardFiles(args) {
     let unique = label;
     for (let n = 2; labeled.some(s => s.label === unique); n++) unique = `${label}-${n}`;
     label = unique;
-    labeled.push({ label, file, real });
+    let bytes;
+    try { bytes = sourceBytes(real); }
+    catch { usageError("Prompt shard is unreadable or changed while reading."); }
+    const shardMaxBytes = args.shardMaxBytes ?? DEFAULT_SHARD_MAX_BYTES;
+    if (bytes.length > shardMaxBytes) usageError(`Logical shard exceeds ${shardMaxBytes} bytes. Regenerate task-focused 8–16 KiB shards; do not truncate or split through evidence units.`);
+    labeled.push({ label, file, real, bytes });
   }
   return labeled;
 }
@@ -204,128 +217,8 @@ function collectShardFiles(args) {
 // One shard attempt: spawn the single-shot wrapper, parse its JSON envelope.
 // ---------------------------------------------------------------------------
 
-const liveChildren = new Set();
 let cancelled = false;
-
-function runWrapperOnce(promptFile, fixedArgs) {
-  return new Promise(resolve => {
-    const wrapperPath = process.env.MMX_BATCH_WRAPPER || DEFAULT_WRAPPER;
-    const args = ["--prompt-file", promptFile, ...fixedArgs];
-    let child;
-    try {
-      child = spawn(process.execPath, [wrapperPath, ...args], {
-        stdio: ["ignore", "pipe", "pipe"], shell: false, windowsHide: true,
-      });
-    } catch (err) {
-      resolve({ receipt: { status: "child_error", error: `could not spawn wrapper: ${err.code || err.message}` }, duration: 0 });
-      return;
-    }
-    liveChildren.add(child);
-    const stdout = [];
-    const stderr = [];
-    let truncated = false;
-    const started = Date.now();
-    const absorb = (chunks, counter, chunk, limit) => {
-      if (counter.value >= limit) { truncated = true; return; }
-      const take = Math.min(chunk.length, limit - counter.value);
-      chunks.push(take === chunk.length ? chunk : chunk.subarray(0, take));
-      counter.value += take;
-    };
-    const stdoutCounter = { value: 0 };
-    const stderrCounter = { value: 0 };
-    child.stdout.on("data", chunk => absorb(stdout, stdoutCounter, chunk, STDOUT_CAP_BYTES));
-    child.stderr.on("data", chunk => absorb(stderr, stderrCounter, chunk, STDERR_CAP_BYTES));
-    child.on("error", err => {
-      liveChildren.delete(child);
-      resolve({ receipt: { status: "child_error", error: `wrapper spawn failed: ${err.code || err.message}` }, duration: 0 });
-    });
-    child.on("close", code => {
-      liveChildren.delete(child);
-      const duration = (Date.now() - started) / 1000;
-      if (cancelled) {
-        resolve({ receipt: { status: "cancelled", exit_code: code }, duration });
-        return;
-      }
-      const outText = Buffer.concat(stdout).toString("utf8").trim();
-      const errText = Buffer.concat(stderr).toString("utf8").trim();
-      if (!outText) {
-        resolve({ receipt: {
-          status: "child_error", exit_code: code,
-          error: "wrapper produced no stdout envelope",
-          ...(errText ? { stderr_tail: errText.slice(0, 1000) } : {}),
-        }, duration });
-        return;
-      }
-      if (truncated) {
-        resolve({ receipt: { status: "child_error", exit_code: code, error: "wrapper stdout exceeded the batch capture cap" }, duration });
-        return;
-      }
-      let receipt;
-      try { receipt = JSON.parse(outText); }
-      catch {
-        resolve({ receipt: { status: "child_error", exit_code: code, error: "wrapper stdout was not valid JSON" }, duration });
-        return;
-      }
-      if (receipt === null || typeof receipt !== "object" || Array.isArray(receipt) ||
-          typeof receipt.status !== "string") {
-        resolve({ receipt: { status: "child_error", exit_code: code, error: "wrapper envelope is not a JSON object with a status" }, duration });
-        return;
-      }
-      resolve({ receipt, duration });
-    });
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Retry policy — one explicit retry, both receipts kept. Budget retries only
-// make sense when the retry target exceeds the effective budget; a shard that
-// still truncates at the profile budget is reported honestly for re-sharding.
-// ---------------------------------------------------------------------------
-
-async function runShardWithRetries(shard, fixedArgs, effectiveBudget, retryBudget) {
-  const first = await runWrapperOnce(shard.file, fixedArgs);
-  let retryReason = null;
-  let backoffSeconds = 0;
-  if (first.receipt.status === "quota_error") retryReason = "quota_error";
-  else if ((first.receipt.status === "thinking_budget_exhausted" ||
-            (first.receipt.status === "ok" && first.receipt.truncated === true)) &&
-           effectiveBudget !== null && retryBudget > effectiveBudget) {
-    retryReason = "budget_exhausted";
-  }
-
-  if (retryReason === null || cancelled) {
-    return { shard: shard.label, prompt_file: shard.file, retried: false, retry_reason: null,
-      duration_seconds: first.duration, ...first.receipt };
-  }
-
-  let second = first;
-  if (retryReason === "quota_error") {
-    await new Promise(resolve => setTimeout(resolve, QUOTA_RETRY_DELAY_MS));
-    backoffSeconds = QUOTA_RETRY_DELAY_MS / 1000;
-    // A cancellation during the backoff must not spawn a new child.
-    if (cancelled) {
-      return { shard: shard.label, prompt_file: shard.file, retried: false, retry_reason: retryReason,
-        retry_backoff_seconds: backoffSeconds, duration_seconds: first.duration + backoffSeconds,
-        first_attempt: first.receipt, status: "cancelled", complete: false };
-    }
-    second = await runWrapperOnce(shard.file, fixedArgs);
-  } else {
-    // Swap the caller budget for the profile budget on the retry attempt.
-    const retryArgs = [...fixedArgs];
-    const budgetIndex = retryArgs.indexOf("--max-tokens");
-    if (budgetIndex >= 0) retryArgs.splice(budgetIndex, 2);
-    retryArgs.push("--max-tokens", String(retryBudget));
-    second = await runWrapperOnce(shard.file, retryArgs);
-  }
-
-  return {
-    shard: shard.label, prompt_file: shard.file, retried: true, retry_reason: retryReason,
-    retry_backoff_seconds: backoffSeconds,
-    duration_seconds: first.duration + second.duration + backoffSeconds,
-    first_attempt: first.receipt,
-    ...second.receipt,
-  };
-}
+let controller = null;
 
 // ---------------------------------------------------------------------------
 // Main — bounded pool over shards, preserving input order in the result.
@@ -338,51 +231,65 @@ async function main() {
     return;
   }
   if (argv.length === 1 && argv[0] === "--help") {
-    process.stdout.write(JSON.stringify({ status: "usage", usage: "node mmx-batch.js --prompt-file FILE [--prompt-file FILE ...] | --prompts-dir DIR [--concurrency 2] [--model ID] [--max-tokens N] [--timeout SEC] [--wrap-timeout SEC] [--profile-file FILE] [--receipt-file FILE]" }) + "\n");
+    process.stdout.write(JSON.stringify({ status: "usage", usage: "node mmx-batch.js --prompt-file FILE [--prompt-file FILE ...] | --prompts-dir DIR [--concurrency 1] [--model ID] [--max-tokens N] [--timeout SEC] [--wrap-timeout SEC] [--profile-file FILE] [--receipt-file FILE] [--supervisor-timeout-seconds SEC] [--batch-timeout-seconds SEC] [--shard-max-bytes 8192..16384] [--expected-cli-version VERSION]" }) + "\n");
     return;
   }
 
   const args = parseArgs(argv);
   const shards = collectShardFiles(args);
   const profileFile = args.profileFile || DEFAULT_PROFILE;
-  const retryBudget = readProfileBudget(profileFile);
+  let profileBytes, profileData;
+  try { profileBytes = sourceBytes(profileFile); profileData = JSON.parse(profileBytes.toString("utf8")); }
+  catch { usageError("MMX runtime profile is unreadable"); }
+  const retryBudget = profileData?.max_tokens;
+  if (profileData?.format !== 1 || !positiveInteger(retryBudget)) usageError("MMX runtime profile is invalid");
   const effectiveBudget = args.maxTokens !== null ? args.maxTokens : retryBudget;
 
   const fixedArgs = [];
-  if (args.profileFile !== null) fixedArgs.push("--profile-file", args.profileFile);
+  if (args.expectedCliVersion !== null) fixedArgs.push("--expected-cli-version", args.expectedCliVersion);
   if (args.model !== null) fixedArgs.push("--model", args.model);
   if (args.maxTokens !== null) fixedArgs.push("--max-tokens", String(args.maxTokens));
-  if (args.timeout !== null) fixedArgs.push("--timeout", String(args.timeout));
-  if (args.wrapTimeout !== null) fixedArgs.push("--wrap-timeout", String(args.wrapTimeout));
 
   const concurrency = args.concurrency ?? DEFAULT_CONCURRENCY;
   const started = Date.now();
-  const results = new Array(shards.length);
-  let nextIndex = 0;
-
-  async function worker() {
-    while (!cancelled) {
-      const index = nextIndex++;
-      if (index >= shards.length) return;
-      results[index] = await runShardWithRetries(shards[index], fixedArgs, effectiveBudget, retryBudget);
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(concurrency, shards.length) }, worker));
+  const wrap = args.wrapTimeout ?? Number(process.env.MMX_CHAT_WRAP_TIMEOUT ?? profileData.wrapper_timeout_seconds);
+  const req = args.timeout ?? Number(process.env.MMX_CHAT_REQ_TIMEOUT ?? profileData.request_timeout_seconds);
+  if (!positiveInteger(wrap) || !positiveInteger(req) || wrap <= req || wrap > 3600) usageError("invalid effective request/wrapper deadline (batch max 3600 seconds)");
+  fixedArgs.push("--timeout", String(req), "--wrap-timeout", String(wrap));
+  const supervisorSeconds = args.supervisorTimeout ?? wrap + 20;
+  // Resolve the per-shard wrapper before any evidence directory is reserved.
+  let wrapper;
+  try { wrapper = resolveWrapper(process.env, "mmx", DEFAULT_WRAPPER); }
+  catch (error) { fail({ status: "usage_error", gate: GATE_NOT_EVALUATED, error: error.message }); return; }
+  try { controller = createBatch({ side: "mmx", args, shards, fixedArgs,
+    configFiles: [{ flag: "--profile-file", bytes: profileBytes, name: "profile.json" }],
+    supervisorSeconds, parseReceipt: JSON.parse }); }
+  catch { fail({ status: "archive_error", gate: GATE_NOT_EVALUATED, error: "could not reserve or snapshot batch evidence" }); return; }
+  await new Promise(resolve => setImmediate(resolve));
+  if (cancelled) controller.stop("cancelled");
+  const results = await controller.run(wrapper);
 
   let okCount = 0;
   let transportOkCount = 0;
   let truncatedCount = 0;
   let retriedCount = 0;
+  let lifecycleOkCount = 0;
   for (const result of results) {
     if (!result) continue; // A cancelled batch may leave unscheduled shards empty.
     if (result.status === "ok") {
       okCount++;
-      if (result.complete === true && result.truncated !== true) transportOkCount++;
+      if (result.transport_validation === GATE_PASS) transportOkCount++;
       else truncatedCount++;
     }
+    if (result.lifecycle_validation === GATE_PASS) lifecycleOkCount++;
     if (result.retried) retriedCount++;
   }
-  const gate = transportOkCount === shards.length ? GATE_PASS : GATE_NOT_EVALUATED;
+  const transportGate = transportOkCount === shards.length ? GATE_PASS : GATE_NOT_EVALUATED;
+  const lifecycleGate = lifecycleOkCount === shards.length ? GATE_PASS : GATE_NOT_EVALUATED;
+  // A batch gate PASS is a safe completion: every shard delivered on
+  // transport and every shard's local cleanup confirmed. Both are reported
+  // separately so neither can stand in for the other.
+  const gate = transportOkCount === shards.length && lifecycleOkCount === shards.length ? GATE_PASS : GATE_NOT_EVALUATED;
   // Batch status follows transport-level usability, not raw API success: a
   // truncated reply is not a delivered shard even though status was "ok".
   const batchStatus = transportOkCount === shards.length ? "ok" : (transportOkCount > 0 ? "partial" : "failed");
@@ -390,38 +297,31 @@ async function main() {
   const envelope = {
     status: batchStatus,
     gate,
+    transport_gate: transportGate,
+    lifecycle_gate: lifecycleGate,
+    review_gate: GATE_NOT_EVALUATED,
     batch: {
-      shards: shards.length, ok: okCount, transport_ok: transportOkCount,
+      shards: shards.length, ok: okCount, transport_ok: transportOkCount, lifecycle_ok: lifecycleOkCount,
       truncated_or_incomplete: truncatedCount, retried: retriedCount,
       concurrency, wall_seconds: Number(((Date.now() - started) / 1000).toFixed(1)),
       effective_max_tokens: effectiveBudget, retry_max_tokens: retryBudget,
+      automatic_retries: 0,
+      logical_sharding: { recommended_target_bytes: SHARD_TARGET_BYTES, experimental_range_bytes: [8192, 16384], max_prompt_bytes: args.shardMaxBytes, shard_bytes: shards.map(s => s.bytes.length), coverage: "caller_declared_logical_units" },
     },
     shards: results,
   };
-  if (args.receiptFile !== null) {
-    envelope.receipt_file = args.receiptFile;
-    try {
-      fs.writeFileSync(args.receiptFile, JSON.stringify(envelope, null, 2) + "\n", { mode: 0o600 });
-    } catch (err) {
-      delete envelope.receipt_file;
-      envelope.receipt_file_write_error = `could not write receipt file: ${err.code || err.message}`;
-    }
-  }
-  if (gate === GATE_PASS) emit(envelope);
+  controller.finalize(envelope);
+  if (envelope.status === "ok" && envelope.gate === GATE_PASS) emit(envelope);
   else fail(envelope);
 }
 
-function onSignal(code) {
-  if (emitted) process.exit(code);
+function onSignal() {
+  if (emitted || cancelled) return;
   cancelled = true;
-  for (const child of liveChildren) terminateChildTree(child, true, process.platform !== "win32");
-  fail({ status: "cancelled", exit_code: code, note: "batch interrupted; shard receipts up to this point are lost" });
+  controller?.stop("cancelled");
 }
-process.on("SIGTERM", () => onSignal(143));
-process.on("SIGINT", () => onSignal(130));
-process.on("SIGHUP", () => onSignal(129));
-
 if (require.main === module) {
+  for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) process.on(signal, onSignal);
   main().catch(error => {
     fail(error.envelope ?? { status: "batch_error", error: "mmx-batch failed locally." });
   });

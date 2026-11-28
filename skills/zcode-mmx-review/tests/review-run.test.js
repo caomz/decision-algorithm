@@ -4,7 +4,7 @@
 // 取消与超时、verify 全部用例、doctor 反例。全部离线；本文件不删除任何文件，
 // 自建产物都留在 mkdtemp(os.tmpdir()) 之下（受控 TMPDIR）。
 
-const { test, describe } = require("node:test");
+const { test, describe, after } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -15,7 +15,23 @@ const { createHash } = require("node:crypto");
 const RUNNER = path.resolve(__dirname, "../scripts/review-run.js");
 const runner = require(RUNNER);
 const { cleanEnv } = require("./support/env.js");
+
+// Creating a file symbolic link needs extra privilege on some Windows hosts.
+// Symlink-dependent cases skip where the host cannot create one; a skip is
+// reported as a skip and never counts as a pass for that behaviour.
+const canSymlink = (() => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "zmx-symlink-probe-"));
+  const file = path.join(dir, "file"), link = path.join(dir, "link");
+  try { fs.writeFileSync(file, "x"); fs.symlinkSync(file, link, "file"); return fs.readlinkSync(link) === file; }
+  catch { return false; }
+  finally { try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} }
+})();
+const symlinkSkip = !canSymlink && "file symbolic links cannot be created on this host";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "zmx-review-run-"));
+// Children spawned by the signal tests are tracked; teardown stops any
+// survivor with a bounded SIGTERM -> SIGKILL and verifies the exit.
+const { track, stop, teardown } = require("./support/teardown.js");
+after(async () => { await teardown(); });
 const sha256 = bytes => createHash("sha256").update(bytes).digest("hex");
 
 const PACKET = {
@@ -50,12 +66,16 @@ function roundFor(scenario, name, options = {}) {
   const argv = { zcode: assembled.zcode.argv, mmx: assembled.mmx.argv };
   return runner.runFixtureRound(inputs, {
     out: dir, scenario, timeoutSeconds: 600, maxTokens: 524288,
-    argv, envBase: { PATH: process.env.PATH },
+    argv, envBase: { PATH: cleanEnv().PATH },
+    strategy: options.strategy ?? "dual-parallel",
     fakeProcessMs: options.fakeProcessMs ?? 10000,
   }).then(round => ({ round, dir, argv }));
 }
 
+// Existing adjudication and lifecycle regressions explicitly exercise full parallel acceptance.
+// The primary-first default is covered independently in staged-review.test.js.
 function runCli(args, extraEnv = {}) {
+  if (args[0] === "run" && !args.includes("--strategy")) args = [...args, "--strategy", "dual-parallel"];
   return spawnSync(process.execPath, [RUNNER, ...args], {
     encoding: "utf8", timeout: 120000, maxBuffer: 16 * 1024 * 1024,
     env: cleanEnv(extraEnv),
@@ -353,28 +373,28 @@ describe("cli run smoke", () => {
 // 取消：已完成的单方 FAIL 保留，未完成一侧记 cancelled
 // ---------------------------------------------------------------------------
 
-test("SIGTERM mid-run cancels but preserves the bound FAIL", { timeout: 60000 }, async () => {
+test("SIGTERM mid-run cancels but preserves the bound FAIL", { timeout: 60000, skip: process.platform === "win32" && "POSIX signal semantics; Windows process-tree cancellation requires separate native tests" }, async () => {
   const out = path.join(root, "cli-cancel");
-  const child = spawn(process.execPath, [RUNNER, "run", "--backend", "fixture", "--scenario", "zcode-fail-mmx-hang", "--packet", packetFile, "--out", out], {
-    stdio: ["ignore", "pipe", "pipe"], env: cleanEnv(),
+  const child = spawn(process.execPath, [RUNNER, "run", "--backend", "fixture", "--strategy", "dual-parallel", "--scenario", "zcode-fail-mmx-hang", "--packet", packetFile, "--out", out], {
+    stdio: ["ignore", "pipe", "pipe"], env: cleanEnv({ ZMX_TEST_CLOSE_MARKER: "1" }),
   });
+  track(child);
   let stdout = "";
   child.stdout.on("data", data => { stdout += data; });
   // mmx 一侧 hang 前会先写 observed 文件；它出现即说明两侧均已启动。
   const mmxStarted = path.join(out, "mmx-observed-input.json");
   for (let i = 0; i < 200 && !fs.existsSync(mmxStarted); i++) await new Promise(resolve => setTimeout(resolve, 100));
   assert.ok(fs.existsSync(mmxStarted), "mmx side should have started before cancellation");
-  // 快速失败的 zcode 一侧在 mmx observed 出现后几十毫秒内 close；给入口留出处理
-  // close、绑定 FAIL 的时间再发取消信号，避免"取消先于 zcode close"的负载竞态
-  // 把本用例变成假失败。
-  await new Promise(resolve => setTimeout(resolve, 300));
+  const zcodeClosed = path.join(out, "tmp", "zcode-closed.marker");
+  for (let i = 0; i < 200 && !fs.existsSync(zcodeClosed); i++) await new Promise(resolve => setTimeout(resolve, 50));
+  assert.ok(fs.existsSync(zcodeClosed), "zcode close marker must precede cancellation");
   child.kill("SIGTERM");
   const code = await new Promise(resolve => child.once("close", resolve));
-  assert.equal(code, 2);
+  assert.equal(code, 1);
   const result = JSON.parse(fs.readFileSync(path.join(out, "result.json"), "utf8"));
   assert.equal(result.cancelled, true);
   assert.equal(result.round_status, "NOT_EVALUATED");
-  assert.equal(result.review_gate, "NOT_EVALUATED");
+  assert.equal(result.review_gate, "FAIL");
   assert.equal(result.providers.zcode.eligible, true);
   assert.equal(result.providers.zcode.gate, "FAIL");
   const mmxExecution = JSON.parse(fs.readFileSync(path.join(out, "mmx-execution.json"), "utf8"));
@@ -387,7 +407,7 @@ test("SIGTERM mid-run cancels but preserves the bound FAIL", { timeout: 60000 },
 // 的信号只被接住；spawn 异步失败记 spawn_error、退出码 2。
 // ---------------------------------------------------------------------------
 
-describe("second signals and entry hardening (fix2)", () => {
+describe("second signals and entry hardening (fix2)", { skip: process.platform === "win32" && "POSIX double-signal and pgrep semantics are not available on Windows" }, () => {
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
   const leftoverPids = dir => {
     const found = spawnSync("pgrep", ["-f", dir], { encoding: "utf8" });
@@ -396,18 +416,22 @@ describe("second signals and entry hardening (fix2)", () => {
   };
   const spawnRun = (name, scenario, extraEnv = {}) => {
     const out = path.join(root, name);
-    const child = spawn(process.execPath, [RUNNER, "run", "--backend", "fixture", "--scenario", scenario, "--packet", packetFile, "--out", out], {
+    const child = spawn(process.execPath, [RUNNER, "run", "--backend", "fixture", "--strategy", "dual-parallel", "--scenario", scenario, "--packet", packetFile, "--out", out], {
       stdio: ["ignore", "pipe", "pipe"], env: cleanEnv(extraEnv),
     });
+    track(child);
     return { out, child };
   };
   const waitForMmxObserved = async out => {
     const mmxStarted = path.join(out, "mmx-observed-input.json");
     for (let i = 0; i < 200 && !fs.existsSync(mmxStarted); i++) await sleep(100);
     assert.ok(fs.existsSync(mmxStarted), "mmx side should have started");
+    const primary = path.join(out, "primary-result.json");
+    for (let i = 0; i < 200 && !fs.existsSync(primary); i++) await sleep(50);
+    assert.ok(fs.existsSync(primary), "primary checkpoint must precede the signal");
   };
 
-  const doubleSignalCase = (name, scenario, signal) => test(`${signal} twice: records survive, exit 2, mmx cancelled by SIGKILL, verify match (${name})`, { timeout: 60000 }, async () => {
+  const doubleSignalCase = (name, scenario, signal) => test(`${signal} twice: records survive, valid P1 veto survives, mmx cancelled by SIGKILL, verify match (${name})`, { timeout: 60000 }, async () => {
     const { out, child } = spawnRun(`cli-2x-${name}-${signal.toLowerCase()}`, scenario);
     await waitForMmxObserved(out);
     child.kill(signal);
@@ -416,11 +440,11 @@ describe("second signals and entry hardening (fix2)", () => {
     child.kill(signal); // 第二次：立即 SIGKILL，不再等宽限期
     const code = await new Promise(resolve => child.once("close", resolve));
     const elapsed = Date.now() - secondAt;
-    assert.equal(code, 2, "the entry must survive the second signal and exit 2");
+    assert.equal(code, 1, "the entry must survive the second signal and retain the valid primary P1 veto");
     assert.ok(elapsed < 4500, `second signal must escalate immediately (took ${elapsed}ms; grace is 5000ms)`);
     const result = JSON.parse(fs.readFileSync(path.join(out, "result.json"), "utf8"));
     assert.equal(result.cancelled, true);
-    assert.equal(result.review_gate, "NOT_EVALUATED");
+    assert.equal(result.review_gate, "FAIL");
     const mmxExecution = JSON.parse(fs.readFileSync(path.join(out, "mmx-execution.json"), "utf8"));
     assert.equal(mmxExecution.state, "cancelled");
     // 决定性判别：不升级时 slow-exit 会走自己的 SIGTERM 处理记 exit 143。
@@ -442,7 +466,7 @@ describe("second signals and entry hardening (fix2)", () => {
     const secondAt = Date.now();
     child.kill("SIGTERM");
     const code = await new Promise(resolve => child.once("close", resolve));
-    assert.equal(code, 2);
+    assert.equal(code, 1);
     assert.ok(Date.now() - secondAt < 4500, "second signal must SIGKILL immediately");
     const result = JSON.parse(fs.readFileSync(path.join(out, "result.json"), "utf8"));
     assert.equal(result.cancelled, true);
@@ -616,10 +640,19 @@ describe("verify", () => {
     assert.deepEqual(report(result).drifted, ["review.js"]);
   });
 
-  test("editing a non-adjudicating file still replays to match", () => {
+  test("non-adjudicating source drift still replays a self-consistent launch intent", () => {
     const request = JSON.parse(fs.readFileSync(path.join(baseBoth, "request.json"), "utf8"));
     request.provenance_code["mmx-profile"] = "0".repeat(64);
-    const dir = copyArchive(baseBoth, "verify-nonadj", { edits: { "request.json": Buffer.from(JSON.stringify(request, null, 2) + "\n") } });
+    const requestBytes = Buffer.from(JSON.stringify(request, null, 2) + "\n");
+    // Model a profile hash captured at launch that differs from today's file.
+    // The checkpoint must still bind that exact original request; editing the
+    // request alone is covered as tampering by staged-review.test.js.
+    const primary = JSON.parse(fs.readFileSync(path.join(baseBoth, "primary-result.json"), "utf8"));
+    primary.request_sha256 = sha256(requestBytes);
+    const dir = copyArchive(baseBoth, "verify-nonadj", { edits: {
+      "request.json": requestBytes,
+      "primary-result.json": Buffer.from(JSON.stringify(primary, null, 2) + "\n"),
+    } });
     const result = verifyCli(dir);
     assert.equal(result.status, 0);
     assert.equal(report(result).replay, "match");
@@ -645,7 +678,7 @@ describe("verify", () => {
     assert.ok(report(outcome).problems.some(problem => problem.includes("model_family")));
   });
 
-  test("a symlinked record-manifest.json fails integrity", () => {
+  test("a symlinked record-manifest.json fails integrity", { skip: symlinkSkip }, () => {
     const dir = copyArchive(baseBoth, "verify-manifest-link");
     // 从零构造：真清单移作副本外的原件，目录内放指向它的符号链接（不删除任何文件）。
     const outside = path.join(root, "verify-manifest-outside.json");
@@ -674,6 +707,8 @@ describe("verify", () => {
     result.providers.mmx = { eligible: false, gate: null, reason: "execution:not_started", model: null, model_family: null, material_bound: false, review: null, diagnostic: { receipt_status: null, gate: null, text: null } };
     result.round_status = "NOT_EVALUATED";
     result.review_gate = "NOT_EVALUATED";
+    result.SECONDARY_REVIEW_GATE = "NOT_EVALUATED";
+    result.REVIEW_GATE = "NOT_EVALUATED";
     result.exit_code = 2;
     result.families_known = false;
     result.independent = false;
@@ -846,7 +881,7 @@ describe("assembleInputs argument domains", () => {  test("zcode and mmx argv st
 // 时序确定性不依赖墙钟竞速（slow-exit 的退出永远晚于信号与截止时间）。
 // ---------------------------------------------------------------------------
 
-describe("cancellation state machine", () => {
+describe("cancellation state machine", { skip: process.platform === "win32" && "POSIX self-signal semantics; Windows cancellation requires native tests" }, () => {
   const waitFor = async (predicate, label, budgetMs = 10000) => {
     for (let i = 0; i < budgetMs / 50 && !predicate(); i++) await new Promise(resolve => setTimeout(resolve, 50));
     assert.ok(predicate(), `${label} timed out`);
@@ -869,8 +904,8 @@ describe("cancellation state machine", () => {
     const { dir, assembled, argvBySide } = await prepareRoundDir("cancel-a");
     let mmxAtSignal = null;
     const roundPromise = runner.runFixtureRound(inputs, {
-      out: dir, scenario: "zcode-fail-mmx-slow", timeoutSeconds: 600, maxTokens: 524288,
-      argv: argvBySide, envBase: { PATH: process.env.PATH }, fakeProcessMs: 300, // 截止时间短于 exitMs 1500
+      out: dir, scenario: "zcode-fail-mmx-slow", strategy: "dual-parallel", timeoutSeconds: 600, maxTokens: 524288,
+      argv: argvBySide, envBase: { PATH: cleanEnv().PATH }, fakeProcessMs: 300, // 截止时间短于 exitMs 1500
       onSpawn: (side, child) => {
         if (side !== "mmx") return;
         // 同步于 mmx spawn 之后发信号：两侧 entry 都已建、都尚未 close（U5 前置）。
@@ -901,8 +936,8 @@ describe("cancellation state machine", () => {
     const { dir, assembled, argvBySide } = await prepareRoundDir("cancel-a2");
     let signalled = false;
     const roundPromise = runner.runFixtureRound(inputs, {
-      out: dir, scenario: "zcode-fail-mmx-slow", timeoutSeconds: 600, maxTokens: 524288,
-      argv: argvBySide, envBase: { PATH: process.env.PATH }, fakeProcessMs: 1200, // 仍短于 exitMs 1500
+      out: dir, scenario: "zcode-fail-mmx-slow", strategy: "dual-parallel", timeoutSeconds: 600, maxTokens: 524288,
+      argv: argvBySide, envBase: { PATH: cleanEnv().PATH }, fakeProcessMs: 1200, // 仍短于 exitMs 1500
       onSideClosed: side => {
         if (side !== "zcode" || signalled) return;
         // 信号同步于 zcode close 处理之后：zcode 已定态 completed；mmx 的退出只可能
@@ -914,7 +949,7 @@ describe("cancellation state machine", () => {
     const round = await roundPromise;
     assert.ok(signalled, "onSideClosed should have fired for zcode");
     assert.equal(round.cancelled, true);
-    assert.equal(round.outcome.review_gate, "NOT_EVALUATED");
+    assert.equal(round.outcome.review_gate, "FAIL");
     assert.equal(round.executions.zcode.execution.state, "completed");
     assert.equal(round.executions.mmx.execution.state, "cancelled");
     assert.equal(round.evaluated.zcode.eligible, true);
@@ -923,7 +958,7 @@ describe("cancellation state machine", () => {
       scenario: "zcode-fail-mmx-slow", timeoutSeconds: 600, maxTokens: 524288,
       argv: argvBySide, envKeys: Object.keys(assembled.zcode.env).sort(), round,
     });
-    assert.equal(result.review_gate, "NOT_EVALUATED");
+    assert.equal(result.review_gate, "FAIL");
     const verify = runCli(["verify", "--run", dir]);
     assert.equal(verify.status, 0, verify.stdout);
     assert.equal(JSON.parse(verify.stdout).replay, "match");
@@ -932,8 +967,8 @@ describe("cancellation state machine", () => {
   test("(b) cancel while terminating: result identical to (a)", { timeout: 60000 }, async () => {
     const { dir, assembled, argvBySide } = await prepareRoundDir("cancel-b");
     const roundPromise = runner.runFixtureRound(inputs, {
-      out: dir, scenario: "zcode-fail-mmx-slow", timeoutSeconds: 600, maxTokens: 524288,
-      argv: argvBySide, envBase: { PATH: process.env.PATH }, fakeProcessMs: 300,
+      out: dir, scenario: "zcode-fail-mmx-slow", strategy: "dual-parallel", timeoutSeconds: 600, maxTokens: 524288,
+      argv: argvBySide, envBase: { PATH: cleanEnv().PATH }, fakeProcessMs: 300,
     });
     await waitFor(() => fs.existsSync(path.join(dir, "mmx-observed-input.json")), "mmx observed");
     // 等 deadline（300ms）触发、进入 terminating（mmx 收到 SIGTERM 开始 1500ms 退出计时）之后再取消。
@@ -941,7 +976,7 @@ describe("cancellation state machine", () => {
     process.kill(process.pid, "SIGTERM");
     const round = await roundPromise;
     assert.equal(round.cancelled, true);
-    assert.equal(round.outcome.review_gate, "NOT_EVALUATED");
+    assert.equal(round.outcome.review_gate, "FAIL");
     assert.equal(round.executions.mmx.execution.state, "cancelled"); // 取消接管 terminating，不再记 timed_out
     assert.equal(round.evaluated.zcode.gate, "FAIL");
     runner.writeRunRecords(dir, {
@@ -1050,7 +1085,7 @@ describe("verify integrity locks (F2: M12b, M20, M32, M35)", () => {
     assert.ok(report(outcome).problems.some(problem => problem.includes("started_at missing")));
   });
 
-  test("a record-manifest symlink pointing inside the run directory is corrupt (M12b)", () => {
+  test("a record-manifest symlink pointing inside the run directory is corrupt (M12b)", { skip: symlinkSkip }, () => {
     const dir = copyArchive(base, "f2i-m12b");
     // 目录内符号链接：真清单改名收存，链接指回它。lstat 拒链接本身。
     fs.renameSync(path.join(dir, "record-manifest.json"), path.join(dir, "record-manifest.real.json"));
@@ -1086,7 +1121,7 @@ describe("run-level regression locks (F2: M27, M28, M33)", () => {
     assert.equal(record.round_status, "NOT_EVALUATED");
   });
 
-  test("a symlinked scenarios.json refuses to start with zero launches (M33)", () => {
+  test("a symlinked scenarios.json refuses to start with zero launches (M33)", { skip: symlinkSkip }, () => {
     // 在 X 风格的副本树里构造：scenarios.json 换成指向目录内副本的符号链接。
     const tree = path.join(root, "f2-m33-tree");
     fs.mkdirSync(tree, { recursive: true });
@@ -1102,4 +1137,74 @@ describe("run-level regression locks (F2: M27, M28, M33)", () => {
     assert.match(result.stderr, /regular file|link/);
     assert.equal(fs.existsSync(out), false, "no run directory may be created");
   });
+});
+
+// ---------------------------------------------------------------------------
+// V2.2.1 D3: result.json is published exclusively and atomically. A failed or
+// interrupted final write leaves neither a partial result.json nor, on a
+// clean failure, a temporary behind; an existing result.json is never
+// replaced. The launch-time P1 evidence stays published either way.
+// ---------------------------------------------------------------------------
+
+const pendings = dir => fs.readdirSync(dir).filter(name => name.endsWith(".pending"));
+
+test("V2.2.1 D3: a failed final write leaves neither a partial result.json nor a temporary", { timeout: 60000 }, () => {
+  const out = path.join(root, "cli-publish-enospc");
+  const fault = path.join(root, "enospc-at-result.cjs");
+  // Two injection points: the uncorrected code creates the final name and
+  // writes through a path string; the corrected code writes an fsynced
+  // temporary through a descriptor before linking it.
+  fs.writeFileSync(fault, [
+    "const fs = require(\"node:fs\");",
+    "const realOpen = fs.openSync, realWrite = fs.writeFileSync, tracked = new Set();",
+    "const noSpace = () => Object.assign(new Error(\"no space left on device (injected)\"), { code: \"ENOSPC\" });",
+    "fs.openSync = (file, flags, mode) => { const fd = realOpen(file, flags, mode); if (/result\\.json\\.[0-9a-f.-]+\\.pending$/.test(String(file))) tracked.add(fd); return fd; };",
+    "fs.writeFileSync = (target, data, ...rest) => {",
+    "  if (typeof target === \"string\" && target.endsWith(\"result.json\")) { realWrite(target, Buffer.alloc(0), { flag: \"wx\", mode: 0o600 }); throw noSpace(); }",
+    "  if (tracked.has(target)) throw noSpace();",
+    "  return realWrite(target, data, ...rest);",
+    "};",
+  ].join("\n") + "\n");
+  const run = spawnSync(process.execPath, ["--require", fault, RUNNER, "run", "--backend", "fixture", "--scenario", "zcode-fail", "--packet", packetFile, "--out", out],
+    { encoding: "utf8", timeout: 50000, env: cleanEnv() });
+  assert.notEqual(run.status, 0, "a failed publication must fail the run");
+  assert.equal(run.stdout.trim(), "", "no result may reach stdout");
+  assert.equal(fs.existsSync(path.join(out, "result.json")), false, "no partial result.json may be visible");
+  assert.deepEqual(pendings(out), [], "the temporary is cleaned up on a caught failure");
+  // The launch-time P1 stays published in its own record, bound to the launch material.
+  const primary = JSON.parse(fs.readFileSync(path.join(out, "primary-result.json"), "utf8"));
+  assert.equal(primary.PRIMARY_REVIEW_GATE, "FAIL");
+  assert.equal(primary.material_version, JSON.parse(fs.readFileSync(path.join(out, "request.json"), "utf8")).material_version);
+  const report = runner.verifyRun(out);
+  assert.notEqual(report.integrity, "match", "the archive is not consumable");
+  assert.notEqual(report.replay, "match");
+});
+
+test("V2.2.1 D3: a process interrupted while publishing leaves no consumable result", { timeout: 60000 }, async () => {
+  const out = path.join(root, "cli-publish-killed");
+  const fault = path.join(root, "kill-at-result.cjs");
+  // The uncorrected code is killed halfway through a direct write of the
+  // final name; the corrected code is killed at the instant of its exclusive
+  // link, before the link happens, so the final name never appears.
+  fs.writeFileSync(fault, [
+    "const fs = require(\"node:fs\"); const realLink = fs.linkSync, realWrite = fs.writeFileSync;",
+    "const kill = () => process.kill(process.pid, \"SIGKILL\");",
+    "const base = to => String(to).replace(/\\\\/g, \"/\").split(\"/\").pop();",
+    "fs.linkSync = (from, to) => { if (base(to) === \"result.json\") kill(); return realLink(from, to); };",
+    "fs.writeFileSync = (target, data, ...rest) => {",
+    "  if (typeof target === \"string\" && target.endsWith(\"result.json\")) { const bytes = Buffer.isBuffer(data) ? data : Buffer.from(data); realWrite(target, bytes.subarray(0, 5), { flag: \"wx\", mode: 0o600 }); kill(); }",
+    "  return realWrite(target, data, ...rest);",
+    "};",
+  ].join("\n") + "\n");
+  const child = spawn(process.execPath, ["--require", fault, RUNNER, "run", "--backend", "fixture", "--scenario", "both-pass", "--packet", packetFile, "--out", out],
+    { stdio: ["ignore", "pipe", "pipe"], env: cleanEnv() });
+  track(child);
+  const code = await new Promise(resolve => child.once("close", resolve));
+  assert.notEqual(code, 0);
+  assert.equal(fs.existsSync(path.join(out, "result.json")), false, "a kill before the link must not expose result.json");
+  assert.equal(fs.existsSync(path.join(out, "record-manifest.json")), true, "the manifest was published first");
+  assert.equal(fs.existsSync(path.join(out, "primary-result.json")), true);
+  const report = runner.verifyRun(out);
+  assert.notEqual(report.integrity, "match", "the archive is not consumable");
+  assert.ok(report.problems.some(text => /result\.json|pending/.test(text)), JSON.stringify(report.problems));
 });

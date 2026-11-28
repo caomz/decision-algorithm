@@ -9,11 +9,12 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
-const { createHash } = require("node:crypto");
+const { createHash, randomUUID } = require("node:crypto");
 const { spawn, spawnSync } = require("node:child_process");
 const { buildPrompt, validateReview, validateIds, strictJson } = require("../../zcode/scripts/review.js");
 
-const ENTRY_VERSION = "0.1.0";
+const ENTRY_VERSION = "0.2.0";
+const STRATEGIES = Object.freeze(["primary-first", "dual-parallel"]);
 const SKILLS = path.resolve(__dirname, "../.."); // <repo>/skills
 const LIMITS = Object.freeze({
   materialMaxBytes: 192 * 1024,
@@ -44,7 +45,7 @@ const PROVENANCE_FILES = Object.freeze({
 });
 
 const USAGE = "usage: review-run.js doctor --offline [--json]\n" +
-  "       review-run.js run --backend fixture --scenario NAME --packet FILE --out NEW_DIR [--timeout-seconds 1..3570] [--max-tokens N]\n" +
+  "       review-run.js run --backend fixture --scenario NAME --packet FILE --out NEW_DIR [--strategy primary-first|dual-parallel] [--timeout-seconds 1..3570] [--max-tokens N]\n" +
   "       review-run.js verify --run DIR\n" +
   "       review-run.js pack --out PACKET [--facts FILE] [--goal-file FILE] [--patch-file FILE --base SHA --kind KIND [--head SHA]] [--test-log FILE --test-cmd STR --test-exit N]... [--claims-file FILE]";
 
@@ -53,6 +54,70 @@ const sha256File = file => hash(fs.readFileSync(file));
 const fail = message => { throw Object.assign(new Error(message), { usage: true }); };
 function readJsonFile(file) { return strictJson(fs.readFileSync(file, "utf8")); }
 function saveNew(file, bytes, mode = 0o600) { fs.writeFileSync(file, bytes, { flag: "wx", mode }); }
+
+// Publish only complete, fsynced checkpoint files. Existing artifacts are never
+// replaced: a later phase must match their exact bytes or fail closed.
+function saveDurableRecord(file, bytes) {
+  bytes = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes, "utf8");
+  if (fs.existsSync(file)) {
+    const stat = fs.lstatSync(file);
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      throw new Error(`immutable record differs: ${path.basename(file)}`);
+    }
+    const fd = fs.openSync(file, "r+");
+    try {
+      if (!fs.readFileSync(fd).equals(bytes)) throw new Error(`immutable record differs: ${path.basename(file)}`);
+      // Fixture wrappers write their observed-input records with ordinary wx.
+      // The coordinator must flush those bytes before publishing a checkpoint.
+      fs.fsyncSync(fd);
+    } finally { fs.closeSync(fd); }
+  } else {
+    const pending = `${file}.pending`;
+    const fd = fs.openSync(pending, "wx", 0o600);
+    try { fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    // link is exclusive and atomic, unlike rename which could replace a record.
+    fs.linkSync(pending, file);
+    fs.unlinkSync(pending);
+  }
+  // Directory fsync is supported on POSIX; Windows durability remains subject
+  // to the native lifecycle gate and is never claimed by this fixture entry.
+  if (process.platform !== "win32") {
+    const dir = fs.openSync(path.dirname(file), "r");
+    try { fs.fsyncSync(dir); } finally { fs.closeSync(dir); }
+  }
+}
+
+// Publish a final record atomically and exclusively: a complete, fsynced
+// temporary file in the same directory is linked to its final name. link
+// fails when the target exists and never replaces it, and at no instant does
+// a partial file carry the final name. rename would overwrite; wx would
+// expose the created-but-unwritten file. A caught failure cleans up its
+// temporary; a crash between fsync and unlink leaves one behind, which
+// verifyRun reports as a problem.
+function publishExclusive(file, bytes) {
+  bytes = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes, "utf8");
+  const pending = `${file}.${process.pid}.${randomUUID()}.pending`;
+  let fd = fs.openSync(pending, "wx", 0o600);
+  try { fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); }
+  catch (error) { fs.closeSync(fd); try { fs.unlinkSync(pending); } catch {} throw error; }
+  fs.closeSync(fd);
+  try { fs.linkSync(pending, file); }
+  catch (error) { try { fs.unlinkSync(pending); } catch {} throw error; }
+  fs.unlinkSync(pending);
+  if (process.platform !== "win32") {
+    const dir = fs.openSync(path.dirname(file), "r");
+    try { fs.fsyncSync(dir); } finally { fs.closeSync(dir); }
+  }
+}
+
+function materialBinding(inputs) {
+  const digests = {
+    material_sha256: hash(inputs.materialBytes),
+    evidence_ids_sha256: hash(inputs.idsBytes),
+    prompt_sha256: hash(Buffer.from(inputs.prompt, "utf8")),
+  };
+  return { ...digests, material_version: hash(JSON.stringify(digests)) };
+}
 
 // ---------------------------------------------------------------------------
 // packet v1/v2 解析与规范化
@@ -577,7 +642,7 @@ function buildRunPacket(rawPacketBytes) {
   }
   const ids = evidenceIdsFrom(packet);
   return {
-    packet, ids,
+    packet, ids, packetBytes: Buffer.from(rawPacketBytes),
     material, materialBytes: Buffer.from(material, "utf8"),
     idsBytes: Buffer.from(JSON.stringify(ids) + "\n", "utf8"),
     prompt: buildPrompt(material, "review", ids),
@@ -713,11 +778,18 @@ function tally({ cancelled, sides }) {
   const roundStatus = !cancelled && zcode.eligible && mmx.eligible && independent ? "COMPLETED" : "NOT_EVALUATED";
   const votes = [zcode, mmx].filter(side => side.eligible);
   let gate = "NOT_EVALUATED";
-  if (cancelled) gate = "NOT_EVALUATED";
-  else if (votes.some(side => side.gate === "FAIL")) gate = "FAIL";
+  // A completed, bound P1 defect keeps its veto even if the other side is
+  // cancelled. Cancellation still prevents a full round or a PASS.
+  if (votes.some(side => side.gate === "FAIL")) gate = "FAIL";
+  else if (cancelled) gate = "NOT_EVALUATED";
   else if (roundStatus === "COMPLETED" && votes.length === 2 && votes.every(side => side.gate === "PASS")) gate = "PASS";
   const exitCode = gate === "PASS" ? 0 : gate === "FAIL" ? 1 : 2;
-  return { round_status: roundStatus, review_gate: gate, exit_code: exitCode, families_known: familiesKnown, independent };
+  return {
+    round_status: roundStatus, review_gate: gate, exit_code: exitCode, families_known: familiesKnown, independent,
+    PRIMARY_REVIEW_GATE: zcode.eligible ? zcode.gate : "NOT_EVALUATED",
+    SECONDARY_REVIEW_GATE: mmx.eligible ? mmx.gate : "NOT_EVALUATED",
+    REVIEW_GATE: gate,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -780,8 +852,18 @@ function installSignalHub() {
   process.on("SIGTERM", onSignal);
 }
 
-async function runFixtureRound(inputs, { out, scenario, timeoutSeconds, maxTokens, argv, envBase, fakeProcessMs = LIMITS.fakeProcessMs, cancelGraceMs = LIMITS.cancelGraceMs, onSpawn = null, onSideClosed = null }) {
+async function runFixtureRound(inputs, { out, scenario, timeoutSeconds, maxTokens, argv, envBase, strategy = "primary-first", fakeProcessMs = LIMITS.fakeProcessMs, cancelGraceMs = LIMITS.cancelGraceMs, onSpawn = null, onSideClosed = null, onPrimaryReady = null }) {
+  if (!STRATEGIES.includes(strategy)) fail(`unsupported strategy: ${strategy}`);
   fs.mkdirSync(path.join(out, "tmp"), { mode: 0o700 });
+  const binding = materialBinding(inputs);
+  writeRunInputs(out, { packetBytes: inputs.packetBytes, inputs });
+  // Freeze request intent and code fingerprints before either wrapper starts.
+  // A crash after PRIMARY_REVIEW_READY still leaves the exact launch contract;
+  // finalization never re-labels a run with hashes from later source edits.
+  const requestJson = JSON.stringify(buildRunRequest(inputs, {
+    strategy, scenario, timeoutSeconds, maxTokens, argv, envKeys: Object.keys(envBase).sort(),
+  }), null, 2) + "\n";
+  saveDurableRecord(path.join(out, "request.json"), requestJson);
   const expected = {
     materialBytes: inputs.materialBytes,
     idsBytes: inputs.idsBytes,
@@ -804,6 +886,18 @@ async function runFixtureRound(inputs, { out, scenario, timeoutSeconds, maxToken
     sides[side] = entry;
     const startedAt = new Date().toISOString();
     const argvFull = [...argv[side]];
+    // Do not dispatch a new phase with files changed since packet assembly.
+    // Repair/re-review requires a fresh packet and a new output directory.
+    for (const [file, digest] of [["material.txt", binding.material_sha256], ["evidence-ids.json", binding.evidence_ids_sha256], ["prompt.txt", binding.prompt_sha256]]) {
+      const target = path.join(out, file);
+      if (fs.lstatSync(target).isSymbolicLink() || sha256File(target) !== digest) {
+        entry.state = "not_started";
+        entry.closeDone = true;
+        entry.envKeys = [];
+        entry.skipReason = "material_version_changed";
+        return finishSide(side, entry, startedAt, null, null);
+      }
+    }
     const env = {
       ...envBase,
       TMPDIR: path.join(out, "tmp"), TMP: path.join(out, "tmp"), TEMP: path.join(out, "tmp"),
@@ -854,6 +948,12 @@ async function runFixtureRound(inputs, { out, scenario, timeoutSeconds, maxToken
     });
     clearTimeout(deadline);
     entry.closeDone = true;
+    // Test-only cross-process synchronization: signal only after ZCode's
+    // close event has been observed. No provider input or archive receipt
+    // is modified, and the flag is absent outside this explicit test mode.
+    if (side === "zcode" && process.env.ZMX_TEST_CLOSE_MARKER === "1") {
+      fs.writeFileSync(path.join(out, "tmp", "zcode-closed.marker"), "closed\n", { flag: "wx", mode: 0o600 });
+    }
     // 单点定态：取消优先于超时，超时优先于正常完成；spawn_error 已是终态，不改写。
     if (entry.state === "running" || entry.state === "terminating") {
       entry.state = entry.cancelRequested ? "cancelled" : entry.state === "terminating" ? "timed_out" : "completed";
@@ -890,20 +990,74 @@ async function runFixtureRound(inputs, { out, scenario, timeoutSeconds, maxToken
       argv: argv[side],
       env_keys: entry.envKeys,
       deadline_ms: fakeProcessMs,
+      material_version: binding.material_version,
     };
+    if (entry.skipReason) execution.skip_reason = entry.skipReason;
     return { side, execution, stdoutBytes, stderrBytes, observed };
   };
 
   const results = {};
-  try {
-    // 两侧并发启动；取消发生在某侧启动之前时，该侧不再启动，记 not_started。
-    await Promise.all(["zcode", "mmx"].map(async side => {
-      if (ctx.cancelled && !sides[side]) {
-        results[side] = finishSide(side, { child: null, state: "not_started", stdout: [], stderr: [], envKeys: [] }, new Date().toISOString(), null, null);
-        return;
-      }
+  const evaluated = {};
+  let primaryResult = null;
+  const persistAndEvaluate = side => {
+    const record = results[side];
+    persistSideRecords(out, record);
+    evaluated[side] = evaluateSide(side, {
+      execution: record.execution, stdoutBytes: record.stdoutBytes, observed: record.observed,
+      expected: { ...expected, argv: argv[side] },
+    });
+    if (side === "zcode") {
+      primaryResult = {
+        entry_version: ENTRY_VERSION, backend: "fixture", strategy, ...binding,
+        request_sha256: hash(requestJson),
+        PRIMARY_REVIEW_GATE: evaluated.zcode.eligible ? evaluated.zcode.gate : "NOT_EVALUATED",
+        SECONDARY_REVIEW_GATE: "NOT_EVALUATED",
+        REVIEW_GATE: evaluated.zcode.eligible && evaluated.zcode.gate === "FAIL" ? "FAIL" : "NOT_EVALUATED",
+        provider: evaluated.zcode,
+        execution_sha256: sha256File(path.join(out, "zcode-execution.json")),
+        stdout_sha256: record.execution.stdout_sha256,
+        stderr_sha256: record.execution.stderr_sha256,
+        observed_input: record.execution.observed_input,
+        completed_at: record.execution.ended_at,
+        note: "Primary checkpoint only; a primary PASS is not full dual-model acceptance.",
+      };
+      saveDurableRecord(path.join(out, "primary-result.json"), JSON.stringify(primaryResult, null, 2) + "\n");
+      if (onPrimaryReady) onPrimaryReady(primaryResult);
+    }
+  };
+  const runAndPersist = async side => {
+    if (ctx.cancelled && !sides[side]) {
+      results[side] = finishSide(side, { child: null, state: "not_started", stdout: [], stderr: [], envKeys: [], skipReason: "cancelled_before_start" }, new Date().toISOString(), null, null);
+    } else {
       results[side] = await runSide(side);
-    }));
+    }
+    persistAndEvaluate(side);
+  };
+  try {
+    if (strategy === "dual-parallel") {
+      // allSettled keeps a persistence failure from abandoning the other child.
+      const running = ["zcode", "mmx"].map(side => runAndPersist(side).catch(async error => {
+        ctx.cancelled = true;
+        await Promise.all(Object.values(sides).filter(entry => entry.child && !entry.closeDone).map(entry => {
+          entry.cancelRequested = true;
+          return stopAndAwait(entry.child, cancelGraceMs);
+        }));
+        throw error;
+      }));
+      const settled = await Promise.allSettled(running);
+      const rejected = settled.find(result => result.status === "rejected");
+      if (rejected) throw rejected.reason;
+    } else {
+      await runAndPersist("zcode");
+      if (evaluated.zcode.eligible && evaluated.zcode.gate === "FAIL") {
+        results.mmx = finishSide("mmx", { child: null, state: "not_started", stdout: [], stderr: [], envKeys: [], skipReason: "primary_confirmed_defect" }, new Date().toISOString(), null, null);
+        persistAndEvaluate("mmx");
+      } else {
+        // An invalid primary or P1 evidence gap cannot pass the round, but MMX
+        // may still establish an independently valid P1 defect.
+        await runAndPersist("mmx");
+      }
+    }
     if (ctx.interrupting) await ctx.interrupting;
   } finally {
     // 监听器本身进程级不卸载；只注销本轮上下文。信号在 round 结束后、记录写完
@@ -912,18 +1066,10 @@ async function runFixtureRound(inputs, { out, scenario, timeoutSeconds, maxToken
   }
   // 取消只在实际作用于某一侧时才记入结果：两侧均已完成后才到达的迟到信号
   // 不产生 cancelled=true，否则 result 与 execution 记录脱节、verify 永远 mismatch。
-  const effectiveCancelled = ctx.cancelled && ["zcode", "mmx"].some(side => results[side].execution.state === "cancelled");
-  const evaluated = {};
-  for (const side of ["zcode", "mmx"]) {
-    evaluated[side] = evaluateSide(side, {
-      execution: results[side].execution,
-      stdoutBytes: results[side].stdoutBytes,
-      observed: results[side].observed,
-      expected: { ...expected, argv: argv[side] },
-    });
-  }
+  const effectiveCancelled = ctx.cancelled && ["zcode", "mmx"].some(side =>
+    results[side].execution.state === "cancelled" || results[side].execution.skip_reason === "cancelled_before_start");
   const outcome = tally({ cancelled: effectiveCancelled, sides: evaluated });
-  return { cancelled: effectiveCancelled, executions: results, evaluated, outcome };
+  return { strategy, material_version: binding.material_version, requestJson, primaryResult, cancelled: effectiveCancelled, executions: results, evaluated, outcome };
 }
 
 // ---------------------------------------------------------------------------
@@ -939,20 +1085,39 @@ const REQUIRED_RECORDS = Object.freeze([
 
 // 输入组必须在两侧 wrapper 启动之前落盘：wrapper 一启动就会读这些文件。
 function writeRunInputs(out, { packetBytes, inputs }) {
-  saveNew(path.join(out, "packet.json"), packetBytes);
-  saveNew(path.join(out, "material.txt"), inputs.materialBytes);
-  saveNew(path.join(out, "evidence-ids.json"), inputs.idsBytes);
-  saveNew(path.join(out, "prompt.txt"), Buffer.from(inputs.prompt, "utf8"));
+  saveDurableRecord(path.join(out, "packet.json"), packetBytes);
+  saveDurableRecord(path.join(out, "material.txt"), inputs.materialBytes);
+  saveDurableRecord(path.join(out, "evidence-ids.json"), inputs.idsBytes);
+  saveDurableRecord(path.join(out, "prompt.txt"), Buffer.from(inputs.prompt, "utf8"));
 }
 
-function writeRunRecords(out, { scenario, timeoutSeconds, maxTokens, argv, envKeys, round, warnings = [] }) {
-  // 输入组的摘要从已落盘的归档文件重算，保证记录与字节一致。
-  const request = {
+// Returns the digests of the exact bytes it verified and published, so the
+// final manifest never has to re-read a file that may have changed since.
+function persistSideRecords(out, record) {
+  const digests = {};
+  if (record.execution.observed_input !== "unobserved") {
+    const file = path.join(out, `${record.side}-observed-input.json`);
+    const bytes = fs.readFileSync(file);
+    if (hash(bytes) !== record.execution.observed_input) throw new Error("observed input changed before persistence");
+    saveDurableRecord(file, bytes);
+    digests[`${record.side}-observed-input.json`] = record.execution.observed_input;
+  }
+  saveDurableRecord(path.join(out, `${record.side}-stdout.json`), record.stdoutBytes);
+  saveDurableRecord(path.join(out, `${record.side}-stderr.log`), record.stderrBytes);
+  const executionBytes = Buffer.from(JSON.stringify(record.execution, null, 2) + "\n", "utf8");
+  saveDurableRecord(path.join(out, `${record.side}-execution.json`), executionBytes);
+  digests[`${record.side}-stdout.json`] = record.execution.stdout_sha256;
+  digests[`${record.side}-stderr.log`] = record.execution.stderr_sha256;
+  digests[`${record.side}-execution.json`] = hash(executionBytes);
+  return digests;
+}
+
+function buildRunRequest(inputs, { strategy, scenario, timeoutSeconds, maxTokens, argv, envKeys }) {
+  return {
     entry_version: ENTRY_VERSION,
-    packet_sha256: sha256File(path.join(out, "packet.json")),
-    material_sha256: sha256File(path.join(out, "material.txt")),
-    evidence_ids_sha256: sha256File(path.join(out, "evidence-ids.json")),
-    prompt_sha256: sha256File(path.join(out, "prompt.txt")),
+    strategy,
+    ...materialBinding(inputs),
+    packet_sha256: hash(inputs.packetBytes),
     backend: "fixture", scenario, timeout_seconds: timeoutSeconds, max_tokens: maxTokens,
     argv,
     // 组装时的基础环境键名（不含 fixture 机制注入的 TMPDIR/TMP/TEMP/REVIEW_*）；
@@ -961,20 +1126,65 @@ function writeRunRecords(out, { scenario, timeoutSeconds, maxTokens, argv, envKe
     adjudication_code: Object.fromEntries(Object.entries(ADJUDICATION_FILES).map(([name, file]) => [name, sha256File(file)])),
     provenance_code: Object.fromEntries(Object.entries(PROVENANCE_FILES).map(([name, file]) => [name, sha256File(file)])),
   };
-  saveNew(path.join(out, "request.json"), JSON.stringify(request, null, 2) + "\n");
-  for (const side of ["zcode", "mmx"]) {
-    const record = round.executions[side];
-    saveNew(path.join(out, `${side}-stdout.json`), record.stdoutBytes);
-    saveNew(path.join(out, `${side}-stderr.log`), record.stderrBytes);
-    saveNew(path.join(out, `${side}-execution.json`), JSON.stringify(record.execution, null, 2) + "\n");
+}
+
+// Inputs are sealed before either wrapper starts. Publication verifies the
+// archived copies against the launch-time digests recorded in the prelaunch
+// request. Nothing is recomputed from files that may have changed after
+// dispatch, and a changed, missing or replaced input publishes no result.
+const SEALED_INPUTS = Object.freeze([
+  ["packet.json", "packet_sha256"],
+  ["material.txt", "material_sha256"],
+  ["evidence-ids.json", "evidence_ids_sha256"],
+  ["prompt.txt", "prompt_sha256"],
+]);
+
+function writeRunRecords(out, { round, warnings = [] }) {
+  // Reuse the exact immutable prelaunch intent, including its original code
+  // fingerprints. Never rebuild a request from mutable files after execution.
+  const request = strictJson(round.requestJson);
+  const manifest = {};
+  for (const [name, key] of SEALED_INPUTS) {
+    const file = path.join(out, name);
+    let stat = null;
+    try { stat = fs.lstatSync(file); } catch {}
+    const problem = !stat ? "missing" : stat.isSymbolicLink() || !stat.isFile() ? "replaced"
+      : sha256File(file) !== request[key] ? "changed" : null;
+    if (problem) {
+      // An integrity problem is not a content FAIL. The evaluation below
+      // describes only the launch-time material version and is kept for
+      // diagnosis; no complete result is published for any later file state.
+      saveNew(path.join(out, "integrity-error.json"), JSON.stringify({
+        entry_version: ENTRY_VERSION, backend: "fixture", integrity: "corrupt",
+        problem: `archived input ${problem} before publication: ${name}`,
+        material_version: round.material_version,
+        evaluation_of_launch_material: { cancelled: round.cancelled, round_status: round.outcome.round_status,
+          review_gate: round.outcome.review_gate, PRIMARY_REVIEW_GATE: round.outcome.PRIMARY_REVIEW_GATE,
+          SECONDARY_REVIEW_GATE: round.outcome.SECONDARY_REVIEW_GATE, REVIEW_GATE: round.outcome.REVIEW_GATE },
+        note: "No result.json or record-manifest.json is published. The gates above belong to the launch-time material version only.",
+      }, null, 2) + "\n");
+      throw Object.assign(new Error(`archived input ${problem} before publication: ${name}`), { code: "ZMX_ARCHIVE_INTEGRITY" });
+    }
+    manifest[name] = request[key];
   }
+  saveDurableRecord(path.join(out, "request.json"), round.requestJson);
+  manifest["request.json"] = hash(round.requestJson);
+  for (const side of ["zcode", "mmx"]) Object.assign(manifest, persistSideRecords(out, round.executions[side]));
+  const primaryBytes = Buffer.from(JSON.stringify(round.primaryResult, null, 2) + "\n", "utf8");
+  saveDurableRecord(path.join(out, "primary-result.json"), primaryBytes);
+  manifest["primary-result.json"] = hash(primaryBytes);
   const result = {
     entry_version: ENTRY_VERSION,
     backend: "fixture",
-    scenario, timeout_seconds: timeoutSeconds, max_tokens: maxTokens,
+    strategy: round.strategy,
+    material_version: round.material_version,
+    scenario: request.scenario, timeout_seconds: request.timeout_seconds, max_tokens: request.max_tokens,
     cancelled: round.cancelled,
     round_status: round.outcome.round_status,
     review_gate: round.outcome.review_gate,
+    PRIMARY_REVIEW_GATE: round.outcome.PRIMARY_REVIEW_GATE,
+    SECONDARY_REVIEW_GATE: round.outcome.SECONDARY_REVIEW_GATE,
+    REVIEW_GATE: round.outcome.REVIEW_GATE,
     exit_code: round.outcome.exit_code,
     families_known: round.outcome.families_known,
     independent: round.outcome.independent,
@@ -983,13 +1193,17 @@ function writeRunRecords(out, { scenario, timeoutSeconds, maxTokens, argv, envKe
     note: "backend=fixture: served by repository fixtures, not an external review",
     completed_at: new Date().toISOString(),
   };
-  saveNew(path.join(out, "result.json"), JSON.stringify(result, null, 2) + "\n");
-  const manifest = {};
-  for (const name of [...REQUIRED_RECORDS, "zcode-observed-input.json", "mmx-observed-input.json"]) {
-    const file = path.join(out, name);
-    if (fs.existsSync(file)) manifest[name] = sha256File(file);
-  }
-  saveNew(path.join(out, "record-manifest.json"), JSON.stringify({ format: 1, files: manifest }, null, 2) + "\n");
+  const resultBytes = Buffer.from(JSON.stringify(result, null, 2) + "\n", "utf8");
+  // Every digest above comes from bytes verified in memory. The manifest is
+  // published first and result.json last, so a visible result.json always
+  // belongs to a complete, verified archive; a manifest without result.json
+  // fails verify as incomplete.
+  manifest["result.json"] = hash(resultBytes);
+  // The manifest and the result are published exclusively and atomically:
+  // at no instant does a partial file carry either final name, and an
+  // existing record is never replaced (V2.2.1 D3).
+  publishExclusive(path.join(out, "record-manifest.json"), JSON.stringify({ format: 1, files: manifest }, null, 2) + "\n");
+  publishExclusive(path.join(out, "result.json"), resultBytes);
   return result;
 }
 
@@ -1000,6 +1214,12 @@ function writeRunRecords(out, { scenario, timeoutSeconds, maxTokens, argv, envKe
 function verifyRun(directory) {
   const problems = [];
   const problem = message => problems.push(message);
+  // A crash between the fsync of a publication temporary and its unlink
+  // leaves a complete copy behind. The directory was never fsynced with the
+  // final name in place, so any leftover temporary is a problem.
+  for (const name of fs.readdirSync(directory)) {
+    if (name.endsWith(".pending")) problem(`unpublished publication temporary present: ${name}`);
+  }
   const resolveInside = name => {
     if (typeof name !== "string" || !name || path.isAbsolute(name) || name.split("/").some(part => !/^[A-Za-z0-9_.-]+$/.test(part) || part === "." || part === "..")) {
       problem(`manifest path is not a safe relative name: ${JSON.stringify(name)}`);
@@ -1007,6 +1227,11 @@ function verifyRun(directory) {
     }
     return path.join(directory, name);
   };
+  const refused = path.join(directory, "integrity-error.json");
+  if (fs.existsSync(refused)) {
+    // Publication was refused before any result existed; say why.
+    try { problem(`publication refused: ${readJsonFile(refused).problem}`); } catch { problem("publication refused: integrity-error.json is unreadable"); }
+  }
   let manifest = null;
   try {
     const manifestPath = path.join(directory, "record-manifest.json");
@@ -1078,6 +1303,11 @@ function verifyRun(directory) {
       if (request?.argv !== undefined && (request.argv === null || typeof request.argv !== "object" || Array.isArray(request.argv))) {
         problem("request.json: argv must be an object");
       }
+      if (request?.entry_version === ENTRY_VERSION) {
+        if (!STRATEGIES.includes(request.strategy)) problem("request.json: invalid strategy");
+        if (!/^[0-9a-f]{64}$/.test(request.material_version ?? "")) problem("request.json: material_version missing or invalid");
+        if (!listed.has("primary-result.json")) problem("required record missing from manifest: primary-result.json");
+      }
     } catch { problem("request.json is not strict JSON"); }
   }
   if (problems.length) return { integrity: "corrupt", problems, replay: null, exit_code: 2 };
@@ -1098,6 +1328,7 @@ function verifyRun(directory) {
     prompt_sha256: hash(promptBytes),
   };
   const replayProblems = [];
+  if (request.entry_version !== ENTRY_VERSION) replayProblems.push("request.json: entry_version disagrees with adjudication code");
   let inputs = null;
   try {
     inputs = buildRunPacket(packetBytes);
@@ -1107,10 +1338,12 @@ function verifyRun(directory) {
     for (const key of ["packet_sha256", "material_sha256", "evidence_ids_sha256", "prompt_sha256"]) {
       if (recomputed[key] !== request[key]) replayProblems.push(`request.json ${key} disagrees with the archive`);
     }
+    if (materialBinding(inputs).material_version !== request.material_version) replayProblems.push("request.json material_version disagrees with the packet");
   } catch (error) { replayProblems.push(`packet does not reparse: ${String(error?.message ?? error).slice(0, 120)}`); }
-  const cancelled = ["zcode", "mmx"].some(side => executions[side]?.state === "cancelled");
+  const cancelled = ["zcode", "mmx"].some(side => executions[side]?.state === "cancelled" || executions[side]?.skip_reason === "cancelled_before_start");
   const sides = {};
   for (const side of ["zcode", "mmx"]) {
+    if (executions[side].material_version !== request.material_version) replayProblems.push(`${side}: material_version disagrees with the request`);
     let observed = null;
     if (executions[side].observed_input !== "unobserved") {
       try { observed = readJsonFile(path.join(directory, `${side}-observed-input.json`)); } catch { observed = {}; }
@@ -1130,6 +1363,34 @@ function verifyRun(directory) {
     });
   }
   const outcome = tally({ cancelled, sides });
+  let primary = null;
+  try { primary = readJsonFile(path.join(directory, "primary-result.json")); }
+  catch { replayProblems.push("primary-result.json is not strict JSON"); }
+  if (!primary || typeof primary !== "object" || Array.isArray(primary)) replayProblems.push("primary-result.json must be an object");
+  else {
+    for (const key of ["material_version", "material_sha256", "evidence_ids_sha256", "prompt_sha256", "strategy", "entry_version", "backend"]) {
+      if (primary[key] !== request[key]) replayProblems.push(`primary-result.json ${key} disagrees with the request`);
+    }
+    if (primary.request_sha256 !== manifest.files["request.json"]) replayProblems.push("primary-result.json request digest disagrees with the prelaunch intent");
+    if (primary.execution_sha256 !== manifest.files["zcode-execution.json"]) replayProblems.push("primary-result.json execution digest disagrees with the primary archive");
+    for (const key of ["stdout_sha256", "stderr_sha256", "observed_input"]) {
+      if (primary[key] !== executions.zcode[key]) replayProblems.push(`primary-result.json ${key} disagrees with the primary execution`);
+    }
+    if (JSON.stringify(primary.provider) !== JSON.stringify(sides.zcode)) replayProblems.push("primary-result.json provider disagrees with replayed primary");
+    if (primary.PRIMARY_REVIEW_GATE !== outcome.PRIMARY_REVIEW_GATE) replayProblems.push("primary-result.json PRIMARY_REVIEW_GATE disagrees with replayed primary");
+    if (primary.SECONDARY_REVIEW_GATE !== "NOT_EVALUATED") replayProblems.push("primary-result.json cannot assert secondary acceptance");
+    if (primary.REVIEW_GATE !== (outcome.PRIMARY_REVIEW_GATE === "FAIL" ? "FAIL" : "NOT_EVALUATED")) replayProblems.push("primary-result.json REVIEW_GATE disagrees with primary-only adjudication");
+  }
+  if (request.strategy === "primary-first") {
+    if (sides.zcode.eligible && sides.zcode.gate === "FAIL" &&
+        (executions.mmx.state !== "not_started" || executions.mmx.skip_reason !== "primary_confirmed_defect")) {
+      replayProblems.push("primary-first must skip MMX after a valid primary blocker");
+    }
+    if (executions.mmx.state !== "not_started" &&
+        !(Date.parse(executions.mmx.started_at) >= Date.parse(executions.zcode.ended_at))) {
+      replayProblems.push("primary-first MMX started before primary completion");
+    }
+  }
   let result = null;
   try { result = readJsonFile(path.join(directory, "result.json")); } catch { replayProblems.push("result.json is not strict JSON"); }
   // 合法 JSON 但根不是对象（null 等 falsey 值）同样按畸形处理，不能静默跳过比对。
@@ -1146,6 +1407,12 @@ function verifyRun(directory) {
     if (result.exit_code !== outcome.exit_code) replayProblems.push(`result.json exit_code ${result.exit_code} != replayed ${outcome.exit_code}`);
     if (result.families_known !== outcome.families_known) replayProblems.push(`result.json families_known ${result.families_known} != replayed ${outcome.families_known}`);
     if (result.independent !== outcome.independent) replayProblems.push(`result.json independent ${result.independent} != replayed ${outcome.independent}`);
+    for (const key of ["PRIMARY_REVIEW_GATE", "SECONDARY_REVIEW_GATE", "REVIEW_GATE"]) {
+      if (result[key] !== outcome[key]) replayProblems.push(`result.json ${key} disagrees with replayed gate`);
+    }
+    for (const key of ["strategy", "material_version"]) {
+      if (result[key] !== request[key]) replayProblems.push(`result.json ${key} disagrees with the request`);
+    }
     for (const side of ["zcode", "mmx"]) {
       const recorded = result.providers?.[side];
       if (!recorded) { replayProblems.push(`result.json missing provider ${side}`); continue; }
@@ -1167,7 +1434,8 @@ function verifyRun(directory) {
     integrity: "ok",
     replay: replayProblems.length ? "mismatch" : "match",
     problems: replayProblems,
-    replayed: { round_status: outcome.round_status, review_gate: outcome.review_gate, cancelled },
+    replayed: { round_status: outcome.round_status, review_gate: outcome.review_gate,
+      PRIMARY_REVIEW_GATE: outcome.PRIMARY_REVIEW_GATE, SECONDARY_REVIEW_GATE: outcome.SECONDARY_REVIEW_GATE, REVIEW_GATE: outcome.REVIEW_GATE, cancelled },
     exit_code: replayProblems.length ? 2 : 0,
     note: "local self-consistency check only: it does not prove what the upstream model received and cannot detect tampering",
   };
@@ -1347,10 +1615,10 @@ function argsFrom(argv) {
   const action = argv[0];
   if (!["doctor", "run", "verify", "pack"].includes(action)) fail(USAGE);
   if (action === "pack") return parsePackArgs(argv);
-  const args = { action, timeout: LIMITS.defaultTimeout, maxTokens: LIMITS.defaultMaxTokens };
+  const args = { action, strategy: "primary-first", timeout: LIMITS.defaultTimeout, maxTokens: LIMITS.defaultMaxTokens };
   const allowed = action === "doctor" ? ["--offline", "--json"]
     : action === "verify" ? ["--run"]
-    : ["--backend", "--scenario", "--packet", "--out", "--timeout-seconds", "--max-tokens"];
+    : ["--backend", "--scenario", "--packet", "--out", "--strategy", "--timeout-seconds", "--max-tokens"];
   const names = { "--packet": "packet", "--out": "out", "--run": "run", "--backend": "backend", "--scenario": "scenario", "--timeout-seconds": "timeout", "--max-tokens": "maxTokens" };
   const seen = new Set();
   for (let i = 1; i < argv.length; i++) {
@@ -1367,6 +1635,7 @@ function argsFrom(argv) {
     if (!args.backend) fail("--backend is required and has no default");
     if (args.backend === "real") fail("the real backend is not enabled in this version");
     if (args.backend !== "fixture") fail(`unsupported backend: ${args.backend}`);
+    if (!STRATEGIES.includes(args.strategy)) fail(`--strategy must be ${STRATEGIES.join(" or ")}`);
     if (!args.scenario || !args.packet || !args.out) fail("run requires --scenario, --packet and --out");
     args.timeout = Number(args.timeout);
     args.maxTokens = Number(args.maxTokens);
@@ -1406,12 +1675,36 @@ async function main(argv) {
     writeRunInputs(out, { packetBytes, inputs });
     const assembled = assembleInputs({ materialPath: path.join(out, "material.txt"), idsPath: path.join(out, "evidence-ids.json"), promptPath: path.join(out, "prompt.txt"), timeoutSeconds: args.timeout, maxTokens: args.maxTokens });
     const argvBySide = { zcode: assembled.zcode.argv, mmx: assembled.mmx.argv };
-    const round = await runFixtureRound(inputs, { out, scenario: args.scenario, timeoutSeconds: args.timeout, maxTokens: args.maxTokens, argv: argvBySide, envBase: assembled.zcode.env });
+    const round = await runFixtureRound(inputs, {
+      out, scenario: args.scenario, strategy: args.strategy, timeoutSeconds: args.timeout, maxTokens: args.maxTokens,
+      argv: argvBySide, envBase: assembled.zcode.env,
+      // Keep final stdout a single JSON object for existing consumers. Hosts
+      // can deliver this event immediately and read the durable checkpoint.
+      onPrimaryReady: primary => process.stderr.write(JSON.stringify({
+        event: "PRIMARY_REVIEW_READY", file: path.join(out, "primary-result.json"),
+        material_version: primary.material_version,
+        PRIMARY_REVIEW_GATE: primary.PRIMARY_REVIEW_GATE,
+        SECONDARY_REVIEW_GATE: primary.SECONDARY_REVIEW_GATE,
+        REVIEW_GATE: primary.REVIEW_GATE,
+      }) + "\n"),
+    });
     // 只供测试：撑开"两侧 close 之后、记录写完之前"的窗口，供 CLI 层信号用例
     // 确定性发信号。默认 0，生产路径无延迟。该 env 不进入子进程环境与任何记录。
     const holdMs = Number(process.env.ZMX_TEST_HOLD_BEFORE_RECORDS_MS ?? 0);
     if (Number.isSafeInteger(holdMs) && holdMs > 0) await new Promise(resolve => setTimeout(resolve, holdMs));
-    const result = writeRunRecords(out, { scenario: args.scenario, timeoutSeconds: args.timeout, maxTokens: args.maxTokens, argv: argvBySide, envKeys: Object.keys(assembled.zcode.env).sort(), round, warnings: inputs.warnings });
+    let result;
+    try {
+      result = writeRunRecords(out, { scenario: args.scenario, timeoutSeconds: args.timeout, maxTokens: args.maxTokens, argv: argvBySide, envKeys: Object.keys(assembled.zcode.env).sort(), round, warnings: inputs.warnings });
+    } catch (error) {
+      // A sealed input changed, disappeared or was replaced: nothing is
+      // published. The event names the diagnostic record; stdout stays empty
+      // so no consumer can mistake this for a complete result.
+      if (error.code === "ZMX_ARCHIVE_INTEGRITY") process.stderr.write(JSON.stringify({
+        event: "RESULT_NOT_PUBLISHED", file: path.join(out, "integrity-error.json"),
+        material_version: round.material_version, error: error.message,
+      }) + "\n");
+      throw error;
+    }
     process.stdout.write(JSON.stringify(result) + "\n");
     return result.exit_code;
   }
@@ -1442,10 +1735,34 @@ if (require.main === module) {
     });
 }
 
+// ---------------------------------------------------------------------------
+// F-lite: transport-and-recovery handoff to the durable fixture entry. The
+// durable secondary carries no content vote (the pinned fixture protocol is
+// not review-v1), so the composed gates keep any valid primary verdict and
+// never turn a transport PASS into a review PASS.
+// ---------------------------------------------------------------------------
+function durableHandoffKey(parts) {
+  if (!Array.isArray(parts) || !parts.length || parts.some(part => typeof part !== "string" || !part)) {
+    fail("durable handoff key needs an array of nonempty strings");
+  }
+  return hash(parts.join("\u0000"));
+}
+function composeDurableSecondary(primaryResult, jobStatus) {
+  const primaryGate = primaryResult && typeof primaryResult === "object" ? primaryResult.PRIMARY_REVIEW_GATE : "NOT_EVALUATED";
+  return {
+    PRIMARY_REVIEW_GATE: primaryGate,
+    SECONDARY_REVIEW_GATE: "NOT_EVALUATED",
+    SECONDARY_NOT_EVALUATED_REASON: "durable_content_vote_not_wired",
+    REVIEW_GATE: primaryGate === "FAIL" ? "FAIL" : "NOT_EVALUATED",
+    secondary_transport: jobStatus?.status ?? "unknown",
+    note: "the durable fixture handoff proves idempotent transport and read-only recovery only",
+  };
+}
+
 module.exports = {
-  ENTRY_VERSION, LIMITS, USAGE, SKILLS,
+  ENTRY_VERSION, LIMITS, USAGE, SKILLS, STRATEGIES, materialBinding,
   packetFrom, materialFrom, evidenceIdsFrom, buildRunPacket, assembleInputs,
   materialWarnings, tailUtf8, parsePatch, diffstatText, verifyChanges, coverageDeclared,
   family, evaluateSide, tally, runFixtureRound, verifyRun, doctorOffline, argsFrom, ADJUDICATION_FILES,
-  writeRunInputs, writeRunRecords,
+  writeRunInputs, writeRunRecords, durableHandoffKey, composeDurableSecondary,
 };

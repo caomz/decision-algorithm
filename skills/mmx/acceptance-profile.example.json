@@ -1,0 +1,7 @@
+{
+  "format": 1,
+  "approved": false,
+  "node": { "version": "" },
+  "cli": { "package": "", "version": "", "entry_sha256": "" },
+  "undici": { "version": "" }
+}

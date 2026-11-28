@@ -27,6 +27,8 @@ const RELEASE_MARKER = ".gstack-cross-validation-release.json";
 const MANAGED_DIRS = ["agy", "mmx", "cross-validation"];
 const REQUIRED_FILES = [
   "mmx/scripts/mmx-chat.js",
+  "mmx/scripts/fetch-timeout-guard.js",
+  "mmx/scripts/batch-safety.js",
   "mmx/profiles/local.json",
   "cross-validation/scripts/cross_validate.py",
 ];

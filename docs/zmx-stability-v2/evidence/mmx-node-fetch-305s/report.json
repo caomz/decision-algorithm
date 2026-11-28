@@ -1,0 +1,275 @@
+{
+  "format": 1,
+  "suite": "node-fetch",
+  "created_at": "2026-11-26T03:02:12.038Z",
+  "node": "v24.22.3",
+  "bundled_undici": "7.30.2",
+  "undici": {
+    "name": "undici",
+    "version": "6.28.0",
+    "package_sha256": "f529aa8b145f6e270a72700ceb6c8dd3b87f742313078ea9f774a9d2ce8c865d"
+  },
+  "cli": null,
+  "isolation": {
+    "mechanism": "linux-network-namespace",
+    "interfaces": [
+      "lo"
+    ],
+    "ipv4_default_route": false,
+    "addresses": [
+      "127.0.0.1"
+    ]
+  },
+  "delay_ms": 305000,
+  "threshold_300s_exercised": true,
+  "request_timeout_ms": 600000,
+  "wrapper_timeout_ms": null,
+  "supervisor_timeout_ms": 650000,
+  "supervisor_cleanup_timeout_ms": 8000,
+  "runner_sha256": "540a5ac02c5b4b20dbd14cfb8f6e51a77d06223598b25b7e9c61d1674a18e928",
+  "guard_sha256": "d242a47aa6342f378d225939da7c76a09127e27e2ecabc96aab4200a35202941",
+  "real_provider": "NOT_EVALUATED",
+  "real_mmx_transport": "NOT_EVALUATED",
+  "note": "Raw CLI/fetch transport controls; the production 630s wrapper is not exercised by this runner.",
+  "provider_internal_retry": "NOT_EVALUATED",
+  "cases": [
+    {
+      "case": "headers-unguarded",
+      "elapsed_ms": 301579,
+      "guarded": false,
+      "guard_initialized": false,
+      "requests": 1,
+      "requests_after_first": 0,
+      "events": [
+        {
+          "ordinal": 1,
+          "method": "POST",
+          "path": "/anthropic/v1/messages",
+          "received_ms": 157,
+          "body_bytes": 20,
+          "body_sha256": "828ca8135baa00dc3874a41b38503eec76537634da35e1bdc4f29fe4dad9cf38"
+        }
+      ],
+      "exit_code": 1,
+      "signal": null,
+      "local_process_exit_observed": true,
+      "supervisor_expired": false,
+      "stop_reason": null,
+      "local_tree_cleanup": "NOT_VERIFIED",
+      "capture_truncated": false,
+      "stdout_bytes": 76,
+      "stdout_sha256": "33bd54395e0ca2f3b73ebdc3bd448bea189a151892236146e93edc3cfb8517eb",
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "receipt": {
+        "error": "TypeError",
+        "cause": "UND_ERR_HEADERS_TIMEOUT",
+        "elapsed_ms": 301493
+      }
+    },
+    {
+      "case": "headers-guarded",
+      "elapsed_ms": 305208,
+      "guarded": true,
+      "guard_initialized": true,
+      "requests": 1,
+      "requests_after_first": 0,
+      "events": [
+        {
+          "ordinal": 1,
+          "method": "POST",
+          "path": "/anthropic/v1/messages",
+          "received_ms": 182,
+          "body_bytes": 20,
+          "body_sha256": "828ca8135baa00dc3874a41b38503eec76537634da35e1bdc4f29fe4dad9cf38"
+        }
+      ],
+      "exit_code": 0,
+      "signal": null,
+      "local_process_exit_observed": true,
+      "supervisor_expired": false,
+      "stop_reason": null,
+      "local_tree_cleanup": "NOT_VERIFIED",
+      "capture_truncated": false,
+      "stdout_bytes": 52,
+      "stdout_sha256": "d616df37b66db3880c1295f5c97af460f8013ec57f7ceff2cc0647652336088f",
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "receipt": {
+        "status": 200,
+        "body_bytes": 247,
+        "elapsed_ms": 305047
+      }
+    },
+    {
+      "case": "body-unguarded",
+      "elapsed_ms": 301575,
+      "guarded": false,
+      "guard_initialized": false,
+      "requests": 1,
+      "requests_after_first": 0,
+      "events": [
+        {
+          "ordinal": 1,
+          "method": "POST",
+          "path": "/anthropic/v1/messages",
+          "received_ms": 155,
+          "body_bytes": 20,
+          "body_sha256": "828ca8135baa00dc3874a41b38503eec76537634da35e1bdc4f29fe4dad9cf38"
+        }
+      ],
+      "exit_code": 1,
+      "signal": null,
+      "local_process_exit_observed": true,
+      "supervisor_expired": false,
+      "stop_reason": null,
+      "local_tree_cleanup": "NOT_VERIFIED",
+      "capture_truncated": false,
+      "stdout_bytes": 73,
+      "stdout_sha256": "b863c5099008fdd097c2608d957828413579885ba66d4f749421c6cc3f6e26ee",
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "receipt": {
+        "error": "TypeError",
+        "cause": "UND_ERR_BODY_TIMEOUT",
+        "elapsed_ms": 301461
+      }
+    },
+    {
+      "case": "body-guarded",
+      "elapsed_ms": 305200,
+      "guarded": true,
+      "guard_initialized": true,
+      "requests": 1,
+      "requests_after_first": 0,
+      "events": [
+        {
+          "ordinal": 1,
+          "method": "POST",
+          "path": "/anthropic/v1/messages",
+          "received_ms": 189,
+          "body_bytes": 20,
+          "body_sha256": "828ca8135baa00dc3874a41b38503eec76537634da35e1bdc4f29fe4dad9cf38"
+        }
+      ],
+      "exit_code": 0,
+      "signal": null,
+      "local_process_exit_observed": true,
+      "supervisor_expired": false,
+      "stop_reason": null,
+      "local_tree_cleanup": "NOT_VERIFIED",
+      "capture_truncated": false,
+      "stdout_bytes": 52,
+      "stdout_sha256": "bb22da34ecc1bc30916e6d5b447fe53681737ea8513bf1db68dc4ffef8551445",
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "receipt": {
+        "status": 200,
+        "body_bytes": 247,
+        "elapsed_ms": 305025
+      }
+    },
+    {
+      "case": "http-429",
+      "elapsed_ms": 180,
+      "guarded": true,
+      "guard_initialized": true,
+      "requests": 1,
+      "requests_after_first": 0,
+      "events": [
+        {
+          "ordinal": 1,
+          "method": "POST",
+          "path": "/anthropic/v1/messages",
+          "received_ms": 162,
+          "body_bytes": 20,
+          "body_sha256": "828ca8135baa00dc3874a41b38503eec76537634da35e1bdc4f29fe4dad9cf38"
+        }
+      ],
+      "exit_code": 0,
+      "signal": null,
+      "local_process_exit_observed": true,
+      "supervisor_expired": false,
+      "stop_reason": null,
+      "local_tree_cleanup": "NOT_VERIFIED",
+      "capture_truncated": false,
+      "stdout_bytes": 47,
+      "stdout_sha256": "9edb5dfc763e21a76a29dfe400866c1518684245a41f1344dca474a20184087a",
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "receipt": {
+        "status": 429,
+        "body_bytes": 82,
+        "elapsed_ms": 41
+      }
+    },
+    {
+      "case": "http-500",
+      "elapsed_ms": 184,
+      "guarded": true,
+      "guard_initialized": true,
+      "requests": 1,
+      "requests_after_first": 0,
+      "events": [
+        {
+          "ordinal": 1,
+          "method": "POST",
+          "path": "/anthropic/v1/messages",
+          "received_ms": 167,
+          "body_bytes": 20,
+          "body_sha256": "828ca8135baa00dc3874a41b38503eec76537634da35e1bdc4f29fe4dad9cf38"
+        }
+      ],
+      "exit_code": 0,
+      "signal": null,
+      "local_process_exit_observed": true,
+      "supervisor_expired": false,
+      "stop_reason": null,
+      "local_tree_cleanup": "NOT_VERIFIED",
+      "capture_truncated": false,
+      "stdout_bytes": 47,
+      "stdout_sha256": "05e9e2c67fdcb9452c87fdf9c28cd058acc3e3f98cf326c014aee66a276fb390",
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "receipt": {
+        "status": 500,
+        "body_bytes": 82,
+        "elapsed_ms": 29
+      }
+    },
+    {
+      "case": "connection-reset",
+      "elapsed_ms": 187,
+      "guarded": true,
+      "guard_initialized": true,
+      "requests": 1,
+      "requests_after_first": 0,
+      "events": [
+        {
+          "ordinal": 1,
+          "method": "POST",
+          "path": "/anthropic/v1/messages",
+          "received_ms": 174,
+          "body_bytes": 20,
+          "body_sha256": "828ca8135baa00dc3874a41b38503eec76537634da35e1bdc4f29fe4dad9cf38"
+        }
+      ],
+      "exit_code": 1,
+      "signal": null,
+      "local_process_exit_observed": true,
+      "supervisor_expired": false,
+      "stop_reason": null,
+      "local_tree_cleanup": "NOT_VERIFIED",
+      "capture_truncated": false,
+      "stdout_bytes": 63,
+      "stdout_sha256": "29f2116b753f97b1ba7c979295690aa395b746b505e906610588c0b17e59704e",
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "receipt": {
+        "error": "TypeError",
+        "cause": "UND_ERR_SOCKET",
+        "elapsed_ms": 29
+      }
+    }
+  ]
+}

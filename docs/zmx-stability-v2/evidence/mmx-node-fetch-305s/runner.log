@@ -1,0 +1,8 @@
+{"isolation": "user+network namespace", "interfaces": ["lo"], "external_probe": "ENETUNREACH/EHOSTUNREACH", "environment": "allowlist", "command": ["node", "/workspace/scratch/b9938d7c4a4d/mmx-timeout-final-source/mmx-timeout-experiment.js", "--suite", "node-fetch", "--case-group", "all", "--undici-path", "/opt/codex/runtimes/codex-primary-runtime/dependencies/node/lib/node_modules/npm/node_modules/undici/index.js", "--out", "/workspace/scratch/b9938d7c4a4d/mmx-node-fetch-verified-305s", "--delay-ms", "305000"]}
+{"case":"http-429","elapsed_ms":180,"requests":1,"exit_code":0}
+{"case":"http-500","elapsed_ms":184,"requests":1,"exit_code":0}
+{"case":"connection-reset","elapsed_ms":187,"requests":1,"exit_code":1}
+{"case":"body-unguarded","elapsed_ms":301575,"requests":1,"exit_code":1}
+{"case":"headers-unguarded","elapsed_ms":301579,"requests":1,"exit_code":1}
+{"case":"body-guarded","elapsed_ms":305200,"requests":1,"exit_code":0}
+{"case":"headers-guarded","elapsed_ms":305208,"requests":1,"exit_code":0}
