@@ -62,7 +62,13 @@
 
 ## CI
 
-最终 SHA 的 push 与 pull_request 两组 CI 链接在合并前补充于此（PR 正文同步记录）。
+最终 SHA `3f6bcc01e3c8e21b6c6cfc4e7f07d0b645259a3a` 的两组 CI 均已完成且成功，日志已逐项核对实际 checkout SHA 与计数：
+
+- [push 46101699690](https://github.com/caomz/decision-algorithm/actions/runs/46101699690)：ZCode 103/103、MMX 162/162、cross-review 290/290（Linux 上 8 个 POSIX 专属用例真实执行）、0 失败 0 跳过；Python 173/173；offline doctor `status=ok`。
+- [pull_request 46101704389](https://github.com/caomz/decision-algorithm/actions/runs/46101704389)：同上，全部成功。
+- 合并后 main（merge commit `57b95a8b0d96e560f3f4a77d3c8c144d2c8271cf`）的 push CI [46102066174](https://github.com/caomz/decision-algorithm/actions/runs/46102066174)：success。
+
+途中三轮失败（46099068621、46099957363、46100878219）如实保留在 run 历史中，修复内容见 PR #39 的 V2.2.1 增量段落。
 
 ## 状态
 
